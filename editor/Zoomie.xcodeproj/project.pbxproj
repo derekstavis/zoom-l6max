@@ -1,0 +1,446 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		10E3A580D525C93480D5D300 /* AppIcon.icon in Resources */ = {isa = PBXBuildFile; fileRef = 6F6B65F8BA0E133D3277340A /* AppIcon.icon */; };
+		2F3DE74DE71A8EE4FFC4CDA0 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEE7C1B5B976B2B727F50497 /* RootView.swift */; };
+		683A6B5EA5836EA8D0222EFC /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 485E83FDAC187BDD71DFB5D2 /* Assets.xcassets */; };
+		68BEC9CC5F97F0BBC026B170 /* DisplayNames.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59A04954F4C53420FC038531 /* DisplayNames.swift */; };
+		7ED60D61513C65E88ABA9DBD /* ResizeBenchmark.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03598D9873CE18D17757B9EE /* ResizeBenchmark.swift */; };
+		84D8F9957ACDEC2C9AF70D6F /* L6Kit in Frameworks */ = {isa = PBXBuildFile; productRef = 0F3EF468229DA02784D08C88 /* L6Kit */; };
+		99FC6BFE6AC88A940294CE27 /* MixerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4E63D87A734134241B77E25 /* MixerView.swift */; };
+		A0D259F49162C6A854CFCAB7 /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = DF81D05971303B10BE8B2124 /* Localizable.xcstrings */; };
+		BF41885828902E7D156AFE6F /* MIDIView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15B5599BA03FCE79624C92D7 /* MIDIView.swift */; };
+		C219EA8C1FED7CA99ADA923A /* LongListPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C70066B609C6742ED3CC540 /* LongListPicker.swift */; };
+		C2D7CD67832DBAFBED25E6A6 /* DeviceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4ADC66064140BF2DE1182760 /* DeviceView.swift */; };
+		DB2DF2F467DE76C2AE6B41AB /* ZoomieApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF0C5EC47249CC7EBD3615F3 /* ZoomieApp.swift */; };
+		EE893CA0731694D37C9D015C /* SoundPadsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5CDF5BB45DEF21521467D4FA /* SoundPadsView.swift */; };
+		FC5F66D65F9D14119787A2A3 /* EditorTabs.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5FFC30A5CFB85D0810568E4 /* EditorTabs.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		03598D9873CE18D17757B9EE /* ResizeBenchmark.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResizeBenchmark.swift; sourceTree = "<group>"; };
+		15B5599BA03FCE79624C92D7 /* MIDIView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIView.swift; sourceTree = "<group>"; };
+		485E83FDAC187BDD71DFB5D2 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		4ADC66064140BF2DE1182760 /* DeviceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceView.swift; sourceTree = "<group>"; };
+		59A04954F4C53420FC038531 /* DisplayNames.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayNames.swift; sourceTree = "<group>"; };
+		5CDF5BB45DEF21521467D4FA /* SoundPadsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SoundPadsView.swift; sourceTree = "<group>"; };
+		6C70066B609C6742ED3CC540 /* LongListPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LongListPicker.swift; sourceTree = "<group>"; };
+		6F6B65F8BA0E133D3277340A /* AppIcon.icon */ = {isa = PBXFileReference; lastKnownFileType = wrapper.icon; path = AppIcon.icon; sourceTree = "<group>"; };
+		908EC5D24DD9C78BCFDDA68C /* L6Kit */ = {isa = PBXFileReference; lastKnownFileType = folder; name = L6Kit; path = Packages/L6Kit; sourceTree = SOURCE_ROOT; };
+		A1B372C545D5703F9898BB0D /* Zoomie.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Zoomie.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A4E63D87A734134241B77E25 /* MixerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MixerView.swift; sourceTree = "<group>"; };
+		BEE7C1B5B976B2B727F50497 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
+		DF0C5EC47249CC7EBD3615F3 /* ZoomieApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZoomieApp.swift; sourceTree = "<group>"; };
+		DF81D05971303B10BE8B2124 /* Localizable.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = Localizable.xcstrings; sourceTree = "<group>"; };
+		F5FFC30A5CFB85D0810568E4 /* EditorTabs.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorTabs.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		6F0DAB1F0EB5438D5E809F2F /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				84D8F9957ACDEC2C9AF70D6F /* L6Kit in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		06C1670BD6B08C6FF620E96A /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				4ADC66064140BF2DE1182760 /* DeviceView.swift */,
+				F5FFC30A5CFB85D0810568E4 /* EditorTabs.swift */,
+				6C70066B609C6742ED3CC540 /* LongListPicker.swift */,
+				15B5599BA03FCE79624C92D7 /* MIDIView.swift */,
+				A4E63D87A734134241B77E25 /* MixerView.swift */,
+				BEE7C1B5B976B2B727F50497 /* RootView.swift */,
+				5CDF5BB45DEF21521467D4FA /* SoundPadsView.swift */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+		3CD260981FF48084C2C6BF1A = {
+			isa = PBXGroup;
+			children = (
+				A3EF7101F80F7F7A6085DABF /* Packages */,
+				421E167E78426C6E5F6BB642 /* Zoomie */,
+				CDDEBBD7490F324A02D0FC33 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		421E167E78426C6E5F6BB642 /* Zoomie */ = {
+			isa = PBXGroup;
+			children = (
+				6F6B65F8BA0E133D3277340A /* AppIcon.icon */,
+				485E83FDAC187BDD71DFB5D2 /* Assets.xcassets */,
+				DF81D05971303B10BE8B2124 /* Localizable.xcstrings */,
+				DF0C5EC47249CC7EBD3615F3 /* ZoomieApp.swift */,
+				DA17AF74911060FF76EC807E /* Support */,
+				06C1670BD6B08C6FF620E96A /* Views */,
+			);
+			path = Zoomie;
+			sourceTree = "<group>";
+		};
+		A3EF7101F80F7F7A6085DABF /* Packages */ = {
+			isa = PBXGroup;
+			children = (
+				908EC5D24DD9C78BCFDDA68C /* L6Kit */,
+			);
+			path = Packages;
+			sourceTree = "<group>";
+		};
+		CDDEBBD7490F324A02D0FC33 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				A1B372C545D5703F9898BB0D /* Zoomie.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		DA17AF74911060FF76EC807E /* Support */ = {
+			isa = PBXGroup;
+			children = (
+				59A04954F4C53420FC038531 /* DisplayNames.swift */,
+				03598D9873CE18D17757B9EE /* ResizeBenchmark.swift */,
+			);
+			path = Support;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		EDB4EB1561D6E78E2392025F /* Zoomie */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 7D3FEBD9E429737FD5006CBD /* Build configuration list for PBXNativeTarget "Zoomie" */;
+			buildPhases = (
+				00CB21BD30300BF98FDBF7B7 /* Sources */,
+				82094ED324A9D7C7BDD6901D /* Resources */,
+				6F0DAB1F0EB5438D5E809F2F /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = Zoomie;
+			packageProductDependencies = (
+				0F3EF468229DA02784D08C88 /* L6Kit */,
+			);
+			productName = Zoomie;
+			productReference = A1B372C545D5703F9898BB0D /* Zoomie.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		E1FB68901ABD668DA8E2AA62 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					EDB4EB1561D6E78E2392025F = {
+						DevelopmentTeam = WQYELP5Y92;
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = A59A8408BBD073AF5C399E1A /* Build configuration list for PBXProject "Zoomie" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 3CD260981FF48084C2C6BF1A;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				ED02DBED013D09B064605F03 /* XCLocalSwiftPackageReference "Packages/L6Kit" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = CDDEBBD7490F324A02D0FC33 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				EDB4EB1561D6E78E2392025F /* Zoomie */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		82094ED324A9D7C7BDD6901D /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				10E3A580D525C93480D5D300 /* AppIcon.icon in Resources */,
+				683A6B5EA5836EA8D0222EFC /* Assets.xcassets in Resources */,
+				A0D259F49162C6A854CFCAB7 /* Localizable.xcstrings in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		00CB21BD30300BF98FDBF7B7 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C2D7CD67832DBAFBED25E6A6 /* DeviceView.swift in Sources */,
+				68BEC9CC5F97F0BBC026B170 /* DisplayNames.swift in Sources */,
+				FC5F66D65F9D14119787A2A3 /* EditorTabs.swift in Sources */,
+				C219EA8C1FED7CA99ADA923A /* LongListPicker.swift in Sources */,
+				BF41885828902E7D156AFE6F /* MIDIView.swift in Sources */,
+				99FC6BFE6AC88A940294CE27 /* MixerView.swift in Sources */,
+				7ED60D61513C65E88ABA9DBD /* ResizeBenchmark.swift in Sources */,
+				2F3DE74DE71A8EE4FFC4CDA0 /* RootView.swift in Sources */,
+				EE893CA0731694D37C9D015C /* SoundPadsView.swift in Sources */,
+				DB2DF2F467DE76C2AE6B41AB /* ZoomieApp.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		52CBF17D60DDF8BC8538DD6E /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
+				CODE_SIGN_STYLE = Automatic;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = Zoomie;
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.music";
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = me.stavis.ZoomL6;
+				PRODUCT_NAME = Zoomie;
+				SDKROOT = auto;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		5DD6BF35D8B5651C90D3B264 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
+				MARKETING_VERSION = 0.1.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+		B107873DFEDD16F48F255928 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
+				MARKETING_VERSION = 0.1.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		BF6B878D5E4D69AED76156EA /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
+				CODE_SIGN_STYLE = Automatic;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = Zoomie;
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.music";
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = me.stavis.ZoomL6;
+				PRODUCT_NAME = Zoomie;
+				SDKROOT = auto;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		7D3FEBD9E429737FD5006CBD /* Build configuration list for PBXNativeTarget "Zoomie" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				BF6B878D5E4D69AED76156EA /* Debug */,
+				52CBF17D60DDF8BC8538DD6E /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		A59A8408BBD073AF5C399E1A /* Build configuration list for PBXProject "Zoomie" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B107873DFEDD16F48F255928 /* Debug */,
+				5DD6BF35D8B5651C90D3B264 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		ED02DBED013D09B064605F03 /* XCLocalSwiftPackageReference "Packages/L6Kit" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/L6Kit;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		0F3EF468229DA02784D08C88 /* L6Kit */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = L6Kit;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = E1FB68901ABD668DA8E2AA62 /* Project object */;
+}

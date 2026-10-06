@@ -1,0 +1,3 @@
+[toolchain]
+channel = "nightly-2026-08-05"
+components = ["rustfmt"]

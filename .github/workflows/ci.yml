@@ -1,0 +1,106 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: Build optimized app and source archives without publishing
+        type: boolean
+        default: false
+  workflow_call:
+    inputs:
+      release:
+        description: Build an optimized app and matching source archives
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: checks-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos:
+    name: macOS checks and app bundle
+    runs-on: macos-15
+    timeout-minutes: 90
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_BUILD_JOBS: '3'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      MACOSX_DEPLOYMENT_TARGET: '15.0'
+      HOMEBREW_NO_AUTO_UPDATE: '1'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          submodules: true
+          persist-credentials: false
+      - name: Prepare native toolchains
+        run: |
+          sudo xcode-select --switch /Applications/Xcode_26.3.app
+          xcodebuild -downloadComponent MetalToolchain
+          xcrun --sdk macosx metal --version
+          brew install dtc glib ninja pixman pkg-config
+          rustup show active-toolchain
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-macos-arm64-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: cargo-macos-arm64-
+      - name: Fetch locked Rust dependencies
+        run: cargo fetch --locked
+      - name: Check Rust formatting
+        run: cargo fmt --all --check
+      - name: Check all Rust targets
+        run: cargo check --locked --workspace --all-targets
+      - name: Test Rust workspace
+        run: cargo test --locked --workspace
+      - name: Test GPIO indicator decoder
+        run: |
+          cc -std=c11 -Wall -Wextra -Werror emulator/qemu/tests/indicators.c -o "$RUNNER_TEMP/l6-indicators"
+          "$RUNNER_TEMP/l6-indicators"
+      - name: Test Swift editor library
+        working-directory: editor/Packages/L6Kit
+        run: swift test
+      - name: Build custom QEMU
+        run: cargo run --locked -p qemu-build -- --minimal
+      - name: Package and verify app
+        env:
+          RELEASE_BUILD: ${{ inputs.release || false }}
+          APP_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || '0.1.0' }}
+        run: |
+          options=()
+          if [[ "$RELEASE_BUILD" != true ]]; then options+=(--debug); fi
+          cargo run --locked -p macos-package -- \
+            emulator/qemu/build-source/build/qemu-system-arm \
+            --version "$APP_VERSION" "${options[@]}"
+          mv emulator/dist/L6max-Emulator-macos.zip emulator/dist/L6max-Emulator-macos-arm64.zip
+          /usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' \
+            'emulator/dist/L6max Emulator.app/Contents/Info.plist' > emulator/dist/minimum-macos.txt
+      - name: Collect matching release sources
+        if: inputs.release
+        run: bash .github/scripts/release-sources.sh
+      - name: Generate checksums
+        working-directory: emulator/dist
+        run: shasum -a 256 ./*.zip ./*.tar.gz > SHA256SUMS
+        # Non-release builds only contain a ZIP; Bash must ignore unmatched globs.
+        shell: bash --noprofile --norc -O nullglob -eo pipefail {0}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: macos-arm64
+          path: |
+            emulator/dist/*.zip
+            emulator/dist/*.tar.gz
+            emulator/dist/SHA256SUMS
+            emulator/dist/minimum-macos.txt
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14

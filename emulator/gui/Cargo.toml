@@ -1,0 +1,21 @@
+[package]
+name = "l6max-gui"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+l6max-host.workspace = true
+l6fw.workspace = true
+sha2.workspace = true
+libc.workspace = true
+image.workspace = true
+gpui = { git = "https://github.com/zed-industries/zed.git", rev = "17d3378bb9724867ab875dd865e7d22147d684fa" }
+gpui_platform = { git = "https://github.com/zed-industries/zed.git", rev = "17d3378bb9724867ab875dd865e7d22147d684fa", features = ["font-kit"] }
+smallvec = "1.15"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+raw-window-handle = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSView", "NSWindow", "NSApplication", "NSOpenPanel", "NSSavePanel"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSGeometry"] }

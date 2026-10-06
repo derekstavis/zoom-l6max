@@ -1,0 +1,46 @@
+# Firmware packages, executable images, and extracted package components.
+*.bin
+*.BIN
+*.elf
+*.hex
+*.uf2
+*.srec
+*.s19
+/L6max*.zip
+/L6max*.7z
+unpacked*/
+/firmware/
+/firmware-*/
+
+# SD images and other local storage images.
+*.img
+*.raw
+
+# Rust build output and emulator runtime artifacts.
+target/
+/emulator/logs/
+/emulator/state/
+/emulator/qemu/snapshots/
+/emulator/dist/
+/emulator/qemu/build-source/
+*.sock
+
+# Local OS/editor files.
+.DS_Store
+*.swp
+*.swo
+
+# Local generated artifacts.
+/analysis/local/
+/emulator/**/L6_Editor_*/
+/emulator/**/L6_Editor_*.zip
+/downloads/
+# Removed vendor artwork must not be bundled again.
+/emulator/gui/assets/zoom-logo.svg
+/emulator/gui/assets/l6max-panel.svg
+/emulator/gui/assets/l6max-panel.png
+*.gpr
+*.rep/
+
+# Local investigation workspace.
+/analysis/

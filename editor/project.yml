@@ -1,0 +1,51 @@
+name: Zoomie
+options:
+  bundleIdPrefix: me.stavis
+  deploymentTarget:
+    iOS: "27.0"
+    macOS: "27.0"
+  createIntermediateGroups: true
+packages:
+  L6Kit:
+    path: Packages/L6Kit
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
+    SWIFT_APPROACHABLE_CONCURRENCY: YES
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+targets:
+  Zoomie:
+    type: application
+    supportedDestinations: [iOS, macOS]
+    sources:
+      - Zoomie
+    dependencies:
+      - package: L6Kit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: me.stavis.ZoomL6
+        PRODUCT_NAME: Zoomie
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: Zoomie
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.music
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        ENABLE_APP_SANDBOX: YES
+        ENABLE_HARDENED_RUNTIME: YES
+        CODE_SIGN_STYLE: Automatic
+        "CODE_SIGN_IDENTITY[sdk=macosx*]": "-"
+        SWIFT_EMIT_LOC_STRINGS: YES
+        STRING_CATALOG_GENERATE_SYMBOLS: NO
+schemes:
+  Zoomie:
+    build:
+      targets:
+        Zoomie: all
+    run:
+      config: Debug

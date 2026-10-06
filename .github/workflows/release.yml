@@ -1,0 +1,65 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    uses: ./.github/workflows/ci.yml
+    with:
+      release: true
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: macos-arm64
+          path: dist
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.-]+)?$ ]]
+          cd dist
+          sha256sum --check SHA256SUMS
+          minimum_os=$(cat minimum-macos.txt)
+          cat > release-notes.md <<EOF
+          Native L6max emulator for Apple silicon. Requires macOS $minimum_os or later.
+
+          Download and unzip **L6max-Emulator-macos-arm64.zip**, then open **L6max Emulator.app**.
+          Select your own supported firmware at first launch. Firmware is not included.
+          **File → Use SD Card Folder…** imports a folder into a persistent emulated card.
+
+          This build is ad-hoc signed and is not notarized. macOS Gatekeeper may block it;
+          approve it through System Settings → Privacy & Security only if you trust this release.
+
+          The companion sources archive contains this project's tagged source, matching
+          QEMU/model sources, Rust dependencies, and the bundled native libraries' sources
+          and Homebrew build recipes. SHA256SUMS covers both downloads.
+          EOF
+          flags=()
+          if [[ "$RELEASE_TAG" == *-* ]]; then flags+=(--prerelease); fi
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            # Recover a failed upload without replacing an already published release.
+            [[ $(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft) == true ]]
+          else
+            gh release create "$RELEASE_TAG" --verify-tag --draft \
+              --title "L6max Emulator $RELEASE_TAG" --notes-file release-notes.md "${flags[@]}"
+          fi
+          gh release upload "$RELEASE_TAG" ./*.zip ./*.tar.gz SHA256SUMS --clobber
+          gh release edit "$RELEASE_TAG" --draft=false

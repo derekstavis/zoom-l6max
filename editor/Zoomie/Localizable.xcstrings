@@ -1,0 +1,368 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "“%@” must be resampled to use it. Do you want to overwrite the original file or create a new one?" : {
+      "comment" : "Question before assigning an audio file to a sound pad. The variable is the file name."
+    },
+    "%@ dB" : {
+      "comment" : "Sound pad level in decibels."
+    },
+    "%@ of %@" : {
+      "comment" : "SD card usage. The first variable is the space used, the second is the card's capacity.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ of %2$@"
+          }
+        }
+      }
+    },
+    "Alkaline" : {
+
+    },
+    "App Version Too Old" : {
+
+    },
+    "Apply" : {
+
+    },
+    "Audio Interface Mode" : {
+
+    },
+    "Auto" : {
+
+    },
+    "Auto Power Off" : {
+
+    },
+    "Auto Power Off turns the L6max off after 10 hours without use." : {
+
+    },
+    "AUX %lld Send" : {
+      "comment" : "Section title. The variable is the AUX bus number."
+    },
+    "AUX Send Point" : {
+
+    },
+    "Battery Type" : {
+
+    },
+    "Cancel" : {
+
+    },
+    "Cannot enter File Transfer Mode because recording is in progress." : {
+
+    },
+    "Cannot reset all settings because recording is in progress." : {
+
+    },
+    "CC#%lld" : {
+      "comment" : "MIDI control change number."
+    },
+    "CH %lld" : {
+      "comment" : "MIDI channel. The variable is the channel number.\nMixer channel. The variable is the channel number."
+    },
+    "Changing the audio interface mode restarts the USB connection. The app reconnects after a moment." : {
+
+    },
+    "Check that the L6max is connected to this device with a USB cable." : {
+
+    },
+    "Choose a 16/24-bit or 32-bit float file." : {
+
+    },
+    "Choose a 48 kHz file." : {
+
+    },
+    "Choose a mono or stereo file." : {
+
+    },
+    "Choose which control change number moves each mixer parameter when Mixer Control via MIDI is on." : {
+
+    },
+    "Connect the L6max with a USB cable and turn it on. The app connects by itself." : {
+
+    },
+    "Connect Your L6max" : {
+
+    },
+    "Connecting…" : {
+
+    },
+    "Create" : {
+
+    },
+    "Date and Time" : {
+
+    },
+    "Default MIDI Settings" : {
+
+    },
+    "Device" : {
+
+    },
+    "Device Version" : {
+
+    },
+    "Effect Parameters" : {
+
+    },
+    "Enter File Transfer Mode" : {
+
+    },
+    "Enter File Transfer Mode?" : {
+
+    },
+    "Enter File Transfer Mode…" : {
+
+    },
+    "Error" : {
+
+    },
+    "Exit Demo" : {
+
+    },
+    "Exit File Transfer Mode" : {
+
+    },
+    "File" : {
+
+    },
+    "File Transfer Mode" : {
+
+    },
+    "Hold" : {
+
+    },
+    "Invalid Device" : {
+
+    },
+    "Invalid File" : {
+
+    },
+    "Invalid SD Card" : {
+
+    },
+    "Level" : {
+
+    },
+    "Lithium" : {
+
+    },
+    "Loop" : {
+
+    },
+    "Master" : {
+
+    },
+    "MIDI" : {
+
+    },
+    "MIDI CC Mapping" : {
+
+    },
+    "MIDI Channel" : {
+
+    },
+    "MIDI Clock Source" : {
+
+    },
+    "MIDI Clock Sync" : {
+
+    },
+    "MIDI In" : {
+
+    },
+    "MIDI Note" : {
+
+    },
+    "MIDI Out Mode" : {
+
+    },
+    "Mixer" : {
+
+    },
+    "Mixer Control via MIDI" : {
+
+    },
+    "Model" : {
+
+    },
+    "Monitor Point" : {
+
+    },
+    "Multi Track" : {
+
+    },
+    "Ni-MH" : {
+
+    },
+    "No files for this pad. Store audio files in the SOUND_PAD/PAD%lld folder on the SD card." : {
+      "comment" : "Shown when a sound pad has no audio files. The variable is the pad number."
+    },
+    "No Reply" : {
+
+    },
+    "No SD Card" : {
+
+    },
+    "None assigned" : {
+
+    },
+    "Not Mapped" : {
+
+    },
+    "Now Recording" : {
+
+    },
+    "OK" : {
+
+    },
+    "One-shot" : {
+
+    },
+    "Other" : {
+
+    },
+    "Out" : {
+
+    },
+    "Outputs" : {
+
+    },
+    "Overwrite" : {
+
+    },
+    "PAD %lld" : {
+      "comment" : "Label on a sound pad button. The variable is the pad number."
+    },
+    "Play Mode" : {
+
+    },
+    "Playing" : {
+
+    },
+    "Post" : {
+
+    },
+    "Post Master Fader" : {
+
+    },
+    "Power" : {
+
+    },
+    "Pre" : {
+
+    },
+    "Pre Master Fader" : {
+
+    },
+    "Pre Master Fader + Comp" : {
+
+    },
+    "Recorder" : {
+
+    },
+    "Recorder Mode" : {
+
+    },
+    "Recorder Mode cannot be switched because recording is in progress." : {
+
+    },
+    "Remaining Recording Time" : {
+
+    },
+    "Resample to 48 kHz" : {
+
+    },
+    "Reset All Settings" : {
+
+    },
+    "Reset all settings?" : {
+
+    },
+    "Reset All Settings…" : {
+
+    },
+    "Restore Defaults" : {
+
+    },
+    "Restore the default MIDI CC mapping?" : {
+
+    },
+    "SD Card" : {
+
+    },
+    "Set Date and Time Now" : {
+
+    },
+    "Set from this device at %@." : {
+      "comment" : "The variable is the time of day the clock was last set."
+    },
+    "Set When Connecting" : {
+
+    },
+    "Sound Pads" : {
+
+    },
+    "Stereo Mix" : {
+
+    },
+    "Stopped" : {
+
+    },
+    "Sub Out Point" : {
+
+    },
+    "The L6max did not answer. The setting was not changed." : {
+
+    },
+    "The L6max does not accept this app version." : {
+
+    },
+    "The L6max firmware expects a newer editor. Reconnect the USB cable or restart the L6max." : {
+
+    },
+    "The L6max refused the change (code %lld)." : {
+
+    },
+    "The L6max stops mixing and its SD card appears as a drive." : {
+
+    },
+    "The SD card in the L6max is available to this device as a drive. Eject it before leaving this mode." : {
+
+    },
+    "This app works with the L6max. The L6 uses a different settings layout." : {
+
+    },
+    "This is a simulated L6max. Nothing is sent to a real device." : {
+
+    },
+    "This Model Is Not Supported" : {
+
+    },
+    "This sound pad cannot be changed right now." : {
+
+    },
+    "Thru" : {
+
+    },
+    "Try the Demo" : {
+
+    },
+    "USB Audio" : {
+
+    },
+    "USB MIDI" : {
+
+    },
+    "USB Mix Minus" : {
+
+    },
+    "Used" : {
+
+    }
+  },
+  "version" : "1.0"
+}

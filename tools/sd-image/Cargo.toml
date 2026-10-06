@@ -1,0 +1,10 @@
+[package]
+name = "sd-image"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+l6fw.workspace = true
+fatfs.workspace = true

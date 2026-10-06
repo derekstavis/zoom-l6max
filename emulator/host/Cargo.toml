@@ -1,0 +1,18 @@
+[package]
+name = "l6max-host"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+l6fw.workspace = true
+sd-image.workspace = true
+libc.workspace = true
+memmap2.workspace = true
+serde_json.workspace = true
+qapi.workspace = true
+fatfs.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+coremidi = "0.9"
