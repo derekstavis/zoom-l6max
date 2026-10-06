@@ -1,0 +1,11 @@
+[package]
+name = "usb-smoke"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+l6max-host.workspace = true
+libc.workspace = true
+image.workspace = true
