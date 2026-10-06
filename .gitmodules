@@ -1,0 +1,3 @@
+[submodule "emulator/qemu/upstream"]
+	path = emulator/qemu/upstream
+	url = https://github.com/qemu/qemu.git
