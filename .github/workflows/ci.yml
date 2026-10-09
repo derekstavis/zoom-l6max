@@ -104,3 +104,88 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
+
+  linux:
+    name: Linux checks and AppImage
+    # The oldest hosted image keeps the AppImage's C library requirement low.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      # Pinned packaging tools; checksums are verified before use.
+      APPIMAGETOOL_URL: https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
+      APPIMAGETOOL_SHA256: ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
+      APPIMAGE_RUNTIME_URL: https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-x86_64
+      APPIMAGE_RUNTIME_SHA256: 2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          submodules: true
+          persist-credentials: false
+      - name: Prepare native toolchains
+        run: |
+          if [[ "${{ inputs.release || false }}" == true ]]; then
+            # Release builds also publish the Debian sources of bundled libraries.
+            sudo sed -i 's/^# deb-src/deb-src/' /etc/apt/sources.list
+          fi
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            build-essential pkg-config ninja-build python3 python3-venv python3-pip \
+            libglib2.0-dev libpixman-1-dev libfdt-dev libasound2-dev libfontconfig-dev \
+            libxkbcommon-dev jq
+          rustup show active-toolchain
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-linux-x86_64-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: cargo-linux-x86_64-
+      - name: Fetch locked Rust dependencies
+        run: cargo fetch --locked
+      - name: Check Rust formatting
+        run: cargo fmt --all --check
+      - name: Check all Rust targets
+        run: cargo check --locked --workspace --all-targets
+      - name: Test Rust workspace
+        run: cargo test --locked --workspace
+      - name: Build custom QEMU
+        run: cargo run --locked -p qemu-build -- --minimal
+      - name: Fetch pinned AppImage tools
+        run: |
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/appimagetool" "$APPIMAGETOOL_URL"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/runtime" "$APPIMAGE_RUNTIME_URL"
+          echo "$APPIMAGETOOL_SHA256  $RUNNER_TEMP/appimagetool" | sha256sum --check
+          echo "$APPIMAGE_RUNTIME_SHA256  $RUNNER_TEMP/runtime" | sha256sum --check
+          chmod +x "$RUNNER_TEMP/appimagetool" "$RUNNER_TEMP/runtime"
+      - name: Package and verify AppImage
+        env:
+          RELEASE_BUILD: ${{ inputs.release || false }}
+          APP_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || '0.1.0' }}
+        run: |
+          options=()
+          if [[ "$RELEASE_BUILD" != true ]]; then options+=(--debug); fi
+          cargo run --locked -p linux-package -- \
+            emulator/qemu/build-source/build/qemu-system-arm \
+            --version "$APP_VERSION" "${options[@]}" \
+            --appimagetool "$RUNNER_TEMP/appimagetool" --runtime "$RUNNER_TEMP/runtime"
+      - name: Collect matching release sources
+        if: inputs.release
+        run: bash .github/scripts/release-sources-linux.sh
+      - name: Generate checksums
+        working-directory: emulator/dist
+        run: sha256sum ./*.AppImage ./*.tar.gz > SHA256SUMS
+        # Non-release builds only contain the AppImage; Bash must ignore unmatched globs.
+        shell: bash --noprofile --norc -O nullglob -eo pipefail {0}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: linux-x86_64
+          path: |
+            emulator/dist/*.AppImage
+            emulator/dist/*.tar.gz
+            emulator/dist/SHA256SUMS
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
