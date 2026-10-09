@@ -14,6 +14,7 @@ QEMU process with separate address spaces and a shared virtual clock.
 - [QEMU board](../emulator/board.md): modeled peripherals and UART/display boundaries.
 - [Updates](updates.md): package checks, storage handoff, panel programming, installer limits.
 - [Editor MIDI](protocols/editor-midi.md) and [factory MIDI](protocols/factory-midi.md): wire formats, commands, side effects, and verification limits.
+- [Mixer MIDI](protocols/mixer-midi.md): Control Change numbers and the state request.
 - [Parameter values](gui/parameter-values.md): units and knob-popup formatting.
 - [Notification lifetime](gui/notification-lifecycle.md): patch ownership, expiry, and nonblocking mixer handling.
 - [Dismissal behavior](gui/popup-triggers.md): idle polling and regression checks.

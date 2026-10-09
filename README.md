@@ -72,6 +72,7 @@ reference material, including addresses, evidence, reproduction commands,
 and unresolved findings.
 
 ## Repository layout
+| [MIDI state sync patch](docs/guides/midi-sync-patch.md) | Let MIDI controllers request the full mixer state |
 
 ```text
 emulator/   Rust host, GPUI frontend, and custom QEMU device model

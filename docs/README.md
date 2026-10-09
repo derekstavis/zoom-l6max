@@ -13,6 +13,7 @@ Commands use the repository root unless a page says otherwise.
 - [Firmware packages](guides/firmware-packages.md): supported input, extraction,
   lossless repacking, and checksum regeneration.
 - [Knob value patch](guides/knob-patch.md): build, run, and validate version 1.12.
+- [MIDI state sync patch](guides/midi-sync-patch.md): ask the L6max for its full mixer state over MIDI.
 
 ## Emulator reference
 
@@ -48,6 +49,7 @@ the supported revision, and evidence boundaries.
 - [Tool catalog](development/tools.md): standalone Rust binaries.
 - [Patch conventions](../patches/README.md): layout, hook guards, and adding patches.
 - [Knob patch implementation](../patches/knob-dialog/README.md): payload design,
+- [MIDI sync implementation](../patches/midi-sync/README.md): hook, getters, combining, validation.
   synchronization, placement, and detailed validation.
 
 ## Reading the findings
