@@ -16,3 +16,6 @@ fatfs.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 coremidi = "0.9"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+alsa = "0.12"

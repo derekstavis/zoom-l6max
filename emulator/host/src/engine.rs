@@ -136,7 +136,6 @@ pub struct Engine {
     pub management: Vec<QmpClient>,
     pub display_memory: Option<SharedRam>,
     pub usb: Option<Arc<crate::usb::UsbHost>>,
-    #[cfg(target_os = "macos")]
     pub midi: Option<crate::usb_midi::MidiBridge>,
 }
 
@@ -148,7 +147,6 @@ impl Engine {
             management: Vec::new(),
             display_memory: None,
             usb: None,
-            #[cfg(target_os = "macos")]
             midi: None,
         };
         let Some(qemu) = &options.qemu else {
@@ -318,7 +316,6 @@ impl Engine {
                 .map_err(|e| format!("resume guest: {e}"))?;
         }
         engine.inputs = Some(Arc::new(InputHub::new(main_input, panel_input)));
-        #[cfg(target_os = "macos")]
         if options.host_midi {
             engine.midi = Some(
                 crate::usb_midi::MidiBridge::start(engine.usb.as_ref().unwrap().clone())
@@ -342,7 +339,6 @@ impl Engine {
 
 impl Drop for Engine {
     fn drop(&mut self) {
-        #[cfg(target_os = "macos")]
         drop(self.midi.take());
         for child in &mut self.children {
             if matches!(child.try_wait(), Ok(None)) {

@@ -38,7 +38,10 @@ cargo run -p knob-dialog-smoke -- --volatile --firmware-dir firmware-knob-dialog
 
 - `input-smoke`, `control-smoke`, `indicator-smoke`: input and GPIO/LED behavior.
 - `power-smoke`, `persistence-smoke`: device shutdown and persistent state.
-- `storage-smoke`, `usb-smoke`, `midi-smoke`: SD and USB services.
+- `storage-smoke`, `usb-smoke`, `midi-smoke`: SD and USB services. `midi-smoke`
+  uses CoreMIDI on macOS and ALSA on Linux; `L6_MIDI_DIRECT=1` (Linux) talks USB
+  MIDI without a host MIDI system and `L6_MIDI_SYNC=1` also checks the
+  [midi-sync patch](../guides/midi-sync-patch.md) (CC 127 yields 80 replies).
 - `factory-protocol-smoke`: firmware's factory MIDI protocol.
 - `firmware-update-smoke`, `patched-update-smoke`: update preparation, replacement
   installation, and restart checks.
