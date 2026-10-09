@@ -687,6 +687,10 @@ fn main() {
         eprintln!("Could not open app data: {error}");
         std::process::exit(1);
     });
+    // A packaged app ships QEMU and imports firmware through its UI.
+    if bundle.is_some() {
+        options.auto_setup = false;
+    }
     let bundled = bundle.is_some();
     let bundle_testing = std::env::var_os("L6_BUNDLE_SMOKE_FIRST").is_some();
     let menu_testing = std::env::var_os("L6_MENU_SMOKE_FIRMWARE").is_some();
@@ -705,6 +709,13 @@ fn main() {
             }
         }
     } else {
+        // Build QEMU and unpack firmware on first run, so one `cargo run` works.
+        if options.auto_setup {
+            options.prepare().unwrap_or_else(|error| {
+                eprintln!("Could not start QEMU: {error}");
+                std::process::exit(1);
+            });
+        }
         configuration::configure(&mut options).unwrap_or_else(|error| {
             eprintln!("Could not prepare demo SD card: {error}");
             std::process::exit(1);

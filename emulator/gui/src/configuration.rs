@@ -3,7 +3,8 @@ use l6max_host::engine::Options;
 use std::io;
 /// Apply visual UI defaults without changing disposable runs or explicit media.
 pub fn configure(options: &mut Options) -> io::Result<()> {
-    configure_with_package(options, None)
+    let package = options.firmware_package.clone();
+    configure_with_package(options, package.as_deref())
 }
 
 pub fn configure_with_package(

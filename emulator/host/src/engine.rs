@@ -23,6 +23,12 @@ use std::{
 pub struct Options {
     pub qemu: Option<PathBuf>,
     pub firmware_dir: PathBuf,
+    /// An `L6max.bin` update package. When `firmware_dir` has no unpacked
+    /// images, this (or a package found by [`Options::prepare`]) is unpacked.
+    pub firmware_package: Option<PathBuf>,
+    /// Build QEMU and unpack firmware on first use. Packaged apps ship both and
+    /// turn this off.
+    pub auto_setup: bool,
     pub logs: PathBuf,
     pub sd_image: Option<PathBuf>,
     pub no_sd: bool,
@@ -69,6 +75,8 @@ impl Options {
         let mut options = Self {
             qemu: env::var_os("L6_QEMU").map(PathBuf::from),
             firmware_dir: workspace.join("unpacked"),
+            firmware_package: env::var_os("L6_FIRMWARE").map(PathBuf::from),
+            auto_setup: true,
             logs: workspace.join("emulator/logs"),
             sd_image: None,
             no_sd: false,
@@ -88,6 +96,10 @@ impl Options {
                 "--update-bootloader" => options.update_bootloader = true,
                 "--qemu" => options.qemu = Some(take_path(&mut args, "--qemu")?),
                 "--firmware-dir" => options.firmware_dir = take_path(&mut args, "--firmware-dir")?,
+                "--firmware-package" => {
+                    options.firmware_package = Some(take_path(&mut args, "--firmware-package")?)
+                }
+                "--no-auto-setup" => options.auto_setup = false,
                 "--logs" => options.logs = take_path(&mut args, "--logs")?,
                 "--gdb-socket" => options.gdb_socket = Some(take_path(&mut args, "--gdb-socket")?),
                 "--usb" => {
@@ -108,7 +120,7 @@ impl Options {
                 }
                 "--help" | "-h" => {
                     println!(
-                        "Engine options: [QEMU] [--qemu PATH] [--firmware-dir DIR] [--logs DIR] [--state-dir DIR | --volatile] [--sd-image FILE | --no-sd] [--update-bootloader] [--usb] [--trace-sd] [--timing paced|adaptive] [--ui-input-smoke] [--gdb-socket PATH]"
+                        "Engine options: [QEMU] [--qemu PATH] [--firmware-dir DIR | --firmware-package L6max.bin] [--no-auto-setup] [--logs DIR] [--state-dir DIR | --volatile] [--sd-image FILE | --no-sd] [--update-bootloader] [--usb] [--trace-sd] [--timing paced|adaptive] [--ui-input-smoke] [--gdb-socket PATH]"
                     );
                     std::process::exit(0);
                 }
@@ -120,12 +132,7 @@ impl Options {
         if options.no_sd && options.sd_image.is_some() {
             return Err("--no-sd conflicts with --sd-image".into());
         }
-        if options.qemu.is_none() {
-            let default = PathBuf::from("/private/tmp/l6-qemu-src/build/qemu-system-arm");
-            if default.is_file() {
-                options.qemu = Some(default);
-            }
-        }
+        options.qemu = options.qemu.or_else(crate::setup::existing_qemu);
         Ok(options)
     }
 }
@@ -141,6 +148,14 @@ pub struct Engine {
 
 impl Engine {
     pub fn start(options: &Options) -> Result<Self, String> {
+        let mut prepared;
+        let options = if options.auto_setup {
+            prepared = options.clone();
+            prepared.prepare()?;
+            &prepared
+        } else {
+            options
+        };
         let mut engine = Self {
             children: Vec::new(),
             inputs: None,
@@ -154,13 +169,15 @@ impl Engine {
         };
         let qemu = qemu
             .canonicalize()
-            .map_err(|e| format!("cannot find QEMU: {e}"))?;
+            .map_err(|e| format!("cannot find QEMU at {}: {e}", qemu.display()))?;
         fs::create_dir_all(&options.logs).map_err(|e| e.to_string())?;
         let logs = options.logs.canonicalize().map_err(|e| e.to_string())?;
-        let firmware = options
-            .firmware_dir
-            .canonicalize()
-            .map_err(|e| e.to_string())?;
+        let firmware = options.firmware_dir.canonicalize().map_err(|e| {
+            format!(
+                "firmware directory {} is not usable: {e}",
+                options.firmware_dir.display()
+            )
+        })?;
         let sd = options
             .sd_image
             .as_ref()

@@ -13,6 +13,7 @@ license = "MIT"
 l6max-host = { path = "emulator/host" }
 l6fw = { path = "tools/l6fw" }
 sd-image = { path = "tools/sd-image" }
+qemu-build = { path = "tools/qemu-build" }
 l6max-diagnostics = { path = "tools/diagnostics" }
 libc = "0.2.189"
 memmap2 = "0.9.10"

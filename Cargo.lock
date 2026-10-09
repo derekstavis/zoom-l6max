@@ -2932,8 +2932,10 @@ dependencies = [
  "libc",
  "memmap2",
  "qapi",
+ "qemu-build",
  "sd-image",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]

@@ -19,3 +19,4 @@ pub mod usb_midi;
 pub mod usb_storage;
 
 pub mod paths;
+pub mod setup;

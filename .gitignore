@@ -23,6 +23,7 @@ target/
 /emulator/qemu/snapshots/
 /emulator/dist/
 /emulator/qemu/build-source/
+/emulator/qemu/.build.lock
 *.sock
 
 # Local OS/editor files.
