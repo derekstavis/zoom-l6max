@@ -20,6 +20,8 @@ cargo run -p sd-image -- emulator/state/folder-card.img --directory /path/to/sd-
 - `firmware-patch`: guarded payload builder and repacker for `knob-dialog` and `midi-sync`; `--patch` may repeat to combine them.
 - `sd-image`: empty/demo cards and directory snapshots, with reusable media builders.
 - `macos-package`: firmware-free macOS app/ZIP assembly with relocated native dependencies.
+- `linux-package`: firmware-free Linux AppDir and x86_64 AppImage assembly; bundles non-host
+  libraries and records the Debian package of each.
 - `qemu-build`: stage and build the pinned QEMU submodule with the custom board;
   an explicit external QEMU 11.1.2 source path still builds in place.
 - `qemu-run`: low-level scripted diagnostic runner using QEMU monitors.
