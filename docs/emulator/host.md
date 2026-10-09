@@ -35,6 +35,9 @@ create or attach a demo card; use `sd-image --demo` and `--sd-image` to select o
 - `headless`: guest-time helpers used by diagnostic tools.
 - `update_bootloader`: replacement SD installer for the unavailable bootloader.
 - `usb`, `usb_midi`, `usb_storage`: modeled USB device access and host services.
+- `host_midi`: the `HostMidi` trait and its CoreMIDI, ALSA and unavailable back ends.
+- `sector_device`: the `SectorDevice` trait (USB mass storage, or an image file) and the
+  seekable FAT volume view over it, used by `usb-files` and tests.
 
 Known limitations and the replacement installer's scope are documented in
 the [emulator overview](architecture.md) and [QEMU model documentation](board.md).

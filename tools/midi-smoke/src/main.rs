@@ -1,115 +1,78 @@
-//! Native CoreMIDI -> USB DMA -> firmware -> GPIO indicator round trip.
-#[cfg(target_os = "macos")]
+//! Host MIDI -> USB MIDI DMA -> firmware -> GPIO indicator round trip.
+//!
+//! Uses the operating system's MIDI (CoreMIDI on macOS, the ALSA sequencer on
+//! Linux) unless `L6_MIDI_DIRECT=1`, which speaks USB MIDI straight to the
+//! emulated device and needs no host MIDI system or `/dev/snd/seq` access.
+//! `L6_MIDI_SYNC=1` also exercises the midi-sync patch: CC 127 must be answered
+//! with 80 Control Changes (needs a patched image).
+mod client;
+
+use client::{DirectClient, MidiClient, wait_for};
+use l6max_host::{engine::Options, headless::Headless, indicators};
+use std::time::{Duration, Instant};
+
+const KNOB_CC: [u8; 2] = [0xb0, 0x51];
+
 fn run() -> Result<(), String> {
-    use coremidi::{Client, Destinations, PacketBuffer, Source};
-    use l6max_host::{
-        display::PublishedDisplay,
-        engine::{Engine, Options},
-        indicators,
-    };
-    use std::{
-        sync::mpsc,
-        thread,
-        time::{Duration, Instant},
-    };
+    let direct = std::env::var_os("L6_MIDI_DIRECT").is_some();
+    let sync = std::env::var_os("L6_MIDI_SYNC").is_some();
     let mut options = Options::parse()?;
     options.usb_enabled = true;
-    options.host_midi = true;
-    let engine = Engine::start(&options)?;
-    let inputs = engine.inputs.as_ref().unwrap();
-    let display = PublishedDisplay::new(
-        engine.display_memory.as_ref().unwrap().map(),
-        inputs.main.clone(),
-    )
-    .map_err(|e| e.to_string())?;
-    let until = |ms: u32| -> Result<(), String> {
-        let end = Instant::now() + Duration::from_secs(120);
-        while inputs.panel.snapshot().guest_ms < ms {
-            display.sample().map_err(|e| e.to_string())?;
-            if Instant::now() > end {
-                return Err("guest deadline".into());
-            }
-            thread::sleep(Duration::from_millis(5));
-        }
-        Ok(())
+    options.host_midi = !direct;
+    let guest = Headless::start(&options)?;
+    guest.recorder().map_err(|e| e.to_string())?;
+    guest.until(47000).map_err(|e| e.to_string())?;
+    let inputs = guest.engine.inputs.as_ref().unwrap();
+    let mut client: Box<dyn MidiClient> = if direct {
+        Box::new(DirectClient::connect(guest.engine.usb.clone().unwrap())?)
+    } else {
+        println!(
+            "{}",
+            guest.engine.midi.as_ref().unwrap().status.lock().unwrap()
+        );
+        client::connect_os()?
     };
-    until(40000)?;
-    inputs.tap(3, 50).map_err(|e| e.to_string())?;
-    until(42000)?;
-    inputs.tap(3, 50).map_err(|e| e.to_string())?;
-    until(47000)?;
-    println!("{}", engine.midi.as_ref().unwrap().status.lock().unwrap());
-    let name = "L6max Mixer Control Port (Emulator)";
-    let source = Source::from_name(name).ok_or("missing native MIDI source")?;
-    let destination = Destinations
-        .into_iter()
-        .find(|d| d.name().as_deref() == Some(name))
-        .ok_or("missing native MIDI destination")?;
-    let client =
-        Client::new("L6max MIDI integration check").map_err(|s| format!("CoreMIDI {s}"))?;
-    let (tx, rx) = mpsc::channel();
-    #[allow(deprecated)]
-    let input = client
-        .input_port("integration input", move |packets| {
-            for p in packets.iter() {
-                let _ = tx.send(p.data().to_vec());
-            }
-        })
-        .map_err(|s| format!("CoreMIDI {s}"))?;
-    input
-        .connect_source(&source)
-        .map_err(|s| format!("CoreMIDI {s}"))?;
-    let output = client
-        .output_port("integration output")
-        .map_err(|s| format!("CoreMIDI {s}"))?;
+    let idle = || guest.sample_display().map(drop).map_err(|e| e.to_string());
+
     inputs.encoder(0, -4).map_err(|e| e.to_string())?;
-    let end = Instant::now() + Duration::from_secs(15);
-    let mut received = false;
-    while Instant::now() < end {
-        display.sample().map_err(|e| e.to_string())?;
-        if let Ok(data) = rx.try_recv() {
-            println!("Host MIDI IN: {data:02x?}");
-            if data.len() == 3 && data[0..2] == [0xb0, 0x51] {
-                received = true;
-                break;
-            }
-        }
-        thread::sleep(Duration::from_millis(5));
+    if !wait_for(&mut *client, Duration::from_secs(15), idle, |m| {
+        m[..2] == KNOB_CC
+    })? {
+        return Err("knob CC did not reach the host".into());
     }
-    if !received {
-        return Err("knob CC did not reach native MIDI source".into());
-    }
-    let before = indicators::rings(inputs.panel.snapshot().indicators)[0];
-    output
-        .send(&destination, &PacketBuffer::new(0, &[0xb0, 0x51, 100]))
-        .map_err(|s| format!("CoreMIDI {s}"))?;
-    until(inputs.panel.snapshot().guest_ms + 3000)?;
-    let after = indicators::rings(inputs.panel.snapshot().indicators)[0];
-    println!("Native MIDI OUT CC81=100: firmware GPIO ring {before:#x} -> {after:#x}");
+    let ring = || indicators::rings(inputs.panel.snapshot().indicators)[0];
+    let before = ring();
+    client.send(&[0xb0, 0x51, 100])?;
+    guest.wait(3000).map_err(|e| e.to_string())?;
+    let after = ring();
+    println!("Host MIDI OUT CC81=100: firmware GPIO ring {before:#x} -> {after:#x}");
     if before == after {
         return Err("host CC did not alter firmware indicator output".into());
     }
-    input
-        .disconnect_source(&source)
-        .map_err(|s| format!("CoreMIDI {s}"))?;
-    let close_started = Instant::now();
+    if sync {
+        client.send(&[0xb0, 127, 127])?;
+        let mut replies = 0;
+        wait_for(&mut *client, Duration::from_secs(20), idle, |_| {
+            replies += 1;
+            replies == 80
+        })?;
+        println!("midi-sync: {replies} Control Change replies to CC 127");
+        if replies != 80 {
+            return Err(format!("expected 80 CC replies, saw {replies}"));
+        }
+    }
+    client.release();
+    let Headless { engine, .. } = guest;
+    let closing = Instant::now();
     drop(engine);
-    if close_started.elapsed() > Duration::from_secs(2) {
-        return Err("native MIDI shutdown exceeded two seconds".into());
+    if closing.elapsed() > Duration::from_secs(2) {
+        return Err("host MIDI shutdown exceeded two seconds".into());
     }
-    if Source::from_name(name).is_some()
-        || Destinations
-            .into_iter()
-            .any(|d| d.name().as_deref() == Some(name))
-    {
-        return Err("native MIDI endpoints remained after engine shutdown".into());
+    if client.endpoint_present() == Some(true) {
+        return Err("host MIDI endpoints remained after engine shutdown".into());
     }
-    println!("Native MIDI endpoints disposed on engine shutdown");
+    println!("Host MIDI endpoints disposed on engine shutdown");
     Ok(())
-}
-#[cfg(not(target_os = "macos"))]
-fn run() -> Result<(), String> {
-    Err("CoreMIDI check requires macOS".into())
 }
 fn main() {
     if let Err(e) = run() {

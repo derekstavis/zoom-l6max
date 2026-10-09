@@ -1,5 +1,21 @@
-//! USB MIDI 1.0 packet framing and native host endpoints.
-use std::io;
+//! USB MIDI 1.0 packet framing and the bridge between the emulated device and
+//! the host operating system's MIDI, through [`HostMidi`].
+use crate::{
+    host_midi::{HostMidi, NativeMidi},
+    usb::UsbHost,
+};
+use std::{
+    io,
+    marker::PhantomData,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+    thread::{self, JoinHandle},
+    time::Duration,
+};
+
+pub use crate::host_midi::PORT_NAMES;
 
 const LENGTHS: [usize; 16] = [0, 0, 2, 3, 3, 1, 2, 3, 3, 3, 3, 3, 2, 2, 3, 1];
 pub fn decode(bytes: &[u8]) -> io::Result<Vec<(u8, Vec<u8>)>> {
@@ -25,7 +41,7 @@ pub struct Encoder {
     pending: Vec<u8>,
 }
 impl Encoder {
-    /// Preserve running status and SysEx across CoreMIDI packet boundaries.
+    /// Preserve running status and SysEx across host MIDI packet boundaries.
     pub fn push(&mut self, cable: u8, bytes: &[u8]) -> Vec<u8> {
         let mut output = Vec::new();
         let emit = |output: &mut Vec<u8>, cin: u8, data: &[u8]| {
@@ -99,188 +115,149 @@ impl Encoder {
     }
 }
 
-#[cfg(target_os = "macos")]
-mod native {
-    use super::*;
-    use crate::usb::UsbHost;
-    use coremidi::{Client, PacketBuffer, VirtualDestination, VirtualSource};
-    use std::{
-        sync::{
-            Arc, Mutex,
-            atomic::{AtomicBool, Ordering},
-            mpsc,
-        },
-        thread::{self, JoinHandle},
-        time::Duration,
-    };
+/// Host messages as `(cable, bytes)` become USB MIDI packets, sent in chunks the
+/// device's bulk endpoint accepts.
+fn forward_host_to_usb<P: HostMidi>(
+    ports: &mut P,
+    encoders: &mut [Encoder; 3],
+    mut send: impl FnMut(&[u8]) -> io::Result<()>,
+) -> io::Result<()> {
+    for (cable, bytes) in ports.read(32)? {
+        let Some(encoder) = encoders.get_mut(usize::from(cable)) else {
+            continue;
+        };
+        for chunk in encoder.push(cable, &bytes).chunks(512) {
+            send(chunk)?;
+        }
+    }
+    Ok(())
+}
+/// Device packets are unframed and delivered to the endpoint of their cable.
+fn forward_usb_to_host<P: HostMidi>(ports: &mut P, packets: &[u8]) -> io::Result<()> {
+    for (cable, data) in decode(packets)? {
+        if usize::from(cable) < PORT_NAMES.len() {
+            ports.write(cable, &data)?;
+        }
+    }
+    Ok(())
+}
 
-    pub struct MidiBridge {
-        stop: Arc<AtomicBool>,
-        worker: Option<JoinHandle<()>>,
-        pub status: Arc<Mutex<String>>,
-        usb: Arc<UsbHost>,
+/// Worker that mirrors the device's three USB MIDI cables onto host endpoints.
+/// The endpoints exist only while the firmware exposes the MIDI interface. On a
+/// platform without a back end it still drains the device so its queue never
+/// stalls, and reports that through `status`.
+pub struct MidiBridge<P: HostMidi = NativeMidi> {
+    stop: Arc<AtomicBool>,
+    worker: Option<JoinHandle<()>>,
+    pub status: Arc<Mutex<String>>,
+    usb: Arc<UsbHost>,
+    backend: PhantomData<fn() -> P>,
+}
+impl<P: HostMidi + 'static> MidiBridge<P> {
+    pub fn start(usb: Arc<UsbHost>) -> io::Result<Self> {
+        let stop = Arc::new(AtomicBool::new(false));
+        let status = Arc::new(Mutex::new("Waiting for firmware USB startup".to_owned()));
+        let flag = stop.clone();
+        let state = status.clone();
+        let worker_usb = usb.clone();
+        let worker = thread::Builder::new()
+            .name("l6-usb-midi".into())
+            .spawn(move || {
+                if let Err(e) = Self::run(&worker_usb, &flag, &state) {
+                    if flag.load(Ordering::Acquire) {
+                        return;
+                    }
+                    *state.lock().unwrap() = format!("USB MIDI stopped: {e}");
+                    eprintln!("USB MIDI: {e}");
+                }
+            })?;
+        Ok(Self {
+            stop,
+            worker: Some(worker),
+            status,
+            usb,
+            backend: PhantomData,
+        })
     }
-    // Field order disposes endpoints before the owning CoreMIDI client on
-    // shutdown, reconnect and every error path.
-    struct NativePorts {
-        _destinations: Vec<VirtualDestination>,
-        sources: Vec<VirtualSource>,
-        _client: Client,
-    }
-    impl MidiBridge {
-        pub fn start(usb: Arc<UsbHost>) -> io::Result<Self> {
-            let stop = Arc::new(AtomicBool::new(false));
-            let status = Arc::new(Mutex::new("Waiting for firmware USB startup".to_owned()));
-            let flag = stop.clone();
-            let state = status.clone();
-            let shutdown_usb = usb.clone();
-            let worker = thread::Builder::new()
-                .name("l6-usb-midi".into())
-                .spawn(move || {
-                    let run = || -> io::Result<()> {
-                        let (tx, rx) = mpsc::sync_channel::<(u8, Vec<u8>)>(128);
-                        let mut ports: Option<NativePorts> = None;
-                        let mut encoders: [Encoder; 3] =
-                            std::array::from_fn(|_| Encoder::default());
-                        let mut endpoints = None;
-                        while !flag.load(Ordering::Acquire) {
-                            if endpoints.is_none() {
-                                match usb.enumerate() {
-                                    Ok(config) => {
-                                        endpoints = config.midi;
-                                        if endpoints.is_none() {
-                                            *state.lock().unwrap() =
-                                                "USB File Transfer mode; MIDI unavailable".into();
-                                            ports = None;
-                                        } else if ports.is_none() {
-                                            let error = |s| {
-                                                io::Error::other(format!("CoreMIDI status {s}"))
-                                            };
-                                            let client =
-                                                Client::new("L6max Emulator").map_err(error)?;
-                                            let mut destinations = Vec::new();
-                                            let mut sources = Vec::new();
-                                            for (cable, name) in [
-                                                "L6max MIDI I/O Port",
-                                                "L6max Mixer Control Port",
-                                                "for L6 Editor Port",
-                                            ]
-                                            .iter()
-                                            .enumerate()
-                                            {
-                                                let name = format!("{name} (Emulator)");
-                                                let sender = tx.clone();
-                                                #[allow(deprecated)]
-                                                let dest = client
-                                                    .virtual_destination(&name, move |packets| {
-                                                        for p in packets.iter() {
-                                                            let _ = sender.try_send((
-                                                                cable as u8,
-                                                                p.data().to_vec(),
-                                                            ));
-                                                        }
-                                                    })
-                                                    .map_err(error)?;
-                                                destinations.push(dest);
-                                                sources.push(
-                                                    client.virtual_source(&name).map_err(error)?,
-                                                );
-                                            }
-                                            ports = Some(NativePorts {
-                                                _destinations: destinations,
-                                                sources,
-                                                _client: client,
-                                            });
-                                            *state.lock().unwrap() =
-                                                "Three native MIDI ports connected".into();
-                                        }
-                                    }
-                                    Err(e)
-                                        if e.raw_os_error() == Some(libc::ENODEV)
-                                            || e.raw_os_error() == Some(libc::EAGAIN)
-                                            || e.kind() == io::ErrorKind::InvalidData =>
-                                    {
-                                        *state.lock().unwrap() =
-                                            format!("Waiting for firmware USB: {e}");
-                                    }
-                                    Err(e) => return Err(e),
+    fn run(usb: &UsbHost, stop: &AtomicBool, state: &Mutex<String>) -> io::Result<()> {
+        let set = |text: String| *state.lock().unwrap() = text;
+        let mut ports: Option<P> = None;
+        let mut unsupported = false;
+        let mut encoders: [Encoder; 3] = std::array::from_fn(|_| Encoder::default());
+        let mut endpoints = None;
+        while !stop.load(Ordering::Acquire) {
+            if endpoints.is_none() {
+                match usb.enumerate() {
+                    Ok(config) => {
+                        endpoints = config.midi;
+                        if endpoints.is_none() {
+                            set("USB File Transfer mode; MIDI unavailable".into());
+                            ports = None;
+                        } else if ports.is_none() && !unsupported {
+                            match P::open() {
+                                Ok(opened) => {
+                                    ports = Some(opened);
+                                    set("Three native MIDI ports connected".into());
                                 }
-                                if endpoints.is_none() {
-                                    thread::sleep(Duration::from_millis(250));
-                                    continue;
-                                }
-                            }
-                            let pair = endpoints.unwrap();
-                            for _ in 0..32 {
-                                let Ok((cable, bytes)) = rx.try_recv() else {
-                                    break;
-                                };
-                                let data = encoders[cable as usize].push(cable, &bytes);
-                                for chunk in data.chunks(512) {
-                                    usb.send(pair.output, chunk)?;
-                                }
-                            }
-                            match usb.try_receive(pair.input, 16384) {
-                                Ok(bytes) => {
-                                    for (cable, data) in decode(&bytes)? {
-                                        if let Some(ports) = &ports {
-                                            if let Some(source) = ports.sources.get(cable as usize)
-                                            {
-                                                source
-                                                    .received(&PacketBuffer::new(0, &data))
-                                                    .map_err(|s| {
-                                                        io::Error::other(format!(
-                                                            "CoreMIDI receive status {s}"
-                                                        ))
-                                                    })?;
-                                            }
-                                        }
-                                    }
-                                }
-                                Err(e) if e.raw_os_error() == Some(libc::EAGAIN) => {}
-                                Err(e) if e.raw_os_error() == Some(libc::ENODEV) => {
-                                    endpoints = None;
-                                    ports = None;
+                                Err(e) if e.kind() == io::ErrorKind::Unsupported => {
+                                    unsupported = true;
+                                    set(format!("Host MIDI unavailable: {e}"));
                                 }
                                 Err(e) => return Err(e),
                             }
-                            thread::sleep(Duration::from_millis(2));
                         }
-                        drop(ports);
-                        Ok(())
-                    };
-                    if let Err(e) = run() {
-                        if flag.load(Ordering::Acquire) {
-                            return;
-                        }
-                        *state.lock().unwrap() = format!("USB MIDI stopped: {e}");
-                        eprintln!("USB MIDI: {e}");
                     }
-                })?;
-            Ok(Self {
-                stop,
-                worker: Some(worker),
-                status,
-                usb: shutdown_usb,
-            })
-        }
-    }
-    impl Drop for MidiBridge {
-        fn drop(&mut self) {
-            self.stop.store(true, Ordering::Release);
-            self.usb.shutdown();
-            if let Some(worker) = self.worker.take() {
-                let _ = worker.join();
+                    Err(e)
+                        if e.raw_os_error() == Some(libc::ENODEV)
+                            || e.raw_os_error() == Some(libc::EAGAIN)
+                            || e.kind() == io::ErrorKind::InvalidData =>
+                    {
+                        set(format!("Waiting for firmware USB: {e}"));
+                    }
+                    Err(e) => return Err(e),
+                }
+                if endpoints.is_none() {
+                    thread::sleep(Duration::from_millis(250));
+                    continue;
+                }
             }
+            let pair = endpoints.unwrap();
+            if let Some(native) = &mut ports {
+                forward_host_to_usb(native, &mut encoders, |chunk| usb.send(pair.output, chunk))?;
+            }
+            match usb.try_receive(pair.input, 16384) {
+                Ok(bytes) => match &mut ports {
+                    Some(native) => forward_usb_to_host(native, &bytes)?,
+                    // Still validate framing so a corrupt stream is reported.
+                    None => drop(decode(&bytes)?),
+                },
+                Err(e) if e.raw_os_error() == Some(libc::EAGAIN) => {}
+                Err(e) if e.raw_os_error() == Some(libc::ENODEV) => {
+                    endpoints = None;
+                    ports = None;
+                }
+                Err(e) => return Err(e),
+            }
+            thread::sleep(Duration::from_millis(2));
+        }
+        drop(ports);
+        Ok(())
+    }
+}
+impl<P: HostMidi> Drop for MidiBridge<P> {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        self.usb.shutdown();
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
         }
     }
 }
-#[cfg(target_os = "macos")]
-pub use native::MidiBridge;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::host_midi::testing::Loopback;
     #[test]
     fn running_status_and_realtime_survive_packet_boundaries() {
         let mut e = Encoder::default();
@@ -303,5 +280,64 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(recovered, [0xf0, 0x52, 0, 1, 2, 0xf7]);
         assert!(decode(&[0x1b, 0xb0]).is_err());
+    }
+    #[test]
+    fn host_messages_are_framed_per_cable_and_chunked() {
+        let mut ports = Loopback::default();
+        ports.incoming.push_back((1, vec![0xb0, 0x51, 100]));
+        ports
+            .incoming
+            .push_back((2, vec![0xf0, 0x7e, 0, 6, 1, 0xf7]));
+        // Messages for a cable the bridge does not know are dropped.
+        ports.incoming.push_back((7, vec![0xb0, 1, 2]));
+        let mut encoders: [Encoder; 3] = std::array::from_fn(|_| Encoder::default());
+        let mut sent = Vec::new();
+        forward_host_to_usb(&mut ports, &mut encoders, |chunk| {
+            sent.push(chunk.to_vec());
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(sent[0], [0x1b, 0xb0, 0x51, 100]);
+        assert_eq!(sent[1], [0x24, 0xf0, 0x7e, 0, 0x27, 6, 1, 0xf7]);
+        assert_eq!(sent.len(), 2);
+    }
+    #[test]
+    fn long_sysex_is_split_at_the_endpoint_limit() {
+        let mut ports = Loopback::default();
+        let mut sysex = vec![0xf0];
+        sysex.extend((0..500).map(|i| (i % 100) as u8));
+        sysex.push(0xf7);
+        ports.incoming.push_back((2, sysex.clone()));
+        let mut encoders: [Encoder; 3] = std::array::from_fn(|_| Encoder::default());
+        let mut chunks = Vec::new();
+        forward_host_to_usb(&mut ports, &mut encoders, |chunk| {
+            chunks.push(chunk.to_vec());
+            Ok(())
+        })
+        .unwrap();
+        assert!(chunks.len() > 1);
+        assert!(chunks.iter().all(|c| c.len() <= 512 && c.len() % 4 == 0));
+        let wire = chunks.concat();
+        let recovered = decode(&wire)
+            .unwrap()
+            .into_iter()
+            .flat_map(|(_, bytes)| bytes)
+            .collect::<Vec<_>>();
+        assert_eq!(recovered, sysex);
+    }
+    #[test]
+    fn device_packets_reach_only_known_cables() {
+        let mut ports = Loopback::default();
+        let packets = [
+            0x1b, 0xb0, 0x51, 100, // cable 1 control change
+            0x2b, 0xb0, 0x01, 2, // cable 2
+            0x9b, 0xb0, 0x01, 3, // cable 9 does not exist
+        ];
+        forward_usb_to_host(&mut ports, &packets).unwrap();
+        assert_eq!(
+            ports.outgoing,
+            [(1, vec![0xb0, 0x51, 100]), (2, vec![0xb0, 0x01, 2])]
+        );
+        assert!(forward_usb_to_host(&mut ports, &packets[..3]).is_err());
     }
 }

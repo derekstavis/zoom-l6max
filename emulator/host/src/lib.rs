@@ -10,7 +10,9 @@ pub mod controls;
 pub mod indicators;
 
 pub mod headless;
+pub mod host_midi;
 pub use l6fw as package;
+pub mod sector_device;
 pub mod update_bootloader;
 pub mod usb;
 pub mod usb_midi;

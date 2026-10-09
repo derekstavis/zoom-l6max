@@ -70,7 +70,7 @@ the actual main firmware performs panel programming. See the
 [firmware update map](../firmware/updates.md) for checks and limits.
 
 Use `--usb` to expose the firmware's three USB MIDI ports through CoreMIDI on
-macOS. The [SD and USB guide](usb.md) describes card-image
+macOS or the ALSA sequencer on Linux. The [SD and USB guide](usb.md) describes card-image
 creation, host file transfers, controller wiring, validation and current limits.
 
 The window starts at 1200×464, fitted to the device body rather than the

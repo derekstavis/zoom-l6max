@@ -1,5 +1,8 @@
 //! USB Bulk-Only Transport. SCSI requests are executed by firmware, including SD DMA.
-use crate::usb::{Endpoints, UsbHost};
+use crate::{
+    sector_device::{SECTOR, SectorDevice, SectorDisk},
+    usb::{Endpoints, UsbHost},
+};
 use std::io;
 
 pub struct MassStorage<'a> {
@@ -138,125 +141,44 @@ impl<'a> MassStorage<'a> {
     }
 }
 
-/// Seekable USB disk for host FAT access. One sector is cached; dirty sectors
-/// are flushed on eviction and explicit flush. The firmware owns every read/write.
-pub struct UsbDisk<'a> {
+/// A USB mass-storage device as a [`SectorDevice`]. The firmware owns every
+/// read and write; this only issues SCSI requests.
+pub struct UsbSectors<'a> {
     disk: MassStorage<'a>,
-    position: u64,
-    length: u64,
-    first: u32,
-    cached: Option<(u32, [u8; 512])>,
-    dirty: bool,
+    blocks: u64,
 }
-impl<'a> UsbDisk<'a> {
-    pub fn new(mut disk: MassStorage<'a>) -> io::Result<Self> {
+impl<'a> UsbSectors<'a> {
+    pub fn open(mut disk: MassStorage<'a>) -> io::Result<Self> {
         disk.ready()?;
         let (blocks, size) = disk.capacity()?;
-        if size != 512 || blocks > u32::MAX as u64 {
+        if size as usize != SECTOR || blocks > u32::MAX as u64 {
             return Err(io::Error::new(
                 io::ErrorKind::Unsupported,
                 "USB FAT access requires 512-byte sectors and READ(10) addressing",
             ));
         }
-        let boot = disk.read_sector(0)?;
-        let mut first = 0;
-        let mut volume_blocks = blocks;
-        // A valid FAT BPB has 512 bytes/sector. Otherwise find a FAT MBR partition.
-        if u16::from_le_bytes([boot[11], boot[12]]) != 512 {
-            if boot[510..] != [0x55, 0xaa] {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "missing disk signature",
-                ));
-            }
-            let p = boot[446..510]
-                .chunks_exact(16)
-                .find(|p| matches!(p[4], 1 | 4 | 6 | 0xb | 0xc | 0xe))
-                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "no FAT partition"))?;
-            first = u32::from_le_bytes(p[8..12].try_into().unwrap());
-            volume_blocks = u32::from_le_bytes(p[12..16].try_into().unwrap()) as u64;
-            if volume_blocks == 0 || first as u64 + volume_blocks > blocks {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "FAT partition exceeds USB disk",
-                ));
-            }
-        }
-        Ok(Self {
-            disk,
-            position: 0,
-            length: volume_blocks * 512,
-            first,
-            cached: None,
-            dirty: false,
-        })
-    }
-    fn flush_sector(&mut self) -> io::Result<()> {
-        if self.dirty {
-            let (lba, bytes) = self.cached.as_ref().unwrap();
-            self.disk.write_sector(*lba, bytes)?;
-            self.dirty = false;
-        }
-        Ok(())
-    }
-    fn sector(&mut self, lba: u32) -> io::Result<&mut [u8; 512]> {
-        if self.cached.as_ref().is_none_or(|(n, _)| *n != lba) {
-            self.flush_sector()?;
-            self.cached = Some((lba, self.disk.read_sector(lba)?));
-        }
-        Ok(&mut self.cached.as_mut().unwrap().1)
+        Ok(Self { disk, blocks })
     }
 }
-impl io::Read for UsbDisk<'_> {
-    fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
-        let offset = (self.position % 512) as usize;
-        let count = bytes
-            .len()
-            .min(512 - offset)
-            .min(self.length.saturating_sub(self.position) as usize);
-        if count == 0 {
-            return Ok(0);
-        }
-        let lba = self.first + (self.position / 512) as u32;
-        bytes[..count].copy_from_slice(&self.sector(lba)?[offset..offset + count]);
-        self.position += count as u64;
-        Ok(count)
+impl SectorDevice for UsbSectors<'_> {
+    fn sector_count(&self) -> u64 {
+        self.blocks
     }
-}
-impl io::Write for UsbDisk<'_> {
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        let offset = (self.position % 512) as usize;
-        let count = bytes
-            .len()
-            .min(512 - offset)
-            .min(self.length.saturating_sub(self.position) as usize);
-        if count == 0 {
-            return Ok(0);
-        }
-        let lba = self.first + (self.position / 512) as u32;
-        self.sector(lba)?[offset..offset + count].copy_from_slice(&bytes[..count]);
-        self.dirty = true;
-        self.position += count as u64;
-        Ok(count)
+    fn read_sector(&mut self, lba: u32) -> io::Result<[u8; SECTOR]> {
+        self.disk.read_sector(lba)
+    }
+    fn write_sector(&mut self, lba: u32, bytes: &[u8; SECTOR]) -> io::Result<()> {
+        self.disk.write_sector(lba, bytes)
     }
     fn flush(&mut self) -> io::Result<()> {
-        self.flush_sector()
+        self.disk.synchronize()
     }
 }
-impl io::Seek for UsbDisk<'_> {
-    fn seek(&mut self, where_: io::SeekFrom) -> io::Result<u64> {
-        let target = match where_ {
-            io::SeekFrom::Start(n) => n as i128,
-            io::SeekFrom::Current(n) => self.position as i128 + n as i128,
-            io::SeekFrom::End(n) => self.length as i128 + n as i128,
-        };
-        if target < 0 || target > self.length as i128 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "seek outside USB volume",
-            ));
-        }
-        self.position = target as u64;
-        Ok(self.position)
+
+/// Seekable FAT volume over the emulated USB disk.
+pub type UsbDisk<'a> = SectorDisk<UsbSectors<'a>>;
+impl<'a> SectorDisk<UsbSectors<'a>> {
+    pub fn new(disk: MassStorage<'a>) -> io::Result<Self> {
+        Self::open(UsbSectors::open(disk)?)
     }
 }

@@ -26,7 +26,7 @@ Commands use the repository root unless a page says otherwise.
 | [QEMU board](emulator/board.md) | Dual-chip model, peripheral coverage, diagnostics |
 | [Controls and indicators](emulator/controls.md) | GPIO matrix, encoders, ADC knobs, LED wiring |
 | [Persistent storage](emulator/storage.md) | NOR regions, panel flash, version records, RTC |
-| [SD and USB](emulator/usb.md) | Card detection, CoreMIDI, USB file transfers, limits |
+| [SD and USB](emulator/usb.md) | Card detection, CoreMIDI and ALSA MIDI, USB file transfers, limits |
 | [Power lifecycle](emulator/power.md) | GPIO power input, shutdown, restart, validation |
 
 ## Firmware behavior and patches

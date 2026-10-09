@@ -100,7 +100,7 @@ Start with the relevant reference and its diagnostic commands:
 | Flash/RTC persistence | [Storage](../emulator/storage.md#validation), `persistence-smoke` |
 | Update preparation and panel programming | [Updates](../firmware/updates.md#emulator-diagnostic), `firmware-update-smoke` |
 | SD detect/hotplug and USB endpoints | [SD and USB](../emulator/usb.md#validation), `storage-smoke`, `usb-smoke` |
-| CoreMIDI bridge | [SD and USB](../emulator/usb.md#native-midi), `midi-smoke` |
+| CoreMIDI / ALSA bridge | [SD and USB](../emulator/usb.md#native-midi), `midi-smoke` |
 | Guest USB file access | [Host file access](../emulator/usb.md#host-file-access), `usb-files` |
 | Factory commands | [Factory protocol](../firmware/protocols/factory-midi.md#emulator-diagnostic), `factory-protocol-smoke` |
 
