@@ -17,7 +17,7 @@ cargo run -p sd-image -- emulator/state/folder-card.img --directory /path/to/sd-
 ```
 
 - `l6fw`: package unpack/repack CLI and reusable fixed-layout package library.
-- `firmware-patch`: guarded knob notification payload builder and repacker.
+- `firmware-patch`: guarded payload builder and repacker for `knob-dialog` and `midi-sync`; `--patch` may repeat to combine them.
 - `sd-image`: empty/demo cards and directory snapshots, with reusable media builders.
 - `macos-package`: firmware-free macOS app/ZIP assembly with relocated native dependencies.
 - `qemu-build`: stage and build the pinned QEMU submodule with the custom board;
