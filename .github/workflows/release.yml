@@ -27,7 +27,20 @@ jobs:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: macos-arm64
-          path: dist
+          path: artifacts/macos
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: linux-x86_64
+          path: artifacts/linux
+      - name: Verify and combine platform assets
+        run: |
+          for platform in macos linux; do
+            (cd "artifacts/$platform" && sha256sum --check SHA256SUMS)
+          done
+          mkdir dist
+          mv artifacts/macos/*.zip artifacts/macos/*.tar.gz artifacts/macos/minimum-macos.txt dist/
+          mv artifacts/linux/*.AppImage artifacts/linux/*.tar.gz dist/
+          (cd dist && sha256sum ./*.zip ./*.AppImage ./*.tar.gz > SHA256SUMS)
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -39,18 +52,21 @@ jobs:
           sha256sum --check SHA256SUMS
           minimum_os=$(cat minimum-macos.txt)
           cat > release-notes.md <<EOF
-          Native L6max emulator for Apple silicon. Requires macOS $minimum_os or later.
+          Native L6max emulator for Apple silicon (macOS $minimum_os or later) and Linux x86_64.
 
-          Download and unzip **L6max-Emulator-macos-arm64.zip**, then open **L6max Emulator.app**.
+          **macOS:** download and unzip **L6max-Emulator-macos-arm64.zip**, then open **L6max Emulator.app**.
+          **Linux:** download **L6max-Emulator-x86_64.AppImage**, make it executable and run it.
+          It needs a recent Wayland desktop session, Vulkan, and ALSA from the host; see the Linux guide.
           Select your own supported firmware at first launch. Firmware is not included.
           **File → Use SD Card Folder…** imports a folder into a persistent emulated card.
 
-          This build is ad-hoc signed and is not notarized. macOS Gatekeeper may block it;
+          The macOS build is ad-hoc signed and is not notarized. Gatekeeper may block it;
           approve it through System Settings → Privacy & Security only if you trust this release.
 
-          The companion sources archive contains this project's tagged source, matching
+          The companion sources archives contain this project's tagged source, matching
           QEMU/model sources, Rust dependencies, and the bundled native libraries' sources
-          and Homebrew build recipes. SHA256SUMS covers both downloads.
+          (Homebrew recipes for macOS, Debian source packages for Linux).
+          SHA256SUMS covers every download.
           EOF
           flags=()
           if [[ "$RELEASE_TAG" == *-* ]]; then flags+=(--prerelease); fi
@@ -61,5 +77,5 @@ jobs:
             gh release create "$RELEASE_TAG" --verify-tag --draft \
               --title "L6max Emulator $RELEASE_TAG" --notes-file release-notes.md "${flags[@]}"
           fi
-          gh release upload "$RELEASE_TAG" ./*.zip ./*.tar.gz SHA256SUMS --clobber
+          gh release upload "$RELEASE_TAG" ./*.zip ./*.AppImage ./*.tar.gz SHA256SUMS --clobber
           gh release edit "$RELEASE_TAG" --draft=false
