@@ -7,6 +7,7 @@ Commands use the repository root unless a page says otherwise.
 ## Guides
 
 - [macOS app](guides/macos-app.md): firmware selection, packaged builds, and local storage.
+- [Linux](guides/linux.md): packages, build, ALSA MIDI ports, and what is verified.
 
 - [Getting started](getting-started.md): prerequisites, first boot, controls,
   device state, and troubleshooting.
@@ -48,8 +49,8 @@ the supported revision, and evidence boundaries.
   storage, and protocol diagnostics.
 - [Tool catalog](development/tools.md): standalone Rust binaries.
 - [Patch conventions](../patches/README.md): layout, hook guards, and adding patches.
-- [Knob patch implementation](../patches/knob-dialog/README.md): payload design,
 - [MIDI sync implementation](../patches/midi-sync/README.md): hook, getters, combining, validation.
+- [Knob patch implementation](../patches/knob-dialog/README.md): payload design,
   synchronization, placement, and detailed validation.
 
 ## Reading the findings

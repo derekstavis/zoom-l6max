@@ -23,6 +23,9 @@ QEMU's upstream configure/build system still requires its normal native build
 dependencies, including Python, Ninja, a C compiler, and libfdt. No Python
 project or Python launcher is used by this repository.
 
+On Linux install the packages in the [Linux guide](../guides/linux.md) first;
+the same command builds the board there.
+
 Start the visual emulator:
 
 ```sh
@@ -60,6 +63,24 @@ Device flash and RTC state persist in `emulator/state/`. Use `--state-dir DIR`
 for an isolated device or `--volatile` for a fresh disposable run. The
 [storage map](storage.md) describes the files and NOR regions.
 
+## Platform boundaries
+
+Operating-system differences sit behind small interfaces in `l6max-host`, so
+supporting a platform means adding an implementation, not changing the engine:
+
+- **Host MIDI**: `host_midi::HostMidi` (CoreMIDI, ALSA, unavailable). The USB
+  MIDI bridge is generic over it. See [SD and USB](usb.md#host-midi-back-ends).
+- **SD card and USB disk**: `sector_device::SectorDevice`. `UsbSectors` reaches
+  the card through the firmware's USB mass-storage interface; `StreamSectors`
+  reads an image file. Both feed the same FAT volume view. A host mount (FUSE or
+  a disk-image service) would be a further implementation.
+- **Shared display memory**: `shared_memory` uses `memfd_create` on Linux and an
+  unlinked POSIX shared-memory object elsewhere.
+- **USB link to QEMU**: a Unix socket pair with inherited descriptors, shared by
+  all Unix platforms.
+- **Packaging**: `macos-package` builds the `.app`; `linux-package` builds an
+  AppDir and AppImage. The GUI finds its bundled QEMU through `bundle.rs`.
+
 ## Crate boundaries
 
 ```text
@@ -84,6 +105,7 @@ belongs to `l6fw`; demo card creation belongs to `sd-image`. Both can be built
 without GPUI. Emulator diagnostics use the host library directly.
 
 ```sh
+cargo fetch --locked   # once, with network: pinned GPUI Git dependency
 cargo check --offline --workspace --all-targets
 cargo test --offline --workspace
 cargo build --offline -p l6max-host
