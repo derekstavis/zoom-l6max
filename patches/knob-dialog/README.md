@@ -23,7 +23,7 @@ it is visible.
 - `src/trampolines.rs`, `src/trampolines.s`: veneers that read displaced
   instructions from the locally supplied firmware at build time.
 - `src/values.rs`: parameter value formatting.
-- `linker/link.ld`: payload placement and prohibition on reserved mutable RAM.
+- `linker/link.ld`: payload placement (base `PAYLOAD_BASE` comes from the builder: `0x80108000` when built first) and prohibition on reserved mutable RAM.
 - `hooks.tsv`: hook addresses, lengths, expected byte hashes, and entry symbols.
 
 The host build and package integration live in
@@ -33,8 +33,9 @@ See the [patch conventions](../README.md) before adding another modification.
 ## Build and run
 
 Commands below run from the repository root. The patcher requires the project's
-pinned Rust toolchain with `thumbv7em-none-eabihf` installed, and Homebrew LLVM
-at `/opt/homebrew`. It rejects any main image whose SHA-256 differs from
+pinned Rust toolchain with `thumbv7em-none-eabihf` installed. Homebrew LLVM at
+`/opt/homebrew` is used when present; otherwise the toolchain's own `rust-lld`,
+`llvm-nm` and `llvm-objcopy` (`llvm-tools` component) are used. It rejects any main image whose SHA-256 differs from
 `980d92272c1f84bed200b4d2f83575202f6a00082c928d99b9e8b53af8d44461`.
 
 ```sh

@@ -9,6 +9,7 @@ in ignored output directories.
 | Patch | Target | Purpose | Builder |
 | --- | --- | --- | --- |
 | [knob-dialog](knob-dialog/README.md) | Main firmware | Show channel encoder values using the stock notification renderer | `firmware-patch` |
+| [midi-sync](midi-sync/README.md) | Main firmware | Send the full channel mixer state as Control Change on request | `firmware-patch` |
 
 ## Directory layout
 
@@ -47,6 +48,10 @@ covered by `.gitignore`; never place extracted proprietary firmware in `patches/
 Read any displaced instruction bytes from that local input during compilation;
 commit the veneer logic and validation metadata instead of copied firmware bytes.
 
-The current builder supports `knob-dialog` only. Patches are not automatically
-composable: verify hook overlap, payload placement, shared resources, and input
-hash expectations before combining modifications.
+The builder supports `knob-dialog` and `midi-sync`, and `--patch` may repeat to
+combine them. It places payloads back to back from `0x80108000` in catalog
+order (each linker script takes its base from `PAYLOAD_BASE`), checks every hook
+region against the input, and refuses overlapping hook regions. Overlap checks do
+not prove independence: before combining another patch, verify shared
+resources (RAM, heap, locks, callbacks) and input hash expectations, and
+document the combination in each patch's README.

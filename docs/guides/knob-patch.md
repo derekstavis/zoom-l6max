@@ -14,7 +14,9 @@ Version 1.12 is a local patch marker, not an official manufacturer release.
 ## Build
 
 Follow [getting started](../getting-started.md) first. The builder additionally
-requires the Thumb Rust target and Homebrew LLVM at `/opt/homebrew`:
+requires the Thumb Rust target. It uses Homebrew LLVM at `/opt/homebrew` when
+present, otherwise the toolchain's `rust-lld` (no other install needed; see the
+[Linux guide](linux.md#patch-builder)):
 
 ```sh
 rustup target add thumbv7em-none-eabihf
@@ -77,5 +79,5 @@ Useful background:
 - The panel image stays original; audio processing is not modeled.
 - Hardware-tested popup behavior does not prove every allocation failure,
   scheduling interleaving, or bootloader policy.
-- Multiple patches are not automatically composable; see
-  [patch conventions](../../patches/README.md).
+- Combining with the [MIDI sync patch](midi-sync-patch.md) is supported by the
+  builder; see [patch conventions](../../patches/README.md) before adding others.
