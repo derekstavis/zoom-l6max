@@ -94,7 +94,27 @@ continues consuming MIDI IN even when no host application is connected.
 Closing the engine cancels socket operations, joins the worker and disposes
 its endpoints.
 
-The mixer-control round trip is verified with a separate CoreMIDI client:
+### Host MIDI back ends
+
+The worker is written once, against the `HostMidi` trait in
+`emulator/host/src/host_midi/`: `open` creates the three endpoints, `read`
+drains messages host applications sent (per cable), and `write` delivers device
+bytes to a cable's subscribers. Back ends are selected by `cfg`:
+
+| Platform | Back end | Endpoints |
+| --- | --- | --- |
+| macOS | CoreMIDI | Virtual sources and destinations |
+| Linux | ALSA sequencer | One client, `L6max Emulator`, three duplex subscribable ports (`aconnect -l`) |
+| Other | none | The worker still drains the device and reports "Host MIDI unavailable" |
+
+Dropping a back end removes its endpoints. A new platform adds one file that
+implements `HostMidi`. USB framing, chunking and cable routing stay in
+`usb_midi.rs` and are unit-tested with an in-memory back end. Opening
+`/dev/snd/seq` may need `audio` group membership; see the
+[Linux guide](../guides/linux.md). `midi-smoke` with `L6_MIDI_DIRECT=1`
+exercises the same firmware path over USB without any host MIDI system.
+
+The mixer-control round trip is verified with a separate host MIDI client (CoreMIDI on macOS, ALSA on Linux):
 a channel-1 encoder produces CC `0x51` on cable 1, and host CC `0x51` with
 value 100 changes the firmware-driven channel-1 GPIO LED ring.
 
@@ -115,7 +135,7 @@ From the repository root:
 # Create an empty FAT32 raw card. Existing files are never overwritten.
 cargo run -p sd-image -- /path/to/card.img 64
 
-# Native panel with SD storage and macOS MIDI ports.
+# Native panel with SD storage and host MIDI ports (CoreMIDI or ALSA).
 cargo run -p l6max-gui -- --sd-image /path/to/card.img --usb
 
 # File commands own a separate guest; the card image has one QEMU owner at a time.
@@ -153,7 +173,10 @@ the host mouse. Logs and captured screens are excluded from Git.
   `usb-files`.
 - USB audio streaming and physical DIN/TRS MIDI I/O are not modeled. The mixer
   MIDI control port is verified; complete L6 Editor compatibility is unverified.
-- CoreMIDI bridging is macOS-only. USB endpoint and storage tools use Unix IPC.
+- Host MIDI bridging uses CoreMIDI on macOS and the ALSA sequencer on Linux;
+  other platforms have no bridge (see the back-end table above). The USB link
+  to QEMU is a Unix socket pair with inherited descriptors, so Windows is not
+  supported.
 - USB transactions consume complete dTDs or short OUT stages, up to 16 KiB.
   Full-packet partial dTD transfers and isochronous transfers are unsupported.
 - USDHC clock, initialization clocks, and regulator transitions are functional
