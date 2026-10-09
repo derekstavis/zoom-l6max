@@ -1,4 +1,5 @@
-//! Firmware import and writable paths for a relocatable macOS application.
+//! Firmware import and writable paths for a relocatable application: a macOS
+//! `.app` bundle or a Linux AppDir (as mounted from an AppImage).
 use l6max_host::engine::Options;
 use sha2::{Digest, Sha256};
 use std::{
@@ -19,10 +20,7 @@ impl Bundle {
         };
         let data = match std::env::var_os("L6_APP_DATA") {
             Some(path) => PathBuf::from(path),
-            None => {
-                PathBuf::from(std::env::var_os("HOME").ok_or("Cannot locate Application Support")?)
-                    .join("Library/Application Support/L6max Emulator")
-            }
+            None => default_data_directory()?,
         };
         fs::create_dir_all(&data).map_err(|e| e.to_string())?;
         Ok(Some(Self { resources, data }))
@@ -120,13 +118,39 @@ impl Bundle {
     }
 }
 
-fn resources_for(executable: &Path) -> Option<PathBuf> {
-    let macos = executable.parent()?;
-    let contents = macos.parent()?;
-    if macos.file_name()? != "MacOS" || contents.file_name()? != "Contents" {
-        return None;
+/// Writable per-user storage: Application Support on macOS, XDG data elsewhere.
+fn default_data_directory() -> Result<PathBuf, String> {
+    let home = || std::env::var_os("HOME").map(PathBuf::from);
+    if cfg!(target_os = "macos") {
+        return Ok(home()
+            .ok_or("Cannot locate Application Support")?
+            .join("Library/Application Support/L6max Emulator"));
     }
-    Some(contents.join("Resources"))
+    let base = std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .or_else(|| home().map(|home| home.join(".local/share")))
+        .ok_or("Cannot locate the user data directory")?;
+    Ok(base.join("l6max-emulator"))
+}
+
+/// Read-only resources next to the executable, or `None` for a development run.
+fn resources_for(executable: &Path) -> Option<PathBuf> {
+    let directory = executable.parent()?;
+    let parent = directory.parent()?;
+    // macOS: L6max Emulator.app/Contents/MacOS/l6max-gui
+    if directory.file_name()? == "MacOS" && parent.file_name()? == "Contents" {
+        return Some(parent.join("Resources"));
+    }
+    // Linux AppDir: <root>/usr/bin/l6max-gui, resources in <root>/usr/share/l6max-emulator.
+    // Requiring the bundled QEMU keeps a system-installed `/usr/bin` from matching.
+    if directory.file_name()? == "bin" && parent.file_name()? == "usr" {
+        let resources = parent.join("share/l6max-emulator");
+        if resources.join("libexec/qemu-system-arm").is_file() {
+            return Some(resources);
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -146,6 +170,19 @@ mod tests {
             resources_for(Path::new("/tmp/target/debug/l6max-gui")),
             None
         );
+    }
+    #[test]
+    fn recognizes_an_appdir_only_with_bundled_qemu() {
+        let root = std::env::temp_dir().join(format!("l6-appdir-{}", std::process::id()));
+        let resources = root.join("usr/share/l6max-emulator");
+        let executable = root.join("usr/bin/l6max-gui");
+        let _ = fs::remove_dir_all(&root);
+        assert_eq!(resources_for(&executable), None);
+        fs::create_dir_all(resources.join("libexec")).unwrap();
+        fs::write(resources.join("libexec/qemu-system-arm"), b"").unwrap();
+        assert_eq!(resources_for(&executable), Some(resources));
+        assert_eq!(resources_for(Path::new("/usr/bin/l6max-gui")), None);
+        fs::remove_dir_all(&root).unwrap();
     }
     #[test]
     fn rejects_invalid_package_without_changing_selection() {

@@ -15,6 +15,10 @@ gpui = { git = "https://github.com/zed-industries/zed.git", rev = "17d3378bb9724
 gpui_platform = { git = "https://github.com/zed-industries/zed.git", rev = "17d3378bb9724867ab875dd865e7d22147d684fa", features = ["font-kit"] }
 smallvec = "1.15"
 
+# GPUI selects Linux window-system backends by feature; none is on by default.
+[target.'cfg(target_os = "linux")'.dependencies]
+gpui_platform = { git = "https://github.com/zed-industries/zed.git", rev = "17d3378bb9724867ab875dd865e7d22147d684fa", features = ["font-kit", "wayland"] }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 raw-window-handle = "0.6"
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSView", "NSWindow", "NSApplication", "NSOpenPanel", "NSSavePanel"] }

@@ -652,7 +652,29 @@ fn configure_window(window: &mut Window) {
 #[cfg(not(target_os = "macos"))]
 fn configure_window(_window: &mut Window) {}
 
+/// Linux builds use GPUI's Wayland backend only. Without a session the window
+/// system connection never completes, so fail early with the reason.
+#[cfg(target_os = "linux")]
+fn require_wayland_session() -> Result<(), String> {
+    let socket = std::env::var_os("WAYLAND_DISPLAY").map(std::path::PathBuf::from);
+    let default = std::env::var_os("XDG_RUNTIME_DIR")
+        .map(|runtime| std::path::PathBuf::from(runtime).join("wayland-0"));
+    match (socket, default) {
+        (Some(_), _) => Ok(()),
+        (None, Some(path)) if path.exists() => Ok(()),
+        _ => Err("no Wayland session found: WAYLAND_DISPLAY is not set and \
+$XDG_RUNTIME_DIR/wayland-0 does not exist. Run this from a Wayland desktop session; \
+X11-only sessions are not supported by this build."
+            .into()),
+    }
+}
+
 fn main() {
+    #[cfg(target_os = "linux")]
+    if let Err(error) = require_wayland_session() {
+        eprintln!("l6max-gui: {error}");
+        std::process::exit(1);
+    }
     let mut options = Options::parse().unwrap_or_else(|error| {
         eprintln!("{error}");
         std::process::exit(2);
