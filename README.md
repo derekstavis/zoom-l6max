@@ -17,8 +17,8 @@ its hardware interfaces, and build reproducible firmware patches.
   using the firmware's original notification renderer.
 - Explore the mapped MIDI protocols or use the separate SwiftUI editor.
 
-Audio processing and USB audio streaming are not implemented. On macOS, USB
-MIDI uses CoreMIDI; SD file access uses a CLI rather than Finder mounting.
+Audio processing and USB audio streaming are not implemented. USB MIDI uses
+CoreMIDI on macOS and the ALSA sequencer on Linux, both behind one interface; SD file access uses a CLI rather than Finder mounting.
 See [current model limits](docs/emulator/board.md#limitations) and
 [USB coverage](docs/emulator/usb.md#current-limits).
 
@@ -33,17 +33,26 @@ and matching dependency sources through [GitHub Actions](docs/development/ci.md)
 The established development environment is macOS with Xcode and its Metal
 Toolchain, Rust through rustup, and QEMU build dependencies. Supply the stock
 L6max 1.10 firmware yourself; **QEMU 11.1.2** is pinned as a Git submodule.
+On Linux, follow the [Linux guide](docs/guides/linux.md) for packages, the
+verified scope and the x86_64 AppImage (headless host, tools, patches and live ALSA
+ports are verified; the native UI needs a Wayland session).
 The [getting started guide](docs/getting-started.md) explains prerequisites,
 setup, controls, persistent state, and troubleshooting.
 
-Run these commands from the repository root:
+Put your `L6max.bin` in the repository root (it is git-ignored), then run from
+the repository root:
 
 ```sh
-git submodule update --init emulator/qemu/upstream
-cargo run -p l6fw -- unpack /path/to/L6max.bin unpacked
-cargo run -p qemu-build
-cargo run -p l6max-gui -- emulator/qemu/build-source/build/qemu-system-arm
+cargo run -p l6max-gui
 ```
+
+The first run fetches the pinned QEMU submodule, builds QEMU with the L6max board
+(several minutes) and unpacks the package into `emulator/state/firmware/`. Later
+runs reuse both, and QEMU rebuilds itself when the board model changes. Every
+binary in the workspace does the same, so `cargo run -p l6max-host` and the
+smoke tools need no setup commands. Use `--firmware-package FILE` or
+`L6_FIRMWARE=FILE` for a package elsewhere, `--qemu PATH` for your own build,
+and `--no-auto-setup` to disable all of this.
 
 On first launch, complete Date/Time and Battery Type setup using the panel
 buttons. Scroll or drag the knobs to adjust them. The visual emulator creates
@@ -52,7 +61,7 @@ and reuses a demo SD card and persistent device state in `emulator/state/`.
 For a disposable headless run:
 
 ```sh
-cargo run -p l6max-host -- --qemu /path/to/qemu-system-arm --volatile --seconds 10
+cargo run -p l6max-host -- --volatile --seconds 10
 ```
 
 ## Documentation
@@ -60,9 +69,11 @@ cargo run -p l6max-host -- --qemu /path/to/qemu-system-arm --volatile --seconds 
 | Start here | What it covers |
 | --- | --- |
 | [macOS app](docs/guides/macos-app.md) | Firmware selection and app packaging |
+| [Linux](docs/guides/linux.md) | Packages, build, ALSA MIDI ports, verified scope |
 | [Getting started](docs/getting-started.md) | Build and run the emulator |
 | [Firmware packages](docs/guides/firmware-packages.md) | Unpack, repack, supported revisions, checksums |
 | [Knob value patch](docs/guides/knob-patch.md) | Build and try the 1.12 patch |
+| [MIDI state sync patch](docs/guides/midi-sync-patch.md) | Let MIDI controllers request the full mixer state |
 | [Firmware behavior](docs/firmware/README.md) | Chip roles, patch contracts, updates, MIDI protocols |
 | [Architecture](docs/emulator/architecture.md) | Host, GUI, QEMU, and tool boundaries |
 | [MIDI editor](docs/editor.md) | Build and use the SwiftUI app |
@@ -73,7 +84,6 @@ reference material, including addresses, evidence, reproduction commands,
 and unresolved findings.
 
 ## Repository layout
-| [MIDI state sync patch](docs/guides/midi-sync-patch.md) | Let MIDI controllers request the full mixer state |
 
 ```text
 emulator/   Rust host, GPUI frontend, and custom QEMU device model

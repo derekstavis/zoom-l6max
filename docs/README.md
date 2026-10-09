@@ -7,14 +7,15 @@ Commands use the repository root unless a page says otherwise.
 ## Guides
 
 - [macOS app](guides/macos-app.md): firmware selection, packaged builds, and local storage.
+- [Linux](guides/linux.md): packages, build, ALSA MIDI ports, and what is verified.
 
 - [Getting started](getting-started.md): prerequisites, first boot, controls,
   device state, and troubleshooting.
 - [Firmware packages](guides/firmware-packages.md): supported input, extraction,
   lossless repacking, and checksum regeneration.
 - [Knob value patch](guides/knob-patch.md): build, run, and validate version 1.12.
-- [MIDI editor](editor.md): SwiftUI app, demo mode, and hardware/emulator transport.
 - [MIDI state sync patch](guides/midi-sync-patch.md): ask the L6max for its full mixer state over MIDI.
+- [MIDI editor](editor.md): SwiftUI app, demo mode, and hardware/emulator transport.
 
 ## Emulator reference
 
@@ -49,8 +50,8 @@ the supported revision, and evidence boundaries.
   storage, and protocol diagnostics.
 - [Tool catalog](development/tools.md): standalone Rust binaries.
 - [Patch conventions](../patches/README.md): layout, hook guards, and adding patches.
-- [Knob patch implementation](../patches/knob-dialog/README.md): payload design,
 - [MIDI sync implementation](../patches/midi-sync/README.md): hook, getters, combining, validation.
+- [Knob patch implementation](../patches/knob-dialog/README.md): payload design,
   synchronization, placement, and detailed validation.
 
 ## Reading the findings

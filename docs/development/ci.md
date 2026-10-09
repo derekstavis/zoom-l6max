@@ -27,7 +27,30 @@ sources; the submodule stays at its pinned commit. QEMU's configure step fetches
 its own pinned build dependencies. Cargo dependencies are cached; builds are
 locked to `Cargo.lock`.
 
-## Publish a macOS release
+## Linux job
+
+The `linux` job runs on `ubuntu-22.04` (the oldest hosted image, to keep the
+AppImage's C library requirement low). It installs the packages from the
+[Linux guide](../guides/linux.md#prerequisites), then runs the same Rust
+format, check and test steps as macOS, builds QEMU from the submodule, and
+runs `linux-package` to produce `L6max-Emulator-x86_64.AppImage`. The packager
+verifies that the bundled QEMU starts with only bundled and host libraries and
+provides `l6max-dual`, before and after AppImage assembly. `appimagetool` 1.9.1
+and the type 2 runtime 20251108 are downloaded by URL and verified against
+pinned SHA-256 values; the runtime is passed explicitly so the build never
+fetches a moving "continuous" build. Swift tests stay macOS-only.
+
+Release builds additionally enable `deb-src` and run
+`.github/scripts/release-sources-linux.sh`, which publishes the project, QEMU,
+vendored Rust crates, the Debian source package of every bundled library
+(at the installed version), and the sources of the AppImage runtime and tool.
+It fails if any bundled library lacks a Debian source package.
+
+This job and the release changes have not run on a hosted runner. Trigger the
+workflow manually (`workflow_dispatch`, optionally with *release*) before
+tagging, and expect to adjust packages or versions on the first run.
+
+## Publish a release
 
 After CI succeeds on the desired commit, create and push an emulator version tag:
 
@@ -45,8 +68,10 @@ The release calls the same CI checks, builds an optimized app, then publishes:
 | Asset | Contents |
 | --- | --- |
 | `L6max-Emulator-macos-arm64.zip` | Firmware-free, ad-hoc signed app for Apple silicon |
-| `L6max-Emulator-sources.tar.gz` | Tagged project, patched QEMU, locked Rust dependencies, matching native dependency sources and build recipes |
-| `SHA256SUMS` | SHA-256 hashes of both archives |
+| `L6max-Emulator-x86_64.AppImage` | Firmware-free Linux x86_64 AppImage |
+| `L6max-Emulator-sources.tar.gz` | macOS: tagged project, patched QEMU, locked Rust dependencies, matching Homebrew sources and recipes |
+| `L6max-Emulator-linux-sources.tar.gz` | Linux: the same, with Debian source packages and the AppImage tooling sources |
+| `SHA256SUMS` | SHA-256 hashes of every download |
 
 The tag supplies the app version. The bundle's minimum OS is calculated from
 its actual Mach-O deployment targets and included in the release notes.
@@ -61,7 +86,7 @@ release is not replaced. GitHub Actions must be enabled in the repository.
 
 - The app is not Developer ID signed or notarized; no Apple signing secrets are
   configured. The release notes explain Gatekeeper behavior.
-- Only Apple silicon builds are produced. Intel and universal bundles are not
-  verified.
+- Only Apple silicon (macOS) and x86_64 (Linux) builds are produced. Intel Mac,
+  universal and Linux arm64 bundles are not built.
 - The hosted runner's OS differs from local development. A successful package
   check verifies construction and loader relocation, not full guest/UI behavior.
