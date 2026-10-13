@@ -46,9 +46,8 @@ vendored Rust crates, the Debian source package of every bundled library
 (at the installed version), and the sources of the AppImage runtime and tool.
 It fails if any bundled library lacks a Debian source package.
 
-This job and the release changes have not run on a hosted runner. Trigger the
-workflow manually (`workflow_dispatch`, optionally with *release*) before
-tagging, and expect to adjust packages or versions on the first run.
+Run the workflow manually (`workflow_dispatch` with *release*) before tagging to
+exercise the optimized build and source collection without publishing.
 
 ## Publish a release
 
