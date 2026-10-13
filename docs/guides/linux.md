@@ -164,7 +164,8 @@ Not verified:
   exercised: mouse and keyboard input, scaling, the aspect-ratio constraint
   (macOS-only code) and firmware import dialogs, and none of it from the
   AppImage.
-- The CI Linux job and release publication have not run on a hosted runner;
-  the first run may need package or version adjustments.
+- Publishing a release (the tag-triggered upload) has not run for the Linux
+  artifact; the build, AppImage and source collection have run on a hosted
+  runner.
 - Running the AppImage on other distributions, and X11-only sessions, which the Wayland-only build does not support.
 - macOS regressions: macOS code paths were only type-checked, not run.
