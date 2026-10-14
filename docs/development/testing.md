@@ -110,16 +110,6 @@ must have only one running QEMU owner.
 
 ## Editor
 
-```sh
-cd editor/Packages/L6Kit
-swift test
-```
-
-With a running emulator exposing CoreMIDI ports through `--usb`:
-
-```sh
-L6_LIVE=1 swift test --filter Live
-```
-
-See [editor tests and limits](../editor.md#tests). The simulated-device suite
-and live firmware suite establish different kinds of evidence.
+The Zoomie editor and its L6Kit tests live in a separate repository. Its
+`L6_LIVE=1 swift test --filter Live` suite runs against this emulator started
+with `--usb`; see that repository's README.

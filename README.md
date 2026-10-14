@@ -15,7 +15,7 @@ its hardware interfaces, and build reproducible firmware patches.
   main bootloader.
 - Unpack and repack firmware packages, or build the **1.12 knob value patch**
   using the firmware's original notification renderer.
-- Explore the mapped MIDI protocols or use the separate SwiftUI editor.
+- Explore the mapped MIDI protocols or use the separate [Zoomie editor](docs/editor.md).
 
 Audio processing and USB audio streaming are not implemented. USB MIDI uses
 CoreMIDI on macOS and the ALSA sequencer on Linux, both behind one interface; SD file access uses a CLI rather than Finder mounting.
@@ -76,7 +76,7 @@ cargo run -p l6max-host -- --volatile --seconds 10
 | [MIDI state sync patch](docs/guides/midi-sync-patch.md) | Let MIDI controllers request the full mixer state |
 | [Firmware behavior](docs/firmware/README.md) | Chip roles, patch contracts, updates, MIDI protocols |
 | [Architecture](docs/emulator/architecture.md) | Host, GUI, QEMU, and tool boundaries |
-| [MIDI editor](docs/editor.md) | Build and use the SwiftUI app |
+| [MIDI editor](docs/editor.md) | The Zoomie SwiftUI app, now in its own repository |
 | [Contributing](CONTRIBUTING.md) | Development workflow, tests, and evidence standards |
 
 The [documentation index](docs/README.md) links all guides and detailed
@@ -87,7 +87,6 @@ and unresolved findings.
 
 ```text
 emulator/   Rust host, GPUI frontend, and custom QEMU device model
-editor/     SwiftUI app and reusable MIDI protocol library
 patches/    Firmware patch sources, bindings, and hook guards
 tools/      Separate Rust crates for package tools and diagnostics
 docs/       User guides, architecture, and firmware reference

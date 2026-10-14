@@ -67,9 +67,6 @@ jobs:
         run: |
           cc -std=c11 -Wall -Wextra -Werror emulator/qemu/tests/indicators.c -o "$RUNNER_TEMP/l6-indicators"
           "$RUNNER_TEMP/l6-indicators"
-      - name: Test Swift editor library
-        working-directory: editor/Packages/L6Kit
-        run: swift test
       - name: Build custom QEMU
         run: cargo run --locked -p qemu-build -- --minimal
       - name: Package and verify app

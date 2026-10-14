@@ -1,6 +1,6 @@
 # Contributing
 
-Contributions to the emulator, editor, firmware tools, and documentation are
+Contributions to the emulator, firmware tools, and documentation are
 welcome. Start with [getting started](docs/getting-started.md) and the
 [architecture guide](docs/emulator/architecture.md). The
 [documentation index](docs/README.md) links the detailed reference maps.
@@ -12,7 +12,6 @@ welcome. Start with [getting started](docs/getting-started.md) and the
 | Device registers, interrupt behavior, UART, GPIO, DMA | `emulator/qemu/` |
 | Engine lifecycle, IPC, display publication, persistence, USB services | `emulator/host/` |
 | Native components, layout, gestures, visual indicators | `emulator/gui/` |
-| MIDI editor and protocol library | `editor/` |
 | Firmware payloads, bindings, linker placement, hook guards | `patches/` |
 | Standalone CLI or diagnostic | `tools/<tool-name>/` |
 | Guides, architecture, behavioral specifications | `docs/` |
