@@ -144,6 +144,7 @@ pub struct Engine {
     pub display_memory: Option<SharedRam>,
     pub usb: Option<Arc<crate::usb::UsbHost>>,
     pub midi: Option<crate::usb_midi::MidiBridge>,
+    pub din_midi: Option<crate::din_midi::DinMidiBridge>,
 }
 
 impl Engine {
@@ -163,6 +164,7 @@ impl Engine {
             display_memory: None,
             usb: None,
             midi: None,
+            din_midi: None,
         };
         let Some(qemu) = &options.qemu else {
             return Ok(engine);
@@ -208,6 +210,7 @@ impl Engine {
         let (panel_input, panel_input_guest) = EngineInput::pair().map_err(|e| e.to_string())?;
         let (qmp_parent, qmp_guest) = UnixStream::pair().map_err(|e| e.to_string())?;
         let (usb_host, usb_guest) = UnixStream::pair().map_err(|e| e.to_string())?;
+        let (din_midi_host, din_midi_guest) = UnixStream::pair().map_err(|e| e.to_string())?;
         let mut fds = vec![
             main_input_guest.as_raw_fd(),
             panel_input_guest.as_raw_fd(),
@@ -216,6 +219,9 @@ impl Engine {
         ];
         if options.usb_enabled {
             fds.push(usb_guest.as_raw_fd());
+        }
+        if options.host_midi {
+            fds.push(din_midi_guest.as_raw_fd());
         }
         let mut command = Command::new(&qemu);
         command
@@ -282,6 +288,7 @@ impl Engine {
                 .arg(format!("if=sd,format=raw,id=l6-sd,file={}", sd.display()));
         }
         command.env_remove("L6_USB_FD");
+        command.env_remove("L6_MAIN_MIDI_UART_FD");
         command.env_remove("L6_STATE_DIR");
         if let Some(directory) = &options.state_dir {
             fs::create_dir_all(directory).map_err(|e| e.to_string())?;
@@ -292,6 +299,12 @@ impl Engine {
         }
         if options.usb_enabled {
             command.env("L6_USB_FD", usb_guest.as_raw_fd().to_string());
+        }
+        if options.host_midi {
+            command.env(
+                "L6_MAIN_MIDI_UART_FD",
+                din_midi_guest.as_raw_fd().to_string(),
+            );
         }
         if options.trace_sd {
             command.args(["-trace", "sdhci_*"]);
@@ -337,6 +350,9 @@ impl Engine {
             engine.midi = Some(
                 crate::usb_midi::MidiBridge::start(engine.usb.as_ref().unwrap().clone())
                     .map_err(|e| e.to_string())?,
+            );
+            engine.din_midi = Some(
+                crate::din_midi::DinMidiBridge::start(din_midi_host).map_err(|e| e.to_string())?,
             );
         }
         Ok(engine)

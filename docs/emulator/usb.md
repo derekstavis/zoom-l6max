@@ -118,6 +118,49 @@ The mixer-control round trip is verified with a separate host MIDI client (CoreM
 a channel-1 encoder produces CC `0x51` on cable 1, and host CC `0x51` with
 value 100 changes the firmware-driven channel-1 GPIO LED ring.
 
+## Physical MIDI IN/OUT (DIN/TRS) jacks
+
+The main MCU's LPUART3 drives the physical MIDI IN/OUT (3.5 mm TRS) jacks.
+With `--usb` this is exposed as a fourth, independent host MIDI port,
+`L6max MIDI In/Out Port (Emulator)`, created regardless of USB MIDI
+interface state (unlike the three USB cables, it does not wait for
+enumeration). Zoom's own documentation says the jacks accept the same
+mixer-control Control Change as the USB Mixer Control Port; see
+[the faders feature in the Zoomie editor repository](https://github.com/derekstavis/zoom-l6-control)
+for why this matters for wireless mixer control.
+
+This has none of the USB MIDI framing: it is one plain MIDI byte stream in
+each direction, with no cable number, carried over an inherited socket
+(`L6_MAIN_MIDI_UART_FD`) exactly like `L6_USB_FD`, rather than through
+QEMU's own chardev layer (the project's established pattern for ad hoc
+host/guest links; see `engine.rs`). [`din_midi.rs`](../../emulator/host/src/din_midi.rs)
+reuses the same `HostMidi` back ends as the USB cables (CoreMIDI/ALSA), now
+parameterized by a port name list instead of the fixed three USB names, so
+a single extra port costs no new platform code.
+
+### What is confirmed, and what is not
+
+- **Confirmed (Probe):** the stock firmware's boot sequence writes to
+  LPUART3's CTRL register, ending with TE, RE and RIE (bit19, bit18, bit21)
+  all set — it initializes the port for both directions with receive
+  interrupts, unconditionally, not gated behind any menu setting observed
+  so far. A byte sent to the new CoreMIDI port is confirmed reaching the
+  model's socket handler (`l6 main LPUART3 (MIDI jacks) RX` in the trace log).
+- **Not confirmed:** whether the firmware's receive path is actually
+  interrupt-driven for this UART (RIE being set strongly suggests it is)
+  and, if so, which NVIC line LPUART3 raises. LPUART1 uses GPIO-in line 20
+  on this board model; by the i.MX RT1050's documented vector numbering,
+  LPUART3 would be line 22, but that has not been checked against this
+  firmware, and wiring the wrong line risks a spurious interrupt somewhere
+  else. Until that is confirmed, RX only sets STAT.RDRF for a task that
+  polls; it does not interrupt the CPU, so bytes sent from the host may go
+  unread by firmware that waits on the interrupt instead.
+- **Not confirmed:** whether mixer Control Change sent on this port is
+  actually applied to the mixer, or whether a separate device setting
+  (beyond "Mixer Control via MIDI") gates it, as the manual's wording for
+  "Enabling control... with a MIDI device connected to the MIDI IN/OUT
+  jacks" suggests. This needs a settings-navigation check, not yet done.
+
 Only cable 1 does this. With `L6_MIDI_DIRECT=1 L6_MIDI_SEND_CABLE=<n>`,
 `midi-smoke` sends the same CC on another cable: on cable 1 the ring goes from
 `0x1` to `0x1ff`; on cables 0, 2 and an unused cable 5 it only reaches `0x3`,
@@ -177,8 +220,11 @@ the host mouse. Logs and captured screens are excluded from Git.
 
 - Finder/OS USB disk mounting is not implemented; host file access uses
   `usb-files`.
-- USB audio streaming and physical DIN/TRS MIDI I/O are not modeled. The mixer
-  MIDI control port is verified; complete L6 Editor compatibility is unverified.
+- USB audio streaming is not modeled. The mixer MIDI control port is
+  verified; complete L6 Editor compatibility is unverified. The physical
+  MIDI IN/OUT (DIN/TRS) jacks are modeled for TX and register-visible RX
+  (see above), but without the firmware's receive interrupt, which is
+  likely needed and is not yet wired.
 - Host MIDI bridging uses CoreMIDI on macOS and the ALSA sequencer on Linux;
   other platforms have no bridge (see the back-end table above). The USB link
   to QEMU is a Unix socket pair with inherited descriptors, so Windows is not

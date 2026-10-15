@@ -151,6 +151,12 @@ typedef struct L6ChipState {
     CharFrontend main_uart;
     bool main_rx_pending;
     uint8_t main_rx_byte;
+    /* LPUART3, the physical MIDI IN/OUT (DIN/TRS) jacks: an inherited
+     * socket, like L6_USB_FD, rather than a Chardev. */
+    int main_midi_fd;
+    GByteArray *main_midi_rx;
+    bool main_midi_rx_pending;
+    uint8_t main_midi_rx_byte;
     L6PanelKey panel_keys[L6_MAX_PANEL_KEYS];
     unsigned panel_key_count;
     L6MainKey main_keys[L6_MAX_PANEL_KEYS];
@@ -790,6 +796,34 @@ static void l6_main_uart_receive(void *opaque, const uint8_t *buf, int size)
         GUINT_TO_POINTER((0x184018 >> 2) + 1)));
     if (ctrl & (1u << 21)) {
         qemu_irq_pulse(qdev_get_gpio_in(DEVICE(&s->armv7m), 20));
+    }
+}
+
+/* LPUART3 (DIN MIDI) RX: bytes queue from the inherited socket and are
+ * handed to the guest one at a time through STAT.RDRF, the same shape as
+ * the other LPUARTs. No interrupt is modeled; nothing has established
+ * whether the firmware's MIDI IN/OUT jack receiver is interrupt or poll
+ * driven, and a receive task that polls STAT is the common pattern here.
+ */
+static void l6_main_midi_read_host(void *opaque)
+{
+    L6ChipState *s = opaque;
+    uint8_t buf[256];
+    ssize_t n = read(s->main_midi_fd, buf, sizeof(buf));
+    if (n <= 0) {
+        if (n == 0 || (errno != EAGAIN && errno != EWOULDBLOCK)) {
+            qemu_set_fd_handler(s->main_midi_fd, NULL, NULL, NULL);
+            close(s->main_midi_fd);
+            s->main_midi_fd = -1;
+        }
+        return;
+    }
+    qemu_log_mask(LOG_UNIMP, "l6 main LPUART3 (MIDI jacks) RX %d bytes\n", (int)n);
+    g_byte_array_append(s->main_midi_rx, buf, n);
+    if (!s->main_midi_rx_pending && s->main_midi_rx->len > 0) {
+        s->main_midi_rx_pending = true;
+        s->main_midi_rx_byte = s->main_midi_rx->data[0];
+        g_byte_array_remove_index(s->main_midi_rx, 0);
     }
 }
 
@@ -1486,11 +1520,26 @@ static uint64_t l6_mmio_read(void *opaque, hwaddr offset, unsigned size)
                ((s->main_rom_mode ? s->rom_reply_read < s->rom_reply_visible :
                   s->main_rx_pending) ? (1u << 21) : 0);
     }
+    if (!s->panel && offset == 0x18c014 && size == 4) {
+        /* LPUART3, the MIDI IN/OUT (DIN/TRS) jacks: RDRF follows a byte
+         * queued from the inherited socket. */
+        return (1u << 23) | (1u << 22) |
+               (s->main_midi_rx_pending ? (1u << 21) : 0);
+    }
+    if (!s->panel && offset == 0x18c01c && size == 4) {
+        uint8_t byte = s->main_midi_rx_byte;
+        s->main_midi_rx_pending = false;
+        if (s->main_midi_rx->len > 0) {
+            s->main_midi_rx_pending = true;
+            s->main_midi_rx_byte = s->main_midi_rx->data[0];
+            g_byte_array_remove_index(s->main_midi_rx, 0);
+        }
+        return byte;
+    }
     if (!s->panel && size == 4 && offset >= 0x188014 &&
         offset <= 0x1a0014 && (offset - 0x188014) % 0x4000 == 0) {
-        /* Unconnected LPUART2-8 discard TX synchronously and are idle.
-         * Serial close loop at 0x800325b8 waits for STAT.TC (bit 22),
-         * including LPUART3 while closing DIN MIDI for update/shutdown.
+        /* Unconnected LPUART2, 4-8 discard TX synchronously and are idle.
+         * Serial close loop at 0x800325b8 waits for STAT.TC (bit 22).
          * Reporting zero leaves preparation blocked before Power dispatch.
          */
         return (1u << 23) | (1u << 22);
@@ -2052,6 +2101,21 @@ static void l6_mmio_write(void *opaque, hwaddr offset,
             qemu_irq_pulse(qdev_get_gpio_in(DEVICE(&s->armv7m), 20));
         }
     }
+    if (!s->panel && offset == 0x18c018 && size == 4 && word != previous_word) {
+        qemu_log_mask(LOG_UNIMP, "l6 main LPUART3 (MIDI jacks) CTRL %08x\n", word);
+    }
+    if (!s->panel && offset == 0x18c01c && size == 4) {
+        /* LPUART3 TX: the MIDI OUT (DIN/TRS) jack, forwarded to the
+         * inherited socket like L6_USB_FD, one byte at a time. */
+        uint8_t byte = value;
+        qemu_log_mask(LOG_UNIMP, "l6 main LPUART3 (MIDI jacks) TX %02x\n", byte);
+        if (s->main_midi_fd >= 0) {
+            ssize_t n;
+            do {
+                n = write(s->main_midi_fd, &byte, 1);
+            } while (n < 0 && errno == EINTR);
+        }
+    }
     if (offset >= 0x3a0000 && offset < 0x3a0100 &&
         s->lpspi_log_count++ < 128) {
         qemu_log_mask(LOG_UNIMP, "l6 LPSPI4 MMIO +%02x = %08x\n",
@@ -2524,6 +2588,20 @@ static void l6_chip_init(MachineState *machine, L6ChipState *s, bool panel,
             }
             s->usb.fd = fd;
             l6_usb_handlers(&s->usb);
+        }
+        s->main_midi_fd = -1;
+        s->main_midi_rx = g_byte_array_new();
+        const char *midi_fd = g_getenv("L6_MAIN_MIDI_UART_FD");
+        if (midi_fd) {
+            char *end;
+            long fd = strtol(midi_fd, &end, 10);
+            if (!*midi_fd || *end || fd < 0 || fd > INT_MAX ||
+                fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK) < 0) {
+                error_setg(&error_fatal,
+                           "L6_MAIN_MIDI_UART_FD must be an inherited socket descriptor");
+            }
+            s->main_midi_fd = fd;
+            qemu_set_fd_handler(s->main_midi_fd, l6_main_midi_read_host, NULL, s);
         }
         memory_region_init_io(&s->usb_region, NULL, &l6_usb_ops, &s->usb,
                               "l6-chipidea-device", 0x200);

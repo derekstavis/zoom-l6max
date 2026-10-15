@@ -194,7 +194,7 @@ impl<P: HostMidi + 'static> MidiBridge<P> {
                             set("USB File Transfer mode; MIDI unavailable".into());
                             ports = None;
                         } else if ports.is_none() && !unsupported {
-                            match P::open() {
+                            match P::open(&PORT_NAMES) {
                                 Ok(opened) => {
                                     ports = Some(opened);
                                     set("Three native MIDI ports connected".into());

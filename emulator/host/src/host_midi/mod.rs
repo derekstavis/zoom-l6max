@@ -1,9 +1,12 @@
 //! Host operating-system MIDI back ends behind one interface.
 //!
-//! A back end exposes the emulated device as three duplex MIDI endpoints (one per
-//! USB MIDI cable) to other applications. It knows nothing about USB framing: it
-//! reads raw MIDI bytes sent by host applications and writes raw MIDI bytes from
-//! the device. [`crate::usb_midi::MidiBridge`] owns the framing and the worker.
+//! A back end exposes a list of duplex MIDI endpoints to other applications,
+//! one per port name it is given. It knows nothing about USB framing: it
+//! reads raw MIDI bytes sent by host applications and writes raw MIDI bytes
+//! from the device. [`crate::usb_midi::MidiBridge`] owns USB cable framing
+//! and its worker for the three USB MIDI cables; [`crate::din_midi`] opens a
+//! single-port instance for the MIDI IN/OUT (DIN/TRS) jacks, with no framing
+//! at all since that port carries one plain MIDI byte stream.
 //!
 //! Adding a platform means implementing [`HostMidi`] in one file and selecting it
 //! below; nothing else in the host crate changes.
@@ -18,22 +21,23 @@ pub const PORT_NAMES: [&str; 3] = [
 ];
 pub const ENDPOINT_SUFFIX: &str = " (Emulator)";
 
-/// Name under which cable `cable` appears to host applications.
-pub fn endpoint_name(cable: usize) -> String {
-    format!("{}{ENDPOINT_SUFFIX}", PORT_NAMES[cable])
+/// Name under which a port called `name` appears to host applications.
+pub fn endpoint_name(name: &str) -> String {
+    format!("{name}{ENDPOINT_SUFFIX}")
 }
 
 pub trait HostMidi: Sized {
-    /// Create the three endpoints. Dropping the value must remove them, before
-    /// the owning client or session, so applications see them disappear.
-    /// Returns [`io::ErrorKind::Unsupported`] when the platform has no back end.
-    fn open() -> io::Result<Self>;
+    /// Create one endpoint per entry of `names`, in order, as port indices
+    /// 0.. Dropping the value must remove them, before the owning client or
+    /// session, so applications see them disappear. Returns
+    /// [`io::ErrorKind::Unsupported`] when the platform has no back end.
+    fn open(names: &[&str]) -> io::Result<Self>;
     /// Drain up to `limit` messages that host applications sent to the device,
-    /// as `(cable, raw MIDI bytes)`. Must not block.
+    /// as `(port index, raw MIDI bytes)`. Must not block.
     fn read(&mut self, limit: usize) -> io::Result<Vec<(u8, Vec<u8>)>>;
-    /// Deliver raw MIDI bytes from the device on `cable` to its subscribers.
-    /// Unknown cables are ignored.
-    fn write(&mut self, cable: u8, data: &[u8]) -> io::Result<()>;
+    /// Deliver raw MIDI bytes from the device on `port` to its subscribers.
+    /// An unknown port index is ignored.
+    fn write(&mut self, port: u8, data: &[u8]) -> io::Result<()>;
 }
 
 #[cfg(target_os = "macos")]
@@ -64,7 +68,7 @@ pub mod testing {
         pub outgoing: Vec<(u8, Vec<u8>)>,
     }
     impl HostMidi for Loopback {
-        fn open() -> io::Result<Self> {
+        fn open(_names: &[&str]) -> io::Result<Self> {
             Ok(Self::default())
         }
         fn read(&mut self, limit: usize) -> io::Result<Vec<(u8, Vec<u8>)>> {

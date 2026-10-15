@@ -1,4 +1,5 @@
 pub use sd_image as demo_sd;
+pub mod din_midi;
 pub mod display;
 pub mod engine;
 pub mod input;
