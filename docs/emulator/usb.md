@@ -118,6 +118,12 @@ The mixer-control round trip is verified with a separate host MIDI client (CoreM
 a channel-1 encoder produces CC `0x51` on cable 1, and host CC `0x51` with
 value 100 changes the firmware-driven channel-1 GPIO LED ring.
 
+Only cable 1 does this. With `L6_MIDI_DIRECT=1 L6_MIDI_SEND_CABLE=<n>`,
+`midi-smoke` sends the same CC on another cable: on cable 1 the ring goes from
+`0x1` to `0x1ff`; on cables 0, 2 and an unused cable 5 it only reaches `0x3`,
+so the firmware ignores mixer CC there. A host that exposes only the first
+USB MIDI port (a CME WIDI Uhost does) cannot drive the mixer.
+
 ## Host file access
 
 The `usb-files` tool starts its own engine, accepts the startup dialogs using

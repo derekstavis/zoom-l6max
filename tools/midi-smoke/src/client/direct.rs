@@ -29,7 +29,13 @@ impl DirectClient {
 }
 impl MidiClient for DirectClient {
     fn send(&mut self, bytes: &[u8]) -> Result<(), String> {
-        let wire = self.encoder.push(MIXER_CABLE as u8, bytes);
+        // `L6_MIDI_SEND_CABLE` sends on another USB MIDI cable, to see which
+        // cables the firmware accepts mixer Control Change on.
+        let cable = std::env::var("L6_MIDI_SEND_CABLE")
+            .ok()
+            .and_then(|value| value.parse::<u8>().ok())
+            .unwrap_or(MIXER_CABLE as u8);
+        let wire = self.encoder.push(cable, bytes);
         self.usb
             .send(self.pair.output, &wire)
             .map_err(|e| e.to_string())
