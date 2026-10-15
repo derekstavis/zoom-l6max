@@ -26,6 +26,9 @@
 #include "qemu/timer.h"
 #include "qemu/main-loop.h"
 #include "chardev/char-fe.h"
+#include "hw/char/stm32l4x5_usart.h"
+#include "qemu/config-file.h"
+#include "qemu/option.h"
 #include "system/system.h"
 #include "system/runstate.h"
 #include "l6max-display.h"
@@ -33,6 +36,7 @@
 #include "l6max-usb.h"
 #include <fcntl.h>
 #include <sys/mman.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/file.h>
 #include <unistd.h>
@@ -145,9 +149,14 @@ typedef struct L6ChipState {
     unsigned indicator_log_count;
     QEMUTimer *rom_uart_timer;
     QEMUTimer *main_audio_service_timer;
-    CharFrontend panel_uart;
-    bool panel_rx_pending;
-    uint8_t panel_rx_byte;
+    /* Panel USART1 is the real stm32l4x5-usart device (register-compatible
+     * by inspection: our own CR1/ISR bit usage already matched RM0351
+     * bit-for-bit before this). Its chardev is an in-process socket pair;
+     * panel_usart_fd is our end, bridging its bytes to/from the main
+     * chip's still hand-rolled LPUART1 (a different, NXP-derived register
+     * layout with no QEMU model). */
+    DeviceState *panel_usart1;
+    int panel_usart_fd;
     CharFrontend main_uart;
     bool main_rx_pending;
     uint8_t main_rx_byte;
@@ -753,29 +762,6 @@ static void l6_panel_tim2_tick(void *opaque)
     timer_mod(s->panel_tim2, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + l6_panel_tim2_period(s));
 }
 
-static int l6_panel_uart_can_receive(void *opaque)
-{
-    L6ChipState *s = opaque;
-    return s->panel_rx_pending ? 0 : 1;
-}
-
-static void l6_panel_uart_receive(void *opaque, const uint8_t *buf, int size)
-{
-    L6ChipState *s = opaque;
-    if (size <= 0 || s->panel_rx_pending) {
-        return;
-    }
-    s->panel_rx_byte = buf[0];
-    s->panel_rx_pending = true;
-    s->panel_rx_count++;
-    qemu_log_mask(LOG_UNIMP, "l6 panel USART1 RX %02x\n", buf[0]);
-    uint32_t cr1 = GPOINTER_TO_UINT(g_hash_table_lookup(s->registers,
-        GUINT_TO_POINTER((0x013800 >> 2) + 1)));
-    if (cr1 & (1u << 5)) {
-        qemu_irq_pulse(qdev_get_gpio_in(DEVICE(&s->armv7m), 27));
-    }
-}
-
 static int l6_main_uart_can_receive(void *opaque)
 {
     L6ChipState *s = opaque;
@@ -850,16 +836,24 @@ static void l6_uart_link_tick(void *opaque)
     if (!link->queue->len || destination->cpu_held) {
         return;
     }
-    int ready = destination->panel ?
-        l6_panel_uart_can_receive(destination) :
-        l6_main_uart_can_receive(destination);
-    if (!ready) {
+    /* The panel's real USART device has no "can receive" gate of ours to
+     * check; its own chardev handlers apply CR1.RE/overrun on arrival. */
+    if (!destination->panel && !l6_main_uart_can_receive(destination)) {
         return;
     }
     uint8_t byte = link->queue->data[0];
     g_byte_array_remove_range(link->queue, 0, 1);
     if (destination->panel) {
-        l6_panel_uart_receive(destination, &byte, 1);
+        /* Tools grep this exact line (see tools/qemu-run) the same way
+         * as the old hand-rolled receive path did. */
+        qemu_log_mask(LOG_UNIMP, "l6 panel USART1 RX %02x\n", byte);
+        destination->panel_rx_count++;
+        if (destination->panel_usart_fd >= 0) {
+            ssize_t n;
+            do {
+                n = write(destination->panel_usart_fd, &byte, 1);
+            } while (n < 0 && errno == EINTR);
+        }
     } else {
         l6_main_uart_receive(destination, &byte, 1);
     }
@@ -882,8 +876,40 @@ static void l6_uart_link_send(L6ChipState *source, uint8_t byte)
     }
 }
 
+/* Bytes the real stm32l4x5-usart device sent out over its chardev (the
+ * panel's USART1 TX) arrive here on our end of the in-process socket pair,
+ * and are forwarded to the main chip's still hand-rolled LPUART1 receive
+ * path exactly as l6_uart_link_send used to feed it. */
+static void l6_panel_usart_bridge_read(void *opaque)
+{
+    L6ChipState *s = opaque;
+    uint8_t buf[256];
+    ssize_t n = read(s->panel_usart_fd, buf, sizeof(buf));
+    if (n <= 0) {
+        if (n == 0 || (errno != EAGAIN && errno != EWOULDBLOCK)) {
+            qemu_set_fd_handler(s->panel_usart_fd, NULL, NULL, NULL);
+            close(s->panel_usart_fd);
+            s->panel_usart_fd = -1;
+        }
+        return;
+    }
+    s->panel_tx_count += n;
+    for (ssize_t i = 0; i < n; i++) {
+        /* Tools grep this exact line (see tools, "-smoke" binaries) to
+         * verify panel output without their own USART client. */
+        qemu_log_mask(LOG_UNIMP, "l6 panel USART1 TX %02x\n", buf[i]);
+        if (buf[i] == 0xb0) {
+            qemu_log_mask(LOG_UNIMP, "l6 panel RTC response start at %" PRId64 " ms\n",
+                          qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL));
+        }
+        l6_uart_link_send(s, buf[i]);
+    }
+}
+
 static void l6_uart_accept_input(L6ChipState *destination)
 {
+    /* The panel's real USART device drives its own qemu_chr_fe_accept_input
+     * internally; this path now only ever serves main's LPUART1. */
     if (destination->peer) {
         L6UartLink *incoming = destination->peer->uart_link;
         if (incoming->queue->len && !timer_pending(incoming->timer)) {
@@ -891,9 +917,8 @@ static void l6_uart_accept_input(L6ChipState *destination)
                       qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + L6_UART_BYTE_NS);
         }
     } else {
-        qemu_chr_fe_accept_input(destination->panel ?
-                                 &destination->panel_uart :
-                                 &destination->main_uart);
+        /* Both call sites below are guarded by `!s->panel`. */
+        qemu_chr_fe_accept_input(&destination->main_uart);
     }
 }
 
@@ -941,6 +966,9 @@ static void l6_chip_cpu_reset(CPUState *cpu, run_on_cpu_data data)
     device_cold_reset(DEVICE(&chip->armv7m));
     device_cold_reset(DEVICE(&chip->armv7m.nvic));
     device_cold_reset(DEVICE(&chip->armv7m.systick[M_REG_NS]));
+    if (chip->panel) {
+        device_cold_reset(chip->panel_usart1);
+    }
     cpu_reset(cpu);
     qemu_log_mask(LOG_UNIMP, "l6 dual %s CPU %s\n",
                   chip->panel ? "panel" : "main",
@@ -965,9 +993,6 @@ static void l6_local_reset_request(void *opaque, int n, int level)
         l6_panel_store(chip, 0x10000014, 0);
         l6_panel_store(chip, 0x10000414, 0);
         g_hash_table_insert(chip->registers, GUINT_TO_POINTER(1), NULL);
-        g_hash_table_insert(chip->registers,
-            GUINT_TO_POINTER((0x013800 >> 2) + 1), NULL);
-        chip->panel_rx_pending = false;
     } else {
         timer_del(chip->rom_uart_timer);
         chip->rom_phase = 0;
@@ -989,7 +1014,6 @@ static void l6_update_panel_boot(L6ChipState *main)
         return;
     }
     panel->cpu_held = held;
-    panel->panel_rx_pending = false;
     timer_del(panel->panel_tim2);
     timer_del(panel->panel_tim3);
     timer_del(panel->panel_tim14);
@@ -1521,16 +1545,6 @@ static uint64_t l6_mmio_read(void *opaque, hwaddr offset, unsigned size)
             GUINT_TO_POINTER((offset >> 2) + 1)));
         return (bdcr & 1) ? bdcr | 2 : bdcr & ~2u;
     }
-    if (s->panel && offset == 0x01381c && size == 4) {
-        /* An idle STM32 USART reports transmit FIFO empty and complete. */
-        return (1u << 7) | (1u << 6) |
-               (s->panel_rx_pending ? (1u << 5) : 0);
-    }
-    if (s->panel && offset == 0x013824 && size == 4) {
-        s->panel_rx_pending = false;
-        l6_uart_accept_input(s);
-        return s->panel_rx_byte;
-    }
     if (!s->panel && offset == 0x184014 && size == 4) {
         return (1u << 23) | (1u << 22) |
                ((s->main_rom_mode ? s->rom_reply_read < s->rom_reply_visible :
@@ -2054,39 +2068,6 @@ static void l6_mmio_write(void *opaque, hwaddr offset,
         }
         l6_update_panel_boot(s);
     }
-    if (s->panel && offset == 0x013800 && size == 4 &&
-        (word & 0x80) && !(previous_word & 0x80)) {
-        qemu_irq_pulse(qdev_get_gpio_in(DEVICE(&s->armv7m), 27));
-    }
-    if (s->panel && offset == 0x013800 && size == 4 &&
-        (word & (1u << 5)) && !(previous_word & (1u << 5)) &&
-        s->panel_rx_pending) {
-        /* A byte can arrive while the real panel CPU is still booting.
-         * Enabling RXNEIE must expose its already pending RXNE condition. */
-        qemu_log_mask(LOG_UNIMP,
-                      "l6 panel USART1 enabling RXNEIE with pending byte %02x\n",
-                      s->panel_rx_byte);
-        qemu_irq_pulse(qdev_get_gpio_in(DEVICE(&s->armv7m), 27));
-    }
-    if (s->panel && offset == 0x013828 && size == 4) {
-        uint8_t byte = value;
-        s->panel_tx_count++;
-        qemu_log_mask(LOG_UNIMP, "l6 panel USART1 TX %02x\n", byte);
-        if (byte == 0xb0) {
-            qemu_log_mask(LOG_UNIMP, "l6 panel RTC response start at %" PRId64 " ms\n",
-                          qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL));
-        }
-        if (s->uart_link) {
-            l6_uart_link_send(s, byte);
-        } else {
-            qemu_chr_fe_write(&s->panel_uart, &byte, 1);
-        }
-        uint32_t cr1 = GPOINTER_TO_UINT(g_hash_table_lookup(s->registers,
-            GUINT_TO_POINTER((0x013800 >> 2) + 1)));
-        if (cr1 & 0x80) {
-            qemu_irq_pulse(qdev_get_gpio_in(DEVICE(&s->armv7m), 27));
-        }
-    }
     if (!s->panel && offset == 0x184018 && size == 4) {
         if (s->main_ctrl_log_count++ < 40) {
             qemu_log_mask(LOG_UNIMP, "l6 main LPUART1 CTRL %08x\n", word);
@@ -2483,14 +2464,6 @@ static void l6_chip_init(MachineState *machine, L6ChipState *s, bool panel,
     if (panel) {
         s->panel_tim2 = timer_new_ns(QEMU_CLOCK_VIRTUAL,
                                      l6_panel_tim2_tick, s);
-        Chardev *serial = external_serial ? serial_hd(0) : NULL;
-        if (serial) {
-            qemu_chr_fe_init(&s->panel_uart, serial, &error_fatal);
-            qemu_chr_fe_set_handlers(&s->panel_uart,
-                                     l6_panel_uart_can_receive,
-                                     l6_panel_uart_receive,
-                                     NULL, NULL, s, NULL, true);
-        }
     } else {
         s->rom_uart_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL,
                                          l6_rom_uart_tick, s);
@@ -2588,6 +2561,42 @@ static void l6_chip_init(MachineState *machine, L6ChipState *s, bool panel,
     object_property_set_link(OBJECT(&s->armv7m), "memory",
                              OBJECT(system_memory), &error_abort);
     sysbus_realize(SYS_BUS_DEVICE(&s->armv7m), &error_fatal);
+    if (panel) {
+        /* Panel USART1: a real stm32l4x5-usart device (register-compatible
+         * by inspection with what firmware was already observed driving),
+         * its chardev an in-process socket pair. Our end bridges bytes to
+         * the main chip's still hand-rolled LPUART1. */
+        int usart_fds[2];
+        if (socketpair(AF_UNIX, SOCK_STREAM, 0, usart_fds) < 0) {
+            error_setg(&error_fatal, "cannot create panel USART1 socket pair: %s",
+                       strerror(errno));
+        }
+        if (fcntl(usart_fds[1], F_SETFL, O_NONBLOCK) < 0) {
+            error_setg(&error_fatal, "cannot set panel USART1 bridge non-blocking");
+        }
+        g_autofree char *usart_chr_opts = g_strdup_printf(
+            "socket,id=l6-panel-usart1-link,fd=%d,server=off", usart_fds[0]);
+        QemuOpts *usart_chr_opts_parsed = qemu_opts_parse_noisily(
+            qemu_find_opts("chardev"), usart_chr_opts, true);
+        if (!usart_chr_opts_parsed) {
+            error_setg(&error_fatal, "cannot parse panel USART1 chardev options");
+        }
+        Chardev *usart_chr =
+            qemu_chr_new_from_opts(usart_chr_opts_parsed, NULL, &error_fatal);
+        if (!usart_chr) {
+            error_setg(&error_fatal, "cannot create panel USART1 chardev");
+        }
+        s->panel_usart1 = qdev_new(TYPE_STM32L4X5_USART);
+        qdev_prop_set_chr(s->panel_usart1, "chardev", usart_chr);
+        qdev_connect_clock_in(s->panel_usart1, "clk", s->sysclk);
+        sysbus_realize_and_unref(SYS_BUS_DEVICE(s->panel_usart1), &error_fatal);
+        memory_region_add_subregion_overlap(system_memory, 0x40013800,
+            sysbus_mmio_get_region(SYS_BUS_DEVICE(s->panel_usart1), 0), 2);
+        sysbus_connect_irq(SYS_BUS_DEVICE(s->panel_usart1), 0,
+                           qdev_get_gpio_in(DEVICE(&s->armv7m), 27));
+        s->panel_usart_fd = usart_fds[1];
+        qemu_set_fd_handler(s->panel_usart_fd, l6_panel_usart_bridge_read, NULL, s);
+    }
     g_autofree char *persistent_kernel = NULL;
     if (panel && g_getenv("L6_STATE_DIR")) {
         g_autofree char *contents = NULL;
