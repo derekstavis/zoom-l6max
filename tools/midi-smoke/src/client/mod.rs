@@ -3,14 +3,14 @@
 //! The scenario in `main.rs` is written once against [`MidiClient`]. Operating
 //! system clients exercise the host MIDI endpoints end to end; the direct client
 //! speaks USB MIDI to the emulated device and needs no host MIDI system.
-use l6max_host::host_midi::endpoint_name;
+use l6max_host::host_midi::{PORT_NAMES, endpoint_name};
 use std::time::{Duration, Instant};
 
 /// Cable carrying mixer control.
 pub const MIXER_CABLE: usize = 1;
 
 pub fn mixer_endpoint() -> String {
-    endpoint_name(MIXER_CABLE)
+    endpoint_name(PORT_NAMES[MIXER_CABLE])
 }
 
 pub trait MidiClient {

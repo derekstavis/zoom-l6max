@@ -18,13 +18,13 @@ fn error(status: i32) -> io::Error {
     io::Error::other(format!("CoreMIDI status {status}"))
 }
 impl HostMidi for CoreMidiPorts {
-    fn open() -> io::Result<Self> {
+    fn open(names: &[&str]) -> io::Result<Self> {
         let (tx, received) = mpsc::sync_channel::<(u8, Vec<u8>)>(128);
         let client = Client::new("L6max Emulator").map_err(error)?;
         let mut destinations = Vec::new();
         let mut sources = Vec::new();
-        for cable in 0..super::PORT_NAMES.len() {
-            let name = endpoint_name(cable);
+        for (cable, &name) in names.iter().enumerate() {
+            let name = endpoint_name(name);
             let sender = tx.clone();
             #[allow(deprecated)]
             let destination = client
