@@ -799,11 +799,19 @@ static void l6_main_uart_receive(void *opaque, const uint8_t *buf, int size)
     }
 }
 
+/* LPUART3 is IRQn 22 in the i.MX RT1052 CMSIS header (MIMXRT1052.h), the
+ * same table that gives LPUART1 the 20 already used below: 20, 21, 22...
+ * sequential through LPUART8 at 27. The main firmware's own vector table
+ * (unpacked/main_firmware.bin, vector 38 = IRQn 22 + 16) holds a distinct,
+ * non-default handler address there, consistent with every other LPUART.
+ */
+#define L6_LPUART3_IRQ 22
+
 /* LPUART3 (DIN MIDI) RX: bytes queue from the inherited socket and are
  * handed to the guest one at a time through STAT.RDRF, the same shape as
- * the other LPUARTs. No interrupt is modeled; nothing has established
- * whether the firmware's MIDI IN/OUT jack receiver is interrupt or poll
- * driven, and a receive task that polls STAT is the common pattern here.
+ * the other LPUARTs. The firmware enables RIE on this port during its own
+ * boot (observed in the emulator, unconditionally), so the receive path is
+ * pulsed the same way LPUART1's is, rather than left to a polling task.
  */
 static void l6_main_midi_read_host(void *opaque)
 {
@@ -819,11 +827,19 @@ static void l6_main_midi_read_host(void *opaque)
         return;
     }
     qemu_log_mask(LOG_UNIMP, "l6 main LPUART3 (MIDI jacks) RX %d bytes\n", (int)n);
+    bool was_pending = s->main_midi_rx_pending;
     g_byte_array_append(s->main_midi_rx, buf, n);
     if (!s->main_midi_rx_pending && s->main_midi_rx->len > 0) {
         s->main_midi_rx_pending = true;
         s->main_midi_rx_byte = s->main_midi_rx->data[0];
         g_byte_array_remove_index(s->main_midi_rx, 0);
+    }
+    if (!was_pending && s->main_midi_rx_pending) {
+        uint32_t ctrl = GPOINTER_TO_UINT(g_hash_table_lookup(s->registers,
+            GUINT_TO_POINTER((0x18c018 >> 2) + 1)));
+        if (ctrl & (1u << 21)) {
+            qemu_irq_pulse(qdev_get_gpio_in(DEVICE(&s->armv7m), L6_LPUART3_IRQ));
+        }
     }
 }
 
@@ -1533,6 +1549,13 @@ static uint64_t l6_mmio_read(void *opaque, hwaddr offset, unsigned size)
             s->main_midi_rx_pending = true;
             s->main_midi_rx_byte = s->main_midi_rx->data[0];
             g_byte_array_remove_index(s->main_midi_rx, 0);
+            /* Each byte refilled from the queue is its own RDRF edge, the
+             * same as a byte arriving fresh from the socket. */
+            uint32_t ctrl = GPOINTER_TO_UINT(g_hash_table_lookup(s->registers,
+                GUINT_TO_POINTER((0x18c018 >> 2) + 1)));
+            if (ctrl & (1u << 21)) {
+                qemu_irq_pulse(qdev_get_gpio_in(DEVICE(&s->armv7m), L6_LPUART3_IRQ));
+            }
         }
         return byte;
     }
@@ -2104,6 +2127,15 @@ static void l6_mmio_write(void *opaque, hwaddr offset,
     if (!s->panel && offset == 0x18c018 && size == 4 && word != previous_word) {
         qemu_log_mask(LOG_UNIMP, "l6 main LPUART3 (MIDI jacks) CTRL %08x\n", word);
     }
+    if (!s->panel && size == 4 && offset >= 0x188018 && offset != 0x18c018 &&
+        offset <= 0x1a0018 && (offset - 0x188018) % 0x4000 == 0 &&
+        word != previous_word) {
+        /* A boot-time check found none of these touched despite each
+         * having its own distinct vector table entry (the SDK wires all
+         * eight uniformly); kept in case a later firmware path differs. */
+        qemu_log_mask(LOG_UNIMP, "l6 main LPUART (other) CTRL +%05lx = %08x\n",
+                      (unsigned long)offset, word);
+    }
     if (!s->panel && offset == 0x18c01c && size == 4) {
         /* LPUART3 TX: the MIDI OUT (DIN/TRS) jack, forwarded to the
          * inherited socket like L6_USB_FD, one byte at a time. */
@@ -2114,6 +2146,11 @@ static void l6_mmio_write(void *opaque, hwaddr offset,
             do {
                 n = write(s->main_midi_fd, &byte, 1);
             } while (n < 0 && errno == EINTR);
+        }
+        uint32_t ctrl = GPOINTER_TO_UINT(g_hash_table_lookup(s->registers,
+            GUINT_TO_POINTER((0x18c018 >> 2) + 1)));
+        if (ctrl & (1u << 23)) {
+            qemu_irq_pulse(qdev_get_gpio_in(DEVICE(&s->armv7m), L6_LPUART3_IRQ));
         }
     }
     if (offset >= 0x3a0000 && offset < 0x3a0100 &&
