@@ -16,14 +16,14 @@ fn error(e: alsa::Error) -> io::Error {
     io::Error::other(format!("ALSA sequencer: {e}"))
 }
 impl HostMidi for AlsaPorts {
-    fn open() -> io::Result<Self> {
+    fn open(names: &[&str]) -> io::Result<Self> {
         // Non-blocking so the worker can interleave USB polling.
         let seq = Seq::open(None, None, true).map_err(error)?;
         seq.set_client_name(&CString::new("L6max Emulator").unwrap())
             .map_err(error)?;
         let mut ports = Vec::new();
-        for cable in 0..PORT_NAMES.len() {
-            let name = CString::new(endpoint_name(cable)).unwrap();
+        for &name in names {
+            let name = CString::new(endpoint_name(name)).unwrap();
             ports.push(
                 seq.create_simple_port(
                     &name,
@@ -35,11 +35,12 @@ impl HostMidi for AlsaPorts {
         }
         Ok(Self {
             seq,
-            ports,
             decoder: MidiEvent::new(BUFFER as u32).map_err(error)?,
-            encoders: (0..PORT_NAMES.len())
+            encoders: ports
+                .iter()
                 .map(|_| MidiEvent::new(BUFFER as u32).map_err(error))
                 .collect::<io::Result<_>>()?,
+            ports,
         })
     }
     fn read(&mut self, limit: usize) -> io::Result<Vec<(u8, Vec<u8>)>> {

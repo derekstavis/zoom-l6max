@@ -73,14 +73,21 @@ within one toolchain.
 ## MIDI ports
 
 With `--usb`, the host creates one ALSA sequencer client, `L6max Emulator`,
-with three duplex ports, named like the macOS CoreMIDI endpoints:
+with three duplex ports for the USB MIDI cables, named like the macOS
+CoreMIDI endpoints:
 
 - `L6max MIDI I/O Port (Emulator)`
 - `L6max Mixer Control Port (Emulator)`
 - `for L6 Editor Port (Emulator)`
 
-Ports exist while the guest is in normal (MIDI) USB mode and are removed in USB
-File Transfer mode or on shutdown. Inspect and connect them with:
+A separate client exposes a fourth port for the physical MIDI IN/OUT
+(DIN/TRS) jacks, `L6max MIDI In/Out Port (Emulator)`; see
+[the DIN MIDI section](../emulator/usb.md#physical-midi-inout-dintrs-jacks).
+It exists regardless of USB mode, since it models a different peripheral.
+
+The three USB cable ports exist while the guest is in normal (MIDI) USB mode
+and are removed in USB File Transfer mode or on shutdown. Inspect and connect
+them with:
 
 ```sh
 aconnect -l
