@@ -168,65 +168,51 @@ reuses the same `HostMidi` back ends as the USB cables (CoreMIDI/ALSA), now
 parameterized by a port name list instead of the fixed three USB names, so
 a single extra port costs no new platform code.
 
-### What is confirmed, and what is not
+### Current behavior
 
-- **Confirmed (Probe):** the stock firmware's boot sequence writes to
-  LPUART3's CTRL register, ending with TE, RE and RIE (bit19, bit18, bit21)
-  all set — it initializes the port for both directions with receive
-  interrupts, unconditionally, not gated behind any menu setting observed
-  so far. A byte sent to the new CoreMIDI port is confirmed reaching the
-  model's socket handler (`l6 main LPUART3 (MIDI jacks) RX` in the trace log).
-- **Confirmed:** the interrupt line. LPUART1-8 are IRQn 20-27 in the actual
-  i.MX RT1052 CMSIS header (`MIMXRT1052.h`), sequential from the existing,
-  already-working LPUART1 = 20; so LPUART3 = 22. Cross-checked against
-  `unpacked/main_firmware.bin`'s own vector table (vector 38 = IRQn 22 + 16):
-  it holds a distinct, non-default handler address, the same shape as every
-  other LPUART's entry there. RX now pulses that line through
-  `qdev_get_gpio_in(.., 22)` when CTRL.RIE is set, once per byte that
-  becomes the pending one (including refills from the queue, each its own
-  RDRF edge on real hardware); TX pulses it symmetrically on CTRL.TIE. No
-  hang or crash resulted from a full boot with this wired, including
-  multi-byte bursts delivered in one host read.
-- **Confirmed only LPUART1 and LPUART3 are actually driven.** LPUART2 and
-  4-8 all have distinct, non-default vector table entries too (the SDK
-  wires all eight uniformly), but a boot-time probe logging every write to
-  their CTRL registers saw nothing — the firmware itself only touches
-  LPUART1 (the panel link) and LPUART3 (the MIDI jacks). So the interrupt
-  handling above is not generalized to the other six, and nothing here
-  needs it to be; the existing "unconnected, idle" stub for them stands.
-- **Confirmed: neither direction of this port reaches the mixer, in any
-  setting combination tried.** A channel-1 LEVEL CC (`0xB0 0x51 100`, the
-  same message that moves the USB Mixer Control Port's GPIO ring) sent to
-  this port produces no change, and the same holds for a Note On matching a
-  sound pad's configured MIDI note, in either state of `mixerControlViaMidi`.
-  The IN
-  jack is an **unconditional working MIDI-to-USB bridge**, confirmed live
-  with `mixerControlViaMidi` both on and off — a message sent to the
-  physical IN jack arrives byte-for-byte on the host's `L6max MIDI I/O Port`
-  (USB cable 0, *not* the Mixer Control cable) either way. The setting's
-  only confirmed effect is an extra, functionally inert debug-mirroring
-  step; it does not gate the bridge. **The OUT direction's root cause was
-  identified and fixed, in this project's own emulator, not the firmware.**
-  Traced live from a mute-button press through both settings, two firmware
-  queues, the transmit task, and a correctly-configured LPUART3 driver
-  handle (shared with the other seven LPUART instances) that genuinely
-  fills its ring buffer with the right bytes — the chain ended at the call
-  that enables the transmit interrupt, which real hardware answers
-  immediately (the transmit-empty flag is always set when idle) but which
-  this board model's `CTRL`-register write handler never pulsed: it only
-  fired the LPUART3 IRQ reactively, after a `DATA` write already happened.
-  Fixed by pulsing the IRQ when `TIE` newly transitions high, mirroring
-  logic this model already had for LPUART1 and for the RX side's `RIE`;
-  verified live, the same mute-button press now produces `B0 5D 7F` on the
-  DIN OUT jack, matching the USB Mixer Control Port echo exactly, and the
-  existing test suite (`cargo test --workspace`, `knob-dialog-smoke`,
-  `input-smoke`, `midi-smoke`, `popup-concurrency-smoke`) passes unchanged.
-  One narrow special case on the IN side, a fixed 3-byte Note On sequence,
-  is gated by the factory test jig's connect/disconnect lifecycle, not by
-  anything reachable in normal use. Zoom's documentation describing jack-based
-  mixer control does not match this emulator's current behavior, and for
-  the OUT direction specifically that may be this emulator's gap rather
-  than the real device's.
+- The stock firmware's boot sequence sets LPUART3's CTRL register TE, RE and
+  RIE (bit19, bit18, bit21), initializing the port for both directions with
+  receive interrupts, unconditionally — not gated behind any menu setting. A
+  byte sent to the CoreMIDI port reaches the model's socket handler (`l6 main
+  LPUART3 (MIDI jacks) RX` in the trace log).
+- LPUART1-8 are IRQn 20-27 in the i.MX RT1052 CMSIS header (`MIMXRT1052.h`),
+  sequential from LPUART1 = 20, so LPUART3 = 22; `unpacked/main_firmware.bin`'s
+  own vector table holds a distinct, non-default handler there, the same
+  shape as every other LPUART's entry. RX pulses that line through
+  `qdev_get_gpio_in(.., 22)` when CTRL.RIE is set, once per byte that becomes
+  the pending one (including refills from the queue, each its own RDRF edge
+  on real hardware); TX pulses it symmetrically on CTRL.TIE.
+- Only LPUART1 (the panel link) and LPUART3 (the MIDI jacks) are driven by
+  firmware. LPUART2 and 4-8 have distinct, non-default vector table entries
+  too (the SDK wires all eight uniformly), but firmware never writes to
+  their CTRL registers, so the interrupt handling above does not apply to
+  them; the existing "unconnected, idle" stub for them stands.
+- Neither direction of this port reaches the mixer, in any state of
+  `mixerControlViaMidi`. A channel-1 LEVEL CC (`0xB0 0x51 100`, the same
+  message that moves the USB Mixer Control Port's GPIO ring) sent to this
+  port produces no change, and the same holds for a Note On matching a
+  sound pad's configured MIDI note.
+  - The IN jack is an **unconditional MIDI-to-USB bridge**: a message sent to
+    it arrives byte-for-byte on the host's `L6max MIDI I/O Port` (USB cable
+    0, *not* the Mixer Control cable), regardless of `mixerControlViaMidi`.
+    The setting only toggles an extra, functionally inert debug-mirroring
+    step; it does not gate the bridge.
+  - The OUT direction's root cause was a gap in this project's own emulator,
+    not the firmware: firmware and its generic LPUART driver fill the
+    LPUART3 ring buffer correctly and enable the transmit interrupt, which
+    real hardware answers immediately (the transmit-empty flag is always set
+    when idle), but this board model's `CTRL`-register write handler never
+    pulsed the IRQ on that enable — only reactively, after a `DATA` write
+    already happened. Fixed by pulsing the IRQ when `TIE` newly transitions
+    high, mirroring logic this model already had for LPUART1 and for the RX
+    side's `RIE`; a channel-1 mute press now produces `B0 5D 7F` on the DIN
+    OUT jack, matching the USB Mixer Control Port echo exactly.
+  - One narrow case on the IN side, a fixed 3-byte Note On sequence, is
+    gated by the factory test jig's connect/disconnect lifecycle, not by
+    anything reachable in normal use.
+  - Zoom's own documentation says the jacks accept the same mixer-control
+    Control Change as the USB Mixer Control Port; that does not match this
+    emulator's current behavior in either direction.
 
 Only cable 1 does this. With `L6_MIDI_DIRECT=1 L6_MIDI_SEND_CABLE=<n>`,
 `midi-smoke` sends the same CC on another cable: on cable 1 the ring goes from
