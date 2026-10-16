@@ -164,18 +164,27 @@ a single extra port costs no new platform code.
   LPUART1 (the panel link) and LPUART3 (the MIDI jacks). So the interrupt
   handling above is not generalized to the other six, and nothing here
   needs it to be; the existing "unconnected, idle" stub for them stands.
-- **Not confirmed, and now the main open question:** whether mixer Control
-  Change sent on this port is actually applied. With the interrupt
-  correctly wired, a channel-1 LEVEL CC (`0xB0 0x51 100`, the same message
-  that moves the USB Mixer Control Port's GPIO ring) sent to the new port
-  produced **no change** in the firmware-driven ring. Firmware receives the
-  byte and now has an interrupt to act on it with, but nothing observable
-  happened. Candidates, none checked yet: a separate device setting gates
-  it (the manual's wording for "Enabling control... with a MIDI device
-  connected to the MIDI IN/OUT jacks" suggests one, beyond "Mixer Control
-  via MIDI"); the LPUART3 ISR feeds a different parser entirely, the way
-  each USB cable has its own dedicated one; or the default settings this
-  boot used (demo/default state, nothing navigated) leave it off.
+- **Confirmed: neither direction of this port reaches the mixer, in any
+  setting combination tried.** A channel-1 LEVEL CC (`0xB0 0x51 100`, the
+  same message that moves the USB Mixer Control Port's GPIO ring) sent to
+  this port produces no change, and the same holds for a Note On matching a
+  sound pad's configured MIDI note, in either state of `mixerControlViaMidi`.
+  The byte
+  correctly reaches a complete MIDI 1.0 parser, but with `mixerControlViaMidi`
+  off its output only feeds a debug-logging call that is a no-op (`bx lr`) in
+  this build. **With it on, the jack is instead a working MIDI-to-USB
+  bridge**, confirmed live: a message sent to the physical IN jack over a
+  real editor session arrived byte-for-byte on the host's
+  `L6max MIDI I/O Port` (USB cable 0, *not* the Mixer Control cable) — a
+  real, usable feature, just not mixer control. The OUT direction was
+  checked too: a mute-button press reliably echoes as Control Change on the
+  USB Mixer Control Port, but — confirmed by trace log, a GDB hardware write
+  watchpoint on the DATA register, and live polling of every candidate
+  firmware queue — produces nothing on this port's transmit line at all,
+  with `midiOutMode` on or off. One narrow special case, a fixed 3-byte Note
+  On sequence, is gated by the factory test jig's connect/disconnect
+  lifecycle, not by anything reachable in normal use. Zoom's documentation describing jack-based
+  mixer control does not match this firmware revision's code.
 
 Only cable 1 does this. With `L6_MIDI_DIRECT=1 L6_MIDI_SEND_CABLE=<n>`,
 `midi-smoke` sends the same CC on another cable: on cable 1 the ring goes from
