@@ -174,7 +174,18 @@ fn knob_hit(
         })
 }
 
-actions!(l6max, [OpenFirmware, OpenSdFolder, Quit]);
+actions!(
+    l6max,
+    [
+        OpenFirmware,
+        OpenSdFolder,
+        Quit,
+        ConnectUsb,
+        DisconnectUsb,
+        ConnectMidi,
+        DisconnectMidi
+    ]
+);
 
 struct NativePanel {
     layout: Layout,
@@ -298,6 +309,44 @@ impl NativePanel {
             }
         })
         .detach();
+    }
+
+    /// Like plugging in the USB cable: neither needs the engine to restart,
+    /// mirroring how the real hardware's USB and MIDI jacks can be connected
+    /// or disconnected at any time.
+    fn connect_usb(&mut self, cx: &mut Context<Self>) {
+        let Some(engine) = self._qemu.as_mut() else {
+            return;
+        };
+        self.status = match engine.connect_usb() {
+            Ok(()) => "USB connected".into(),
+            Err(error) => format!("USB connect failed: {error}").into(),
+        };
+        cx.notify();
+    }
+    fn disconnect_usb(&mut self, cx: &mut Context<Self>) {
+        let Some(engine) = self._qemu.as_mut() else {
+            return;
+        };
+        engine.disconnect_usb();
+        self.status = "USB disconnected".into();
+        cx.notify();
+    }
+    fn connect_midi(&mut self, cx: &mut Context<Self>) {
+        let Some(engine) = self._qemu.as_ref() else {
+            return;
+        };
+        engine.connect_midi();
+        self.status = "MIDI IN/OUT jacks connected".into();
+        cx.notify();
+    }
+    fn disconnect_midi(&mut self, cx: &mut Context<Self>) {
+        let Some(engine) = self._qemu.as_ref() else {
+            return;
+        };
+        engine.disconnect_midi();
+        self.status = "MIDI IN/OUT jacks disconnected".into();
+        cx.notify();
     }
 
     fn new_sd_image(&self) -> std::path::PathBuf {
@@ -806,6 +855,34 @@ fn main() {
             });
         });
         cx.on_action(|_: &Quit, cx| cx.quit());
+        cx.on_action(move |_: &ConnectUsb, cx| {
+            cx.defer(move |cx| {
+                if let Err(error) = view.update(cx, |panel, _, cx| panel.connect_usb(cx)) {
+                    eprintln!("Connect USB action failed: {error}");
+                }
+            });
+        });
+        cx.on_action(move |_: &DisconnectUsb, cx| {
+            cx.defer(move |cx| {
+                if let Err(error) = view.update(cx, |panel, _, cx| panel.disconnect_usb(cx)) {
+                    eprintln!("Disconnect USB action failed: {error}");
+                }
+            });
+        });
+        cx.on_action(move |_: &ConnectMidi, cx| {
+            cx.defer(move |cx| {
+                if let Err(error) = view.update(cx, |panel, _, cx| panel.connect_midi(cx)) {
+                    eprintln!("Connect MIDI action failed: {error}");
+                }
+            });
+        });
+        cx.on_action(move |_: &DisconnectMidi, cx| {
+            cx.defer(move |cx| {
+                if let Err(error) = view.update(cx, |panel, _, cx| panel.disconnect_midi(cx)) {
+                    eprintln!("Disconnect MIDI action failed: {error}");
+                }
+            });
+        });
         cx.bind_keys([
             KeyBinding::new("cmd-o", OpenFirmware, None),
             KeyBinding::new("cmd-shift-o", OpenSdFolder, None),
@@ -816,6 +893,12 @@ fn main() {
             Menu::new("File").items([
                 MenuItem::action("Open Firmware…", OpenFirmware).disabled(!bundled),
                 MenuItem::action("Use SD Card Folder…", OpenSdFolder).disabled(!bundled),
+            ]),
+            Menu::new("Connections").items([
+                MenuItem::action("Connect USB", ConnectUsb),
+                MenuItem::action("Disconnect USB", DisconnectUsb),
+                MenuItem::action("Connect MIDI", ConnectMidi),
+                MenuItem::action("Disconnect MIDI", DisconnectMidi),
             ]),
         ]);
         // macOS normally keeps apps alive after their last window closes.
