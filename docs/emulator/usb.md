@@ -175,25 +175,25 @@ a single extra port costs no new platform code.
   physical IN jack arrives byte-for-byte on the host's `L6max MIDI I/O Port`
   (USB cable 0, *not* the Mixer Control cable) either way. The setting's
   only confirmed effect is an extra, functionally inert debug-mirroring
-  step; it does not gate the bridge. **The OUT direction's root cause is
-  identified, and it is in this project's own emulator, not the firmware.**
+  step; it does not gate the bridge. **The OUT direction's root cause was
+  identified and fixed, in this project's own emulator, not the firmware.**
   Traced live from a mute-button press through both settings, two firmware
   queues, the transmit task, and a correctly-configured LPUART3 driver
   handle (shared with the other seven LPUART instances) that genuinely
-  fills its ring buffer with the right bytes — the chain ends at the call
+  fills its ring buffer with the right bytes — the chain ended at the call
   that enables the transmit interrupt, which real hardware answers
   immediately (the transmit-empty flag is always set when idle) but which
-  this board model's `CTRL`-register write handler never pulses: it only
-  fires the LPUART3 IRQ reactively, after a `DATA` write already happened,
-  the same way an earlier emulator for this project might model only the
-  easier, externally-triggered RX direction and miss the self-triggered TX
-  one. Firmware and its driver are confirmed correct up to that exact call;
-  the fix is a small, identified one-line addition mirroring the pulse this
-  model already does for the RX interrupt-enable bit, not yet made as part
-  of this investigation. One narrow special case on the IN side, a fixed
-  3-byte Note On sequence, is gated by the factory test jig's
-  connect/disconnect lifecycle, not by anything reachable in normal use.
-  Zoom's documentation describing jack-based
+  this board model's `CTRL`-register write handler never pulsed: it only
+  fired the LPUART3 IRQ reactively, after a `DATA` write already happened.
+  Fixed by pulsing the IRQ when `TIE` newly transitions high, mirroring
+  logic this model already had for LPUART1 and for the RX side's `RIE`;
+  verified live, the same mute-button press now produces `B0 5D 7F` on the
+  DIN OUT jack, matching the USB Mixer Control Port echo exactly, and the
+  existing test suite (`cargo test --workspace`, `knob-dialog-smoke`,
+  `input-smoke`, `midi-smoke`, `popup-concurrency-smoke`) passes unchanged.
+  One narrow special case on the IN side, a fixed 3-byte Note On sequence,
+  is gated by the factory test jig's connect/disconnect lifecycle, not by
+  anything reachable in normal use. Zoom's documentation describing jack-based
   mixer control does not match this emulator's current behavior, and for
   the OUT direction specifically that may be this emulator's gap rather
   than the real device's.
