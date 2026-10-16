@@ -14,10 +14,12 @@
 //! `l6max.c`'s LPUART3 fix, so a panel mute press must stop producing that
 //! echo once the setting is on.
 //!
-//! Current, confirmed result: the DIN jack does not reach the mixer in
-//! either direction, even with the setting enabled through this exact
-//! session. See the "Physical MIDI IN/OUT (DIN/TRS) jacks" section of
-//! `docs/emulator/usb.md`.
+//! Stock firmware does not reach the mixer in either direction, even with
+//! the setting enabled through this exact session — see the "Physical MIDI
+//! IN/OUT (DIN/TRS) jacks" section of `docs/emulator/usb.md`. Run against
+//! firmware built with the `din-mixer-control` patch
+//! (`patches/din-mixer-control/README.md`), which fixes the IN direction, with
+//! `L6_DIN_MIXER_CONTROL_FIXED=1` to check the fix instead.
 
 #[cfg(target_os = "macos")]
 mod imp {
@@ -142,20 +144,39 @@ mod imp {
             "control check passed: USB Mixer Control Port CC moved the ring ({before_usb:#x} -> {after_usb:#x})"
         );
 
-        // The actual question.
+        // The actual question. Stock firmware never applies this; firmware
+        // built with the din-mixer-control patch should.
+        let expect_fixed = std::env::var_os("L6_DIN_MIXER_CONTROL_FIXED").is_some();
         let before_din = ring();
         din.send(&[0xB0, 0x51, 40])?;
         guest.wait(500).map_err(|e| e.to_string())?;
         let after_din = ring();
-        if before_din != after_din {
+        let moved = before_din != after_din;
+        if moved != expect_fixed {
             return Err(format!(
-                "DIN MIDI IN now reaches the mixer with Mixer Control via MIDI enabled \
-                 ({before_din:#x} -> {after_din:#x}); update docs/emulator/usb.md, this test, \
-                 and the DIN MIDI protocol notes to match"
+                "DIN MIDI IN {} the mixer with Mixer Control via MIDI enabled ({before_din:#x} \
+                 -> {after_din:#x}); expected it to {} given L6_DIN_MIXER_CONTROL_FIXED={}",
+                if moved {
+                    "now reaches"
+                } else {
+                    "still does not reach"
+                },
+                if expect_fixed {
+                    "reach it"
+                } else {
+                    "not reach it"
+                },
+                expect_fixed as u8,
             ));
         }
         println!(
-            "confirmed: a fader CC sent into the DIN MIDI IN jack does not move the mixer, even with Mixer Control via MIDI enabled"
+            "confirmed: a fader CC sent into the DIN MIDI IN jack {} the mixer, with Mixer Control via MIDI enabled ({})",
+            if moved { "moves" } else { "does not move" },
+            if expect_fixed {
+                "din-mixer-control patch"
+            } else {
+                "stock firmware"
+            },
         );
 
         // Control: the setting really took effect, independent of the IN
