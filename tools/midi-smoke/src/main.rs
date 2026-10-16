@@ -17,8 +17,7 @@ fn run() -> Result<(), String> {
     let direct = std::env::var_os("L6_MIDI_DIRECT").is_some();
     let sync = std::env::var_os("L6_MIDI_SYNC").is_some();
     let mut options = Options::parse()?;
-    options.usb_enabled = true;
-    options.host_midi = !direct;
+    options.usb_enabled = !direct;
     let guest = Headless::start(&options)?;
     guest.recorder().map_err(|e| e.to_string())?;
     guest.until(47000).map_err(|e| e.to_string())?;
