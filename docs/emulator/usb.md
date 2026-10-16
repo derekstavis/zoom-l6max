@@ -10,7 +10,9 @@ commands. Host requests reach those handlers through modeled peripherals.
 ## SD card
 
 In the macOS bundle, **File → Use SD Card Folder…** imports a folder into a
-private persistent card and restarts the guest. See the
+private persistent card and inserts it live, like inserting a card into the
+slot, with no engine restart; **File → Eject SD Card** removes it the same
+way. See the
 [app guide](../guides/macos-app.md#use-a-folder-as-the-sd-card) for semantics and limits.
 From a source checkout, create the same folder snapshot explicitly:
 
@@ -32,7 +34,12 @@ The board samples QEMU SDBus medium state at the existing virtual millisecond
 tick, updates the input, latches GPIO ISR, and raises IRQ 83 when unmasked.
 GPIO ISR is write-one-to-clear. QMP media replacement therefore changes both
 the card model and the detect pin. The Rust QAPI client provides `eject_sd`
-and `insert_sd` for an engine started with an attached image.
+and `insert_sd`, wrapped as `Engine::eject_sd`/`insert_sd`. The slot itself
+is always inherited (an `-drive if=sd,id=l6-sd` with no `file=` when no card
+is given at boot, like the real card-edge connector is always present), so
+both work at any time, including inserting a card that was never attached at
+boot — no engine restart needed either way, mirroring the [USB and DIN MIDI
+jacks' own hotplug](#hotplug).
 
 RT1052 USDHC derives its clock and power from the SoC. Firmware waits for
 PRES_STATE.SDSTB before programming SYS_CTRL, whose low three bits are reserved
