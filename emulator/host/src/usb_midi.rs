@@ -151,6 +151,10 @@ pub struct MidiBridge<P: HostMidi = NativeMidi> {
     worker: Option<JoinHandle<()>>,
     pub status: Arc<Mutex<String>>,
     usb: Arc<UsbHost>,
+    /// False after an explicit [`Self::disconnect`]: the worker is still
+    /// joined on drop, but the shared USB socket is left open so a later
+    /// `start` can reconnect without restarting the engine.
+    shutdown_usb_on_drop: bool,
     backend: PhantomData<fn() -> P>,
 }
 impl<P: HostMidi + 'static> MidiBridge<P> {
@@ -176,8 +180,16 @@ impl<P: HostMidi + 'static> MidiBridge<P> {
             worker: Some(worker),
             status,
             usb,
+            shutdown_usb_on_drop: true,
             backend: PhantomData,
         })
+    }
+    /// Stop forwarding without shutting down the underlying USB socket, so
+    /// the cable can be "replugged" later with a fresh `start` on the same
+    /// engine. Final engine teardown instead drops this value directly,
+    /// which shuts the socket down to unblock the worker immediately.
+    pub fn disconnect(mut self) {
+        self.shutdown_usb_on_drop = false;
     }
     fn run(usb: &UsbHost, stop: &AtomicBool, state: &Mutex<String>) -> io::Result<()> {
         let set = |text: String| *state.lock().unwrap() = text;
@@ -247,7 +259,9 @@ impl<P: HostMidi + 'static> MidiBridge<P> {
 impl<P: HostMidi> Drop for MidiBridge<P> {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Release);
-        self.usb.shutdown();
+        if self.shutdown_usb_on_drop {
+            self.usb.shutdown();
+        }
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
         }
