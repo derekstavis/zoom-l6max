@@ -2107,6 +2107,15 @@ static void l6_mmio_write(void *opaque, hwaddr offset,
     }
     if (!s->panel && offset == 0x18c018 && size == 4 && word != previous_word) {
         qemu_log_mask(LOG_UNIMP, "l6 main LPUART3 (MIDI jacks) CTRL %08x\n", word);
+        if ((word & (1u << 23)) && !(previous_word & (1u << 23))) {
+            /* TIE newly enabled: real hardware's TDRE is always set while
+             * idle, so this interrupts immediately, the same way LPUART1's
+             * CTRL handler above already does. Without this, firmware's
+             * enable-TIE-then-wait-for-interrupt driver pattern never gets
+             * its first interrupt, so it never transmits the MIDI OUT jack
+             * at all. */
+            qemu_irq_pulse(qdev_get_gpio_in(DEVICE(&s->armv7m), L6_LPUART3_IRQ));
+        }
     }
     if (!s->panel && size == 4 && offset >= 0x188018 && offset != 0x18c018 &&
         offset <= 0x1a0018 && (offset - 0x188018) % 0x4000 == 0 &&
