@@ -111,8 +111,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     file.sync_all()?;
     drop(file);
     options.sd_image = Some(card.clone());
-    options.usb_enabled = true;
-    options.host_midi = false;
     // A valid retained calendar has priority over the factory boot check.
     // Seed only a newly created emulator state directory, never user storage.
     let state = fixture.0.join("state");
