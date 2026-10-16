@@ -175,25 +175,28 @@ a single extra port costs no new platform code.
   physical IN jack arrives byte-for-byte on the host's `L6max MIDI I/O Port`
   (USB cable 0, *not* the Mixer Control cable) either way. The setting's
   only confirmed effect is an extra, functionally inert debug-mirroring
-  step; it does not gate the bridge. The OUT direction was traced live, step
-  by step, all the way from a mute-button press through both settings
-  (confirmed not to interact), through two firmware queues, into the
-  transmit task, and into a resolved, identified transmit function — a
-  generic primitive shared by all eight LPUART instances, confirmed to hold
-  a correctly-configured handle for LPUART3 specifically — which runs with
-  verified correct data but whose own internal state is confirmed, across
-  ten repeated button presses, to never advance, and never produces a
-  DATA-register write. Buffer capacity and wraparound were checked and
-  ruled out. The exact internal branch is outside what this project's tools
-  can resolve further, a limit that was tested directly rather than
-  assumed: QEMU's gdbstub hardware breakpoints and single-step were both
-  tried against reproducible stopping points and confirmed non-functional
-  on this target, while data watchpoints work reliably throughout. The most
-  likely explanation is a hardware cable-presence check this emulator does
-  not model. One narrow special case on the IN side, a fixed 3-byte Note On
-  sequence, is gated by the factory test jig's connect/disconnect lifecycle,
-  not by anything reachable in normal use. Zoom's documentation describing jack-based
-  mixer control does not match this firmware revision's code.
+  step; it does not gate the bridge. **The OUT direction's root cause is
+  identified, and it is in this project's own emulator, not the firmware.**
+  Traced live from a mute-button press through both settings, two firmware
+  queues, the transmit task, and a correctly-configured LPUART3 driver
+  handle (shared with the other seven LPUART instances) that genuinely
+  fills its ring buffer with the right bytes — the chain ends at the call
+  that enables the transmit interrupt, which real hardware answers
+  immediately (the transmit-empty flag is always set when idle) but which
+  this board model's `CTRL`-register write handler never pulses: it only
+  fires the LPUART3 IRQ reactively, after a `DATA` write already happened,
+  the same way an earlier emulator for this project might model only the
+  easier, externally-triggered RX direction and miss the self-triggered TX
+  one. Firmware and its driver are confirmed correct up to that exact call;
+  the fix is a small, identified one-line addition mirroring the pulse this
+  model already does for the RX interrupt-enable bit, not yet made as part
+  of this investigation. One narrow special case on the IN side, a fixed
+  3-byte Note On sequence, is gated by the factory test jig's
+  connect/disconnect lifecycle, not by anything reachable in normal use.
+  Zoom's documentation describing jack-based
+  mixer control does not match this emulator's current behavior, and for
+  the OUT direction specifically that may be this emulator's gap rather
+  than the real device's.
 
 Only cable 1 does this. With `L6_MIDI_DIRECT=1 L6_MIDI_SEND_CABLE=<n>`,
 `midi-smoke` sends the same CC on another cable: on cable 1 the ring goes from
