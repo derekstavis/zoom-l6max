@@ -34,8 +34,12 @@ pub struct Options {
     pub no_sd: bool,
     pub state_dir: Option<PathBuf>,
     pub trace_sd: bool,
+    /// Connect the USB cable (and its 3 MIDI ports) as soon as the engine
+    /// starts, rather than waiting for a later [`Engine::connect_usb`] call.
     pub usb_enabled: bool,
-    pub host_midi: bool,
+    /// Connect the DIN/TRS MIDI IN/OUT jacks as soon as the engine starts,
+    /// rather than waiting for a later [`Engine::connect_midi`] call.
+    pub midi_enabled: bool,
     pub timing: Timing,
     pub ui_input_smoke: bool,
     pub update_bootloader: bool,
@@ -83,7 +87,7 @@ impl Options {
             state_dir: Some(workspace.join("emulator/state")),
             trace_sd: false,
             usb_enabled: false,
-            host_midi: false,
+            midi_enabled: false,
             timing: Timing::Paced,
             ui_input_smoke: false,
             update_bootloader: false,
@@ -102,10 +106,8 @@ impl Options {
                 "--no-auto-setup" => options.auto_setup = false,
                 "--logs" => options.logs = take_path(&mut args, "--logs")?,
                 "--gdb-socket" => options.gdb_socket = Some(take_path(&mut args, "--gdb-socket")?),
-                "--usb" => {
-                    options.usb_enabled = true;
-                    options.host_midi = true;
-                }
+                "--usb" => options.usb_enabled = true,
+                "--midi" => options.midi_enabled = true,
                 "--trace-sd" => options.trace_sd = true,
                 "--sd-image" => options.sd_image = Some(take_path(&mut args, "--sd-image")?),
                 "--no-sd" => options.no_sd = true,
@@ -120,7 +122,7 @@ impl Options {
                 }
                 "--help" | "-h" => {
                     println!(
-                        "Engine options: [QEMU] [--qemu PATH] [--firmware-dir DIR | --firmware-package L6max.bin] [--no-auto-setup] [--logs DIR] [--state-dir DIR | --volatile] [--sd-image FILE | --no-sd] [--update-bootloader] [--usb] [--trace-sd] [--timing paced|adaptive] [--ui-input-smoke] [--gdb-socket PATH]"
+                        "Engine options: [QEMU] [--qemu PATH] [--firmware-dir DIR | --firmware-package L6max.bin] [--no-auto-setup] [--logs DIR] [--state-dir DIR | --volatile] [--sd-image FILE | --no-sd] [--update-bootloader] [--usb] [--midi] [--trace-sd] [--timing paced|adaptive] [--ui-input-smoke] [--gdb-socket PATH]"
                     );
                     std::process::exit(0);
                 }
@@ -211,18 +213,18 @@ impl Engine {
         let (qmp_parent, qmp_guest) = UnixStream::pair().map_err(|e| e.to_string())?;
         let (usb_host, usb_guest) = UnixStream::pair().map_err(|e| e.to_string())?;
         let (din_midi_host, din_midi_guest) = UnixStream::pair().map_err(|e| e.to_string())?;
-        let mut fds = vec![
+        // Both the USB and DIN MIDI sockets are always inherited, like the
+        // real chip's always-present USB and UART silicon: whether a cable
+        // is actually "plugged in" is a host-side runtime toggle
+        // (`Engine::connect_usb`/`connect_midi`), not a boot-time choice.
+        let fds = vec![
             main_input_guest.as_raw_fd(),
             panel_input_guest.as_raw_fd(),
             qmp_guest.as_raw_fd(),
             display_fd,
+            usb_guest.as_raw_fd(),
+            din_midi_guest.as_raw_fd(),
         ];
-        if options.usb_enabled {
-            fds.push(usb_guest.as_raw_fd());
-        }
-        if options.host_midi {
-            fds.push(din_midi_guest.as_raw_fd());
-        }
         let mut command = Command::new(&qemu);
         command
             .args([
@@ -297,23 +299,17 @@ impl Engine {
                 directory.canonicalize().map_err(|e| e.to_string())?,
             );
         }
-        if options.usb_enabled {
-            command.env("L6_USB_FD", usb_guest.as_raw_fd().to_string());
-        }
-        if options.host_midi {
-            command.env(
-                "L6_MAIN_MIDI_UART_FD",
-                din_midi_guest.as_raw_fd().to_string(),
-            );
-        }
+        command.env("L6_USB_FD", usb_guest.as_raw_fd().to_string());
+        command.env(
+            "L6_MAIN_MIDI_UART_FD",
+            din_midi_guest.as_raw_fd().to_string(),
+        );
         if options.trace_sd {
             command.args(["-trace", "sdhci_*"]);
         }
-        if options.usb_enabled {
-            engine.usb = Some(Arc::new(
-                crate::usb::UsbHost::new(usb_host).map_err(|e| e.to_string())?,
-            ));
-        }
+        engine.usb = Some(Arc::new(
+            crate::usb::UsbHost::new(usb_host).map_err(|e| e.to_string())?,
+        ));
         // Only the selected IPC and display descriptors survive exec.
         unsafe {
             command.pre_exec(move || {
@@ -346,16 +342,61 @@ impl Engine {
                 .map_err(|e| format!("resume guest: {e}"))?;
         }
         engine.inputs = Some(Arc::new(InputHub::new(main_input, panel_input)));
-        if options.host_midi {
-            engine.midi = Some(
-                crate::usb_midi::MidiBridge::start(engine.usb.as_ref().unwrap().clone())
-                    .map_err(|e| e.to_string())?,
-            );
-            engine.din_midi = Some(
-                crate::din_midi::DinMidiBridge::start(din_midi_host).map_err(|e| e.to_string())?,
-            );
+        // The DIN MIDI bridge is always running, draining the UART socket so
+        // the guest's transmit side never blocks; whether it is also wired to
+        // a native host MIDI port is the `midi_enabled` connect state.
+        engine.din_midi = Some(
+            crate::din_midi::DinMidiBridge::start(din_midi_host, options.midi_enabled)
+                .map_err(|e| e.to_string())?,
+        );
+        if options.usb_enabled {
+            engine.connect_usb()?;
         }
         Ok(engine)
+    }
+    /// Connect the USB cable: enables the 3 USB MIDI ports and lets firmware
+    /// enumerate. A no-op if already connected.
+    pub fn connect_usb(&mut self) -> Result<(), String> {
+        if self.midi.is_none() {
+            let usb = self
+                .usb
+                .clone()
+                .ok_or("USB is not available for this engine")?;
+            self.midi = Some(crate::usb_midi::MidiBridge::start(usb).map_err(|e| e.to_string())?);
+        }
+        Ok(())
+    }
+    /// Disconnect the USB cable, like unplugging it: stops the 3 USB MIDI
+    /// ports and tells firmware the device is gone, without tearing down the
+    /// inherited socket, so a later `connect_usb` can reconnect in place.
+    pub fn disconnect_usb(&mut self) {
+        if let Some(midi) = self.midi.take() {
+            midi.disconnect();
+        }
+        if let Some(usb) = &self.usb {
+            let _ = usb.connect(false);
+        }
+    }
+    pub fn usb_connected(&self) -> bool {
+        self.midi.is_some()
+    }
+    /// Connect the DIN/TRS MIDI IN/OUT jacks to the host MIDI port. Unlike
+    /// USB, firmware has no way to observe this: a real TRS jack has no
+    /// plug-detection either, so this only toggles the host-side bridge.
+    pub fn connect_midi(&self) {
+        if let Some(din_midi) = &self.din_midi {
+            din_midi.set_connected(true);
+        }
+    }
+    pub fn disconnect_midi(&self) {
+        if let Some(din_midi) = &self.din_midi {
+            din_midi.set_connected(false);
+        }
+    }
+    pub fn midi_connected(&self) -> bool {
+        self.din_midi
+            .as_ref()
+            .is_some_and(crate::din_midi::DinMidiBridge::is_connected)
     }
     pub fn connected(&mut self) -> bool {
         !self.children.is_empty()
