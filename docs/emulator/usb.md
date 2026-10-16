@@ -187,9 +187,9 @@ a single extra port costs no new platform code.
   too (the SDK wires all eight uniformly), but firmware never writes to
   their CTRL registers, so the interrupt handling above does not apply to
   them; the existing "unconnected, idle" stub for them stands.
-- Neither direction of this port reaches the mixer, in any state of
-  `mixerControlViaMidi`. A channel-1 LEVEL CC (`0xB0 0x51 100`, the same
-  message that moves the USB Mixer Control Port's GPIO ring) sent to this
+- In stock firmware, neither direction of this port reaches the mixer, in any
+  state of `mixerControlViaMidi`. A channel-1 LEVEL CC (`0xB0 0x51 100`, the
+  same message that moves the USB Mixer Control Port's GPIO ring) sent to this
   port produces no change, and the same holds for a Note On matching a
   sound pad's configured MIDI note.
   - The IN jack is an **unconditional MIDI-to-USB bridge**: a message sent to
@@ -211,11 +211,19 @@ a single extra port costs no new platform code.
     gated by the factory test jig's connect/disconnect lifecycle, not by
     anything reachable in normal use.
   - Zoom's own documentation says the jacks accept the same mixer-control
-    Control Change as the USB Mixer Control Port; that does not match this
-    emulator's current behavior in either direction, including with Mixer
-    Control via MIDI turned on through the editor's own session (identity,
-    global setting dump, then the `mixerControlViaMidi` parameter change) —
-    see `din-editor-mixer-smoke`.
+    Control Change as the USB Mixer Control Port; stock firmware does not do
+    this in either direction, confirmed with Mixer Control via MIDI turned on
+    through the editor's own session (identity, global setting dump, then the
+    `mixerControlViaMidi` parameter change) — see `din-editor-mixer-smoke`.
+    For the IN direction, this is a genuine stock-firmware gap, not an
+    emulator limitation: the DIN receive parser has exactly one place that
+    consumes a complete message at all (a factory-jig check, unreachable in
+    normal use), and nothing routes a message to the mixer from there. The
+    [`din-mixer-control` patch](../../patches/din-mixer-control/README.md)
+    adds that routing, confirmed live with `din-editor-mixer-smoke
+    L6_DIN_MIXER_CONTROL_FIXED=1`: a fader Control Change sent into the DIN
+    MIDI IN jack, with the setting on, now moves the mixer, the same as the
+    USB Mixer Control Port.
 
 Only cable 1 does this. With `L6_MIDI_DIRECT=1 L6_MIDI_SEND_CABLE=<n>`,
 `midi-smoke` sends the same CC on another cable: on cable 1 the ring goes from
