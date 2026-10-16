@@ -7,6 +7,13 @@ applies Control Change received on the mixer-control port. This page describes
 that behavior and the request added by the [midi-sync patch](../../../patches/midi-sync/README.md).
 Addresses apply to the [supported main revision](../README.md#supported-revision).
 
+Stock firmware applies received Control Change only on the USB Mixer Control
+port, despite a documented setting (`mixerControlViaMidi`) that is supposed to
+extend this to the physical MIDI IN/OUT jacks. The
+[din-mixer-control patch](../../../patches/din-mixer-control/README.md) adds
+that missing routing, applying the same Control Change handling described
+here to a message received on the DIN jack.
+
 ## Controller numbers
 
 Each controllable value has a parameter identifier (`00`-`5D`). The CC map
