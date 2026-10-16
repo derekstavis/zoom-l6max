@@ -183,7 +183,8 @@ actions!(
         ConnectUsb,
         DisconnectUsb,
         ConnectMidi,
-        DisconnectMidi
+        DisconnectMidi,
+        EjectSdCard
     ]
 );
 
@@ -349,6 +350,21 @@ impl NativePanel {
         cx.notify();
     }
 
+    /// Like pulling the SD card out of the slot: no engine restart needed.
+    fn eject_sd_card(&mut self, cx: &mut Context<Self>) {
+        let Some(engine) = self._qemu.as_ref() else {
+            return;
+        };
+        match engine.eject_sd() {
+            Ok(()) => {
+                self.options.sd_image = None;
+                self.status = "SD card ejected".into();
+            }
+            Err(error) => self.status = format!("Eject SD card failed: {error}").into(),
+        }
+        cx.notify();
+    }
+
     fn new_sd_image(&self) -> std::path::PathBuf {
         let root = self.bundle.as_ref().unwrap().data.join("cards");
         let stamp = std::time::SystemTime::now()
@@ -359,13 +375,10 @@ impl NativePanel {
     }
 
     fn use_sd_image(&mut self, image: std::path::PathBuf) -> Result<(), String> {
-        let mut options = self.options.clone();
-        options.sd_image = Some(image.clone());
-        options.no_sd = false;
-        if let Some(controls) = &self.controls {
-            self.physical_analog = controls.analog_positions();
-        }
-        self.restart_with_options(options)?;
+        let engine = self._qemu.as_ref().ok_or("no running engine")?;
+        engine.insert_sd(&image)?;
+        self.options.sd_image = Some(image.clone());
+        self.options.no_sd = false;
         let state = self
             .options
             .state_dir
@@ -883,6 +896,13 @@ fn main() {
                 }
             });
         });
+        cx.on_action(move |_: &EjectSdCard, cx| {
+            cx.defer(move |cx| {
+                if let Err(error) = view.update(cx, |panel, _, cx| panel.eject_sd_card(cx)) {
+                    eprintln!("Eject SD card action failed: {error}");
+                }
+            });
+        });
         cx.bind_keys([
             KeyBinding::new("cmd-o", OpenFirmware, None),
             KeyBinding::new("cmd-shift-o", OpenSdFolder, None),
@@ -893,6 +913,7 @@ fn main() {
             Menu::new("File").items([
                 MenuItem::action("Open Firmware…", OpenFirmware).disabled(!bundled),
                 MenuItem::action("Use SD Card Folder…", OpenSdFolder).disabled(!bundled),
+                MenuItem::action("Eject SD Card", EjectSdCard),
             ]),
             Menu::new("Connections").items([
                 MenuItem::action("Connect USB", ConnectUsb),
