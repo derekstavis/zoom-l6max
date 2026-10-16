@@ -41,27 +41,36 @@ fn forward_uart_to_host<P: HostMidi>(ports: &mut P, bytes: &[u8]) -> io::Result<
 }
 
 /// Worker that mirrors the device's DIN MIDI UART onto one host MIDI port.
-/// On a platform without a back end it still drains the socket so the
-/// guest's transmit side never blocks, and reports that through `status`.
+///
+/// The jack itself has no plug-detection (unlike USB, a real TRS cable has no
+/// sense pin), so this runs for the engine's entire life, always draining the
+/// UART socket so the guest's transmit side never blocks. Whether it is also
+/// wired to a native host MIDI port is a separate, live-toggleable
+/// `connected` state set by [`Self::set_connected`] — connecting or
+/// disconnecting never needs the engine to restart.
 pub struct DinMidiBridge<P: HostMidi = NativeMidi> {
     stop: Arc<AtomicBool>,
+    connected: Arc<AtomicBool>,
     worker: Option<JoinHandle<()>>,
     pub status: Arc<Mutex<String>>,
     backend: PhantomData<fn() -> P>,
 }
 impl<P: HostMidi + 'static> DinMidiBridge<P> {
     /// `stream` is the host end of the pair whose other end is the guest's
-    /// inherited `L6_MAIN_MIDI_UART_FD` socket.
-    pub fn start(stream: UnixStream) -> io::Result<Self> {
+    /// inherited `L6_MAIN_MIDI_UART_FD` socket. `connected` is the initial
+    /// state of the native MIDI port.
+    pub fn start(stream: UnixStream, connected: bool) -> io::Result<Self> {
         stream.set_nonblocking(true)?;
         let stop = Arc::new(AtomicBool::new(false));
-        let status = Arc::new(Mutex::new("Connecting the MIDI IN/OUT port".to_owned()));
+        let connected = Arc::new(AtomicBool::new(connected));
+        let status = Arc::new(Mutex::new("MIDI IN/OUT port disconnected".to_owned()));
         let flag = stop.clone();
+        let worker_connected = connected.clone();
         let state = status.clone();
         let worker = thread::Builder::new()
             .name("l6-din-midi".into())
             .spawn(move || {
-                if let Err(e) = Self::run(stream, &flag, &state) {
+                if let Err(e) = Self::run(stream, &flag, &worker_connected, &state) {
                     if flag.load(Ordering::Acquire) {
                         return;
                     }
@@ -71,26 +80,49 @@ impl<P: HostMidi + 'static> DinMidiBridge<P> {
             })?;
         Ok(Self {
             stop,
+            connected,
             worker: Some(worker),
             status,
             backend: PhantomData,
         })
     }
-    fn run(mut stream: UnixStream, stop: &AtomicBool, state: &Mutex<String>) -> io::Result<()> {
+    /// Connect or disconnect the native host MIDI port, like plugging or
+    /// unplugging a cable into the jack. The UART socket keeps draining
+    /// either way; bytes arriving while disconnected are simply dropped.
+    pub fn set_connected(&self, connected: bool) {
+        self.connected.store(connected, Ordering::Release);
+    }
+    pub fn is_connected(&self) -> bool {
+        self.connected.load(Ordering::Acquire)
+    }
+    fn run(
+        mut stream: UnixStream,
+        stop: &AtomicBool,
+        connected: &AtomicBool,
+        state: &Mutex<String>,
+    ) -> io::Result<()> {
         let set = |text: String| *state.lock().unwrap() = text;
         let mut ports: Option<P> = None;
-        match P::open(&[PORT_NAME]) {
-            Ok(opened) => {
-                ports = Some(opened);
-                set("MIDI IN/OUT port connected".into());
-            }
-            Err(e) if e.kind() == io::ErrorKind::Unsupported => {
-                set(format!("Host MIDI unavailable: {e}"));
-            }
-            Err(e) => return Err(e),
-        }
+        let mut unsupported = false;
         let mut buffer = [0u8; 256];
         while !stop.load(Ordering::Acquire) {
+            let wanted = connected.load(Ordering::Acquire);
+            if wanted && ports.is_none() && !unsupported {
+                match P::open(&[PORT_NAME]) {
+                    Ok(opened) => {
+                        ports = Some(opened);
+                        set("MIDI IN/OUT port connected".into());
+                    }
+                    Err(e) if e.kind() == io::ErrorKind::Unsupported => {
+                        unsupported = true;
+                        set(format!("Host MIDI unavailable: {e}"));
+                    }
+                    Err(e) => return Err(e),
+                }
+            } else if !wanted && ports.is_some() {
+                ports = None;
+                set("MIDI IN/OUT port disconnected".into());
+            }
             if let Some(native) = &mut ports {
                 forward_host_to_uart(native, |chunk| stream.write_all(chunk))?;
             }
