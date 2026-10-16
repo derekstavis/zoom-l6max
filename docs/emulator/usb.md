@@ -169,25 +169,30 @@ a single extra port costs no new platform code.
   same message that moves the USB Mixer Control Port's GPIO ring) sent to
   this port produces no change, and the same holds for a Note On matching a
   sound pad's configured MIDI note, in either state of `mixerControlViaMidi`.
-  The byte
-  correctly reaches a complete MIDI 1.0 parser, but with `mixerControlViaMidi`
-  off its output only feeds a debug-logging call that is a no-op (`bx lr`) in
-  this build. **With it on, the jack is instead a working MIDI-to-USB
-  bridge**, confirmed live: a message sent to the physical IN jack over a
-  real editor session arrived byte-for-byte on the host's
-  `L6max MIDI I/O Port` (USB cable 0, *not* the Mixer Control cable) — a
-  real, usable feature, just not mixer control. The OUT direction was traced
-  live, step by step, all the way from a mute-button press through both
-  gating settings (`mixerControlViaMidi` and `midiOutMode`, confirmed as the
-  only two that matter), through two separate firmware queues, into the
-  transmit task, and into its one external transmit call — reached every
-  time with correct data — which never produces a DATA-register write. That
-  one remaining link is outside what this project's tools (Ghidra; QEMU's
-  gdbstub, data watchpoints only, no working instruction breakpoints on this
-  target) can resolve; the most likely explanation is a hardware
-  cable-presence check this emulator does not model. One narrow special
-  case, a fixed 3-byte Note On sequence, is gated by the factory test jig's
-  connect/disconnect lifecycle, not by anything reachable in normal use. Zoom's documentation describing jack-based
+  The IN
+  jack is an **unconditional working MIDI-to-USB bridge**, confirmed live
+  with `mixerControlViaMidi` both on and off — a message sent to the
+  physical IN jack arrives byte-for-byte on the host's `L6max MIDI I/O Port`
+  (USB cable 0, *not* the Mixer Control cable) either way. The setting's
+  only confirmed effect is an extra, functionally inert debug-mirroring
+  step; it does not gate the bridge. The OUT direction was traced live, step
+  by step, all the way from a mute-button press through both settings
+  (confirmed not to interact), through two firmware queues, into the
+  transmit task, and into a resolved, identified transmit function — a
+  generic primitive shared by all eight LPUART instances, confirmed to hold
+  a correctly-configured handle for LPUART3 specifically — which runs with
+  verified correct data but whose own internal state is confirmed, across
+  ten repeated button presses, to never advance, and never produces a
+  DATA-register write. Buffer capacity and wraparound were checked and
+  ruled out. The exact internal branch is outside what this project's tools
+  can resolve further, a limit that was tested directly rather than
+  assumed: QEMU's gdbstub hardware breakpoints and single-step were both
+  tried against reproducible stopping points and confirmed non-functional
+  on this target, while data watchpoints work reliably throughout. The most
+  likely explanation is a hardware cable-presence check this emulator does
+  not model. One narrow special case on the IN side, a fixed 3-byte Note On
+  sequence, is gated by the factory test jig's connect/disconnect lifecycle,
+  not by anything reachable in normal use. Zoom's documentation describing jack-based
   mixer control does not match this firmware revision's code.
 
 Only cable 1 does this. With `L6_MIDI_DIRECT=1 L6_MIDI_SEND_CABLE=<n>`,
