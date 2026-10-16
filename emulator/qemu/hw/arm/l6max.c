@@ -2662,8 +2662,11 @@ static void l6_chip_init(MachineState *machine, L6ChipState *s, bool panel,
                               "l6-chipidea-device", 0x200);
         memory_region_add_subregion_overlap(system_memory, 0x402e0000,
                                             &s->usb_region, 2);
-        /* RT1052 USDHC1 overlays the sparse peripheral region. An SD card
-         * is present only when the runner supplies an SD drive.
+        /* RT1052 USDHC1 overlays the sparse peripheral region. The SD slot
+         * itself, like the real card-edge connector, is always present; an
+         * inherited `-drive if=sd,id=l6-sd` with no `file=` is an empty
+         * slot. Whether a card is actually in it is a runtime QMP
+         * eject/insert (`blockdev-change-medium`), not a boot-time choice.
          */
         DeviceState *usdhc = qdev_new(TYPE_IMX_USDHC);
         DriveInfo *sd_drive = drive_get(IF_SD, 0, 0);
@@ -2682,14 +2685,14 @@ static void l6_chip_init(MachineState *machine, L6ChipState *s, bool panel,
             sysbus_mmio_get_region(SYS_BUS_DEVICE(usdhc), 0), 1);
         sysbus_connect_irq(SYS_BUS_DEVICE(usdhc), 0,
             qdev_get_gpio_in(DEVICE(&s->armv7m), 110));
+        DeviceState *card = qdev_new(TYPE_SD_CARD);
         if (sd_drive) {
-            DeviceState *card = qdev_new(TYPE_SD_CARD);
             qdev_prop_set_drive_err(card, "drive",
                                     blk_by_legacy_dinfo(sd_drive),
                                     &error_fatal);
-            qdev_realize_and_unref(card, qdev_get_child_bus(usdhc, "sd-bus"),
-                                   &error_fatal);
         }
+        qdev_realize_and_unref(card, qdev_get_child_bus(usdhc, "sd-bus"),
+                               &error_fatal);
         s->sd_present = sdbus_get_inserted(&s->sdhc->sdbus);
     }
 }
