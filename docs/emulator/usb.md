@@ -80,7 +80,7 @@ host enumeration allows that transition and bus-reset processing to finish.
 ## Native MIDI
 
 Run the native app with `--usb` to expose three CoreMIDI source/destination
-pairs on macOS:
+pairs on macOS, as soon as the engine starts:
 
 - `L6max MIDI I/O Port (Emulator)`
 - `L6max Mixer Control Port (Emulator)`
@@ -93,6 +93,28 @@ packets. Firmware-generated endpoint data takes the reverse path. The worker
 continues consuming MIDI IN even when no host application is connected.
 Closing the engine cancels socket operations, joins the worker and disposes
 its endpoints.
+
+### Hotplug
+
+Both the USB cable and the DIN MIDI jacks are hotpluggable at any time,
+matching real hardware — no engine restart needed. `--usb` and `--midi` only
+pick the state at startup; the native app's **Connections** menu ("Connect
+USB", "Disconnect USB", "Connect MIDI", "Disconnect MIDI") toggles each
+independently while running, and `Engine::connect_usb`/`disconnect_usb`/
+`connect_midi`/`disconnect_midi` do the same from code (`engine.rs`).
+
+The emulated ChipIdea USB device and the LPUART3 socket are always inherited
+by the QEMU child process, like the real chip's USB and UART silicon is
+always physically present; only whether the host side is actively bridging
+them is a runtime toggle. For USB, disconnecting sends the board model's own
+`connected = false` protocol message (the same one `enumerate()` sends
+`true` for on connect) and stops the 3 CoreMIDI ports, without closing the
+inherited socket, so a later connect reuses it instead of restarting QEMU.
+For DIN MIDI, which has no plug-detection on the real jack either, "hotplug"
+only means opening or closing the native `L6max MIDI In/Out Port`; the UART
+socket is drained continuously either way so the guest's transmit side never
+blocks, and bytes arriving while disconnected are simply dropped, like an
+unplugged cable.
 
 ### Host MIDI back ends
 
@@ -121,10 +143,11 @@ value 100 changes the firmware-driven channel-1 GPIO LED ring.
 ## Physical MIDI IN/OUT (DIN/TRS) jacks
 
 The main MCU's LPUART3 drives the physical MIDI IN/OUT (3.5 mm TRS) jacks.
-With `--usb` this is exposed as a fourth, independent host MIDI port,
-`L6max MIDI In/Out Port (Emulator)`, created regardless of USB MIDI
-interface state (unlike the three USB cables, it does not wait for
-enumeration). Zoom's own documentation says the jacks accept the same
+Run with `--midi` (independent of `--usb`) to connect this host MIDI port,
+`L6max MIDI In/Out Port (Emulator)`, as soon as the engine starts; it needs
+no USB MIDI interface state and does not wait for enumeration — see
+[Hotplug](#hotplug) above for toggling it, and the 3 USB ports, at runtime
+instead. Zoom's own documentation says the jacks accept the same
 mixer-control Control Change as the USB Mixer Control Port; see
 [the faders feature in the Zoomie editor repository](https://github.com/derekstavis/zoom-l6-control)
 for why this matters for wireless mixer control.
