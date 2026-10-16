@@ -18,7 +18,10 @@ consumed through the same shared-memory display interface used by the GUI.
 
 Shared engine options include `--firmware-dir`, `--logs`, `--state-dir`,
 `--volatile`, `--sd-image`, `--no-sd`, `--update-bootloader`, `--usb`,
-`--trace-sd`, `--timing paced|adaptive`, and `--gdb-socket`. Use `--help` for
+`--midi`, `--trace-sd`, `--timing paced|adaptive`, and `--gdb-socket`. `--usb`
+and `--midi` only pick the connected state at startup — both can be
+connected or disconnected at any time while running; see
+[Hotplug](usb.md#hotplug). Use `--help` for
 the option list. `L6_QEMU` supplies the QEMU executable when not passed explicitly.
 
 Development defaults resolve from the source checkout, independent of the
