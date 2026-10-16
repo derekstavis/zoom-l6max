@@ -212,7 +212,10 @@ a single extra port costs no new platform code.
     anything reachable in normal use.
   - Zoom's own documentation says the jacks accept the same mixer-control
     Control Change as the USB Mixer Control Port; that does not match this
-    emulator's current behavior in either direction.
+    emulator's current behavior in either direction, including with Mixer
+    Control via MIDI turned on through the editor's own session (identity,
+    global setting dump, then the `mixerControlViaMidi` parameter change) —
+    see `din-editor-mixer-smoke`.
 
 Only cable 1 does this. With `L6_MIDI_DIRECT=1 L6_MIDI_SEND_CABLE=<n>`,
 `midi-smoke` sends the same CC on another cable: on cable 1 the ring goes from
