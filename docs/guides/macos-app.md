@@ -30,8 +30,10 @@ not manufacturer authenticity.
 
 Choose **File → Use SD Card Folder…** (**⇧⌘O**) after selecting firmware.
 Select a folder containing the files and subdirectories you want on the card.
-The app imports it in the background, then restarts the guest with that card.
-Flash and RTC state are retained. The selected card is remembered per firmware.
+The app imports it in the background, then inserts it live into the running
+guest's SD slot — no restart, like inserting a card into the real slot. The
+selected card is remembered per firmware. **File → Eject SD Card** removes it
+the same way.
 
 The folder is copied into a private FAT card; it is not a live shared folder.
 Guest writes persist in that copy and never sync back into the original folder.
@@ -132,8 +134,9 @@ It imports the first package, waits for actual firmware display output, compares
 persisted NOR with the selected image, verifies restored selection, rejects an
 invalid package without disturbing the guest, and restarts into the second
 package's isolated state. With `L6_BUNDLE_SMOKE_SD_FOLDER`, it also imports a
-folder, restarts the guest, verifies actual SD read commands and restored card
-selection. Native file-picker presentation should also be checked
+folder, hotplug-inserts it with no further restart, and verifies actual SD
+read commands and restored card selection. Native file-picker presentation
+should also be checked
 interactively; the diagnostic supplies paths directly to the import/restart code.
 
 To check the actual native pickers without moving the host mouse:
