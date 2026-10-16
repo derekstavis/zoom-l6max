@@ -65,11 +65,11 @@ fn branch(from: u32, to: u32, link: bool) -> [u8; 4] {
     bytes
 }
 /// Patches in catalog order. Output never depends on the order of `--patch` flags.
-const PATCHES: [&str; 2] = ["knob-dialog", "midi-sync"];
+const PATCHES: [&str; 3] = ["knob-dialog", "midi-sync", "din-mixer-control"];
 const FIRST_PAYLOAD: u32 = 0x80108000;
 const SLOT_END: u32 = 0x801a2ff8;
 const USAGE: &str = "Usage: firmware-patch INPUT_UNPACKED_DIR OUTPUT_DIR [--patch NAME]... [--update-version FOUR_DIGITS]\n\
-Patches: knob-dialog (default), midi-sync. Repeat --patch to combine them.";
+Patches: knob-dialog (default), midi-sync, din-mixer-control. Repeat --patch to combine them.";
 
 struct Options {
     source: PathBuf,
