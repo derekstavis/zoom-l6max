@@ -10,6 +10,7 @@ in ignored output directories.
 | --- | --- | --- | --- |
 | [knob-dialog](knob-dialog/README.md) | Main firmware | Show channel encoder values using the stock notification renderer | `firmware-patch` |
 | [midi-sync](midi-sync/README.md) | Main firmware | Send the full channel mixer state as Control Change on request | `firmware-patch` |
+| [din-mixer-control](din-mixer-control/README.md) | Main firmware | Let the physical MIDI IN/OUT jacks control the mixer when Mixer Control via MIDI is on, as documented but never implemented | `firmware-patch` |
 
 ## Directory layout
 
