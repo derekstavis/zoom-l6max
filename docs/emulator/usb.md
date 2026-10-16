@@ -176,14 +176,18 @@ a single extra port costs no new platform code.
   bridge**, confirmed live: a message sent to the physical IN jack over a
   real editor session arrived byte-for-byte on the host's
   `L6max MIDI I/O Port` (USB cable 0, *not* the Mixer Control cable) — a
-  real, usable feature, just not mixer control. The OUT direction was
-  checked too: a mute-button press reliably echoes as Control Change on the
-  USB Mixer Control Port, but — confirmed by trace log, a GDB hardware write
-  watchpoint on the DATA register, and live polling of every candidate
-  firmware queue — produces nothing on this port's transmit line at all,
-  with `midiOutMode` on or off. One narrow special case, a fixed 3-byte Note
-  On sequence, is gated by the factory test jig's connect/disconnect
-  lifecycle, not by anything reachable in normal use. Zoom's documentation describing jack-based
+  real, usable feature, just not mixer control. The OUT direction was traced
+  live, step by step, all the way from a mute-button press through both
+  gating settings (`mixerControlViaMidi` and `midiOutMode`, confirmed as the
+  only two that matter), through two separate firmware queues, into the
+  transmit task, and into its one external transmit call — reached every
+  time with correct data — which never produces a DATA-register write. That
+  one remaining link is outside what this project's tools (Ghidra; QEMU's
+  gdbstub, data watchpoints only, no working instruction breakpoints on this
+  target) can resolve; the most likely explanation is a hardware
+  cable-presence check this emulator does not model. One narrow special
+  case, a fixed 3-byte Note On sequence, is gated by the factory test jig's
+  connect/disconnect lifecycle, not by anything reachable in normal use. Zoom's documentation describing jack-based
   mixer control does not match this firmware revision's code.
 
 Only cable 1 does this. With `L6_MIDI_DIRECT=1 L6_MIDI_SEND_CABLE=<n>`,
