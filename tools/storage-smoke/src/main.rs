@@ -43,7 +43,6 @@ fn until(
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut options = Options::parse()?;
     options.trace_sd = true;
-    options.host_midi = false;
     let h = Headless::start(&options)?;
     let inputs = h.engine.inputs.as_ref().unwrap();
     let mut frame = None;

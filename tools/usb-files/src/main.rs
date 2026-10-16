@@ -13,9 +13,7 @@ use std::{
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args = env::args_os().skip(1).collect::<Vec<_>>();
     let split=args.iter().position(|a|a=="--").ok_or("Usage: usb-files --sd-image CARD.img [engine options] -- list [DIR] | get SD_PATH HOST_PATH | put HOST_PATH SD_PATH")?;
-    let mut options = Options::parse_args(args[..split].iter().cloned())?;
-    options.usb_enabled = true;
-    options.host_midi = false;
+    let options = Options::parse_args(args[..split].iter().cloned())?;
     if options.sd_image.is_none() {
         return Err("--sd-image is required".into());
     }

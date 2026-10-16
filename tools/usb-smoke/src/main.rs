@@ -54,8 +54,9 @@ fn capture(
 }
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut options = Options::parse()?;
-    options.usb_enabled = true;
-    options.host_midi = false; // This diagnostic owns the USB host tokens.
+    // This diagnostic owns the USB host tokens; leave usb_enabled false so
+    // the engine does not also start the USB MIDI bridge (engine.usb is
+    // wired either way).
     options.trace_sd = options.sd_image.is_some();
     let engine = Engine::start(&options)?;
     let inputs = engine.inputs.as_ref().ok_or("QEMU required")?;
