@@ -284,11 +284,14 @@ impl Engine {
                 .arg("-gdb")
                 .arg(format!("unix:{},server=on,wait=off", socket.display()));
         }
-        if let Some(sd) = &sd {
-            command
-                .arg("-drive")
-                .arg(format!("if=sd,format=raw,id=l6-sd,file={}", sd.display()));
-        }
+        // The SD slot is always inherited, like the real card-edge connector
+        // is always present; whether a card is in it is a runtime QMP
+        // eject/insert (`Engine::eject_sd`/`insert_sd`), not a boot-time
+        // choice, unless `sd` already names one to start with.
+        command.arg("-drive").arg(match &sd {
+            Some(sd) => format!("if=sd,format=raw,id=l6-sd,file={}", sd.display()),
+            None => "if=sd,id=l6-sd".to_owned(),
+        });
         command.env_remove("L6_USB_FD");
         command.env_remove("L6_MAIN_MIDI_UART_FD");
         command.env_remove("L6_STATE_DIR");
@@ -397,6 +400,23 @@ impl Engine {
         self.din_midi
             .as_ref()
             .is_some_and(crate::din_midi::DinMidiBridge::is_connected)
+    }
+    /// Insert an SD card image, like inserting a card into the slot: no
+    /// restart needed, the slot is always present (see `Engine::start`).
+    pub fn insert_sd(&self, image: &std::path::Path) -> Result<(), String> {
+        self.management
+            .first()
+            .ok_or("no management connection")?
+            .insert_sd(image)
+            .map_err(|e| e.to_string())
+    }
+    /// Eject the SD card, like pulling it out of the slot.
+    pub fn eject_sd(&self) -> Result<(), String> {
+        self.management
+            .first()
+            .ok_or("no management connection")?
+            .eject_sd()
+            .map_err(|e| e.to_string())
     }
     pub fn connected(&mut self) -> bool {
         !self.children.is_empty()
