@@ -37,7 +37,12 @@ impl BundleSmoke {
             .ok_or("SD folder fixture is required")?;
         let image = panel.new_sd_image();
         l6max_host::demo_sd::from_directory(&image, folder).map_err(|e| e.to_string())?;
-        panel.options.trace_sd = true;
+        // One restart to turn on SD command tracing for this diagnostic's own
+        // verification below; the card itself is then hotplugged in without a
+        // further restart, which is the behavior under test.
+        let mut options = panel.options.clone();
+        options.trace_sd = true;
+        panel.restart_with_options(options)?;
         let previous = panel
             ._qemu
             .as_ref()
@@ -45,10 +50,10 @@ impl BundleSmoke {
             .ok_or("Start with selected firmware")?;
         panel.use_sd_image(image)?;
         #[cfg(target_os = "macos")]
-        if unsafe { libc::kill(previous as i32, 0) } == 0 {
-            return Err("Old QEMU survived SD card restart".into());
+        if unsafe { libc::kill(previous as i32, 0) } != 0 {
+            return Err("QEMU restarted on SD card hotplug insert".into());
         }
-        println!("PASS: imported SD folder and restarted guest without changing firmware state");
+        println!("PASS: imported SD folder and hotplug-inserted it without restarting the guest");
         self.stage = 3;
         Ok(())
     }
