@@ -108,3 +108,16 @@ Confirmed, both alone and combined with `knob-dialog` and `midi-sync`:
   of this patch).
 - Not run on an L6max. Update-package acceptance by the physical bootloader
   remains unverified.
+- The hook splices into the DIN UART receive path, not a clean function entry;
+  the veneer preserves every register, but the added call's stack depth in
+  that context has not been formally analyzed, only exercised cleanly in the
+  QEMU tests above. Emulator timing is not cycle-accurate to real silicon, so
+  the added instructions' effect on interrupt/ISR latency under worst-case
+  real-hardware conditions is unverified.
+- `0x8003f7c8` can now be reached from both the USB Mixer Control port and the
+  DIN jack. Combining with `midi-sync` is tested (see above), but near-
+  simultaneous calls from USB and DIN into the same handler have not been
+  stress-tested; if that handler is not reentrant-safe against two callers at
+  once, a transient glitch is possible (the same code path already runs from
+  USB alone in stock firmware, so this is added exposure, not a new failure
+  mode).
