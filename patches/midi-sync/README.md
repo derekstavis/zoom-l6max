@@ -88,6 +88,11 @@ numbers this yields.
   same getters without modifying them.
 - A combined image was verified to apply, to pass the CPU simulation, and to
   pass the QEMU smoke checks (knob modes, 80 sync replies).
+- `din-mixer-control` also calls into `0x8003f7c8` (from the DIN MIDI IN path
+  instead of the USB Mixer Control port). Combining is safe and tested: this
+  patch's own hook only intercepts its CC-127 broadcast request and otherwise
+  falls through to the stock handler unchanged, so the DIN path reaches the
+  same stock behavior regardless of whether this patch is present.
 
 ## Validation
 
@@ -95,6 +100,8 @@ numbers this yields.
 cargo test -p firmware-patch
 python3 -m pip install unicorn
 python3 patches/midi-sync/tests/cpu_sim.py firmware-midi-sync-v113/main_firmware.bin
+cargo run -p midi-smoke -- --firmware-dir firmware-midi-sync-v113 --volatile
+L6_MIDI_SYNC=1 cargo run -p midi-smoke -- --firmware-dir firmware-midi-sync-v113 --volatile
 ```
 
 `cpu_sim.py` executes the real patched hook, veneer and displaced prologue. It
@@ -104,10 +111,19 @@ right getter for each setting, that other messages reach the stock handler
 untouched, that the configured MIDI channel is honoured and that out-of-range
 values are skipped. Run against the unpatched image it fails, as it should.
 
+`midi-smoke` with `L6_MIDI_SYNC=1` boots the patched firmware in the emulator
+and sends a live CC 127 request over the real USB Mixer Control port,
+confirming 80 Control Change replies on the configured channel and CC map.
+Also confirmed combined with `knob-dialog` and `din-mixer-control` in one
+image: `midi-smoke` (sync unaffected), `din-editor-mixer-smoke` (its own fix
+unaffected), `input-smoke`, and `patched-update-smoke` (full SD update
+install) all pass against the three-patch build.
+
 ## Limitations
 
-- Not run on an L6max or in QEMU. The CPU simulation does not model the USB
-  stack, the CC map, the output gating or timing.
+- Run in QEMU, both alone and combined with `knob-dialog` and
+  `din-mixer-control`; not run on an L6max. Emulator timing is not
+  cycle-accurate to real silicon.
 - Only the 80 continuous settings are synced. Button-type values (identifiers
   `0x50`-`0x5D`) are not, because their state sources are not mapped.
 - The request must arrive on the configured MIDI channel, and the stock
