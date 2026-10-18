@@ -100,9 +100,18 @@ numbers this yields.
 
 ## Resources and combining
 
-- No RAM is reserved, no heap is used and no timer or task is created. The
-  hook runs in the caller's context and uses a small stack frame.
-- The payload is 350 bytes (rust-lld; sizes vary slightly with the linker).
+- No RAM is reserved (the linker script asserts `SIZEOF(.state) == 0` and the
+  build fails if that's violated), no heap is used and no timer or task is
+  created. The hook runs in the caller's context and uses a small stack
+  frame: `broadcast_state`'s locals are a handful of scalars in a bounded,
+  non-recursive loop (94 iterations total, fixed at compile time), not a
+  buffer that grows with the broadcast size.
+- The payload is 1,179 bytes (rust-lld; grew from 350 bytes when MUTE and the
+  6 globals were added; sizes vary slightly with the linker). The combined
+  three-patch image (knob-dialog + midi-sync + din-mixer-control) uses 9,263
+  bytes total, well inside the builder's enforced payload region
+  (`0x80108000`-`0x801a2ff8`, checked at build time; it refuses to place a
+  payload over non-erased reserved bytes).
 - Combining with `knob-dialog` is supported by the builder: payloads are placed
   back to back from `0x80108000`, in catalog order (knob-dialog first), each
   16-byte aligned. It refuses overlapping hook regions. The two patches share
@@ -161,6 +170,21 @@ against the combined build. `input-smoke` was not re-run this pass.
 - A full dump is 94 three-byte messages (282 bytes) in the 2048-byte transmit
   ring, which the stock queue writes without a full check. A host that does not
   read the port can lose older unread bytes, as with stock traffic.
+- The broadcast is ~17% longer than before MUTE/EFX TYPE/COMPRESSOR were
+  added (94 getter-and-send iterations instead of 80), so the hook now
+  occupies its caller's context for proportionally longer per request.
+  Whether that caller's context can tolerate a longer synchronous call here
+  (task vs. ISR, and the effect on interrupt latency if it's the latter) was
+  never established even for the original 80-message version — the
+  [din-mixer-control patch](../din-mixer-control/README.md#limitations)
+  flags the same open question for its own, differently-shaped hook. This
+  doesn't newly establish it either way, it just makes an existing
+  unverified window bigger.
+- All three new getters (MUTE `0x8000b0c0`, EFX TYPE `0x8000b270`,
+  COMPRESSOR `0x8000b1c0`) decompile to single-instruction, unguarded memory
+  reads with no locking, no RAM writes and no calls of their own — the same
+  shape as the ten getters already in production use, so they add no new
+  category of risk, only new addresses of an already-trusted shape.
 - A fader surface that echoes its own movement back can form a feedback loop
   with the stock receive path; use the surface's motor-feedback suppression.
 - Values are control positions 0-127, equal to what the stock firmware sends on
