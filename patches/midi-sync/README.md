@@ -172,14 +172,27 @@ against the combined build. `input-smoke` was not re-run this pass.
   read the port can lose older unread bytes, as with stock traffic.
 - The broadcast is ~17% longer than before MUTE/EFX TYPE/COMPRESSOR were
   added (94 getter-and-send iterations instead of 80), so the hook now
-  occupies its caller's context for proportionally longer per request.
-  Whether that caller's context can tolerate a longer synchronous call here
-  (task vs. ISR, and the effect on interrupt latency if it's the latter) was
-  never established even for the original 80-message version — the
-  [din-mixer-control patch](../din-mixer-control/README.md#limitations)
-  flags the same open question for its own, differently-shaped hook. This
-  doesn't newly establish it either way, it just makes an existing
-  unverified window bigger.
+  occupies its caller's context for proportionally longer per request. This
+  used to be an open question; it's now resolved for the normal trigger
+  path. A sync request arriving over the USB Mixer Control port runs inside
+  the `MidiControlMsg` FreeRTOS task, confirmed as the only caller of the
+  hooked function (`0x8003f7c8`) — not inferred from a name, a direct
+  call-site search found exactly 4 call sites and all 4 are inside that one
+  task's own code. That task's priority (18) sits strictly below every
+  audio-capture and recording-related task found (audio ADC sampling: 27;
+  audio timing compensation: 26; recorder/sampler file I/O: 28). FreeRTOS's
+  preemptive scheduler guarantees a strictly-higher-priority task always
+  preempts a lower one, so this broadcast — run from the normal USB trigger,
+  regardless of how long it takes — **cannot delay audio capture or
+  recording**, categorically, not just probably. One narrower case remains:
+  a sync request arriving over the DIN jack (forwarded by the
+  [din-mixer-control patch](../din-mixer-control/README.md)) runs inside a
+  different task that ties in priority with audio ADC sampling specifically
+  (both 27) rather than sitting below it, which bounds (but doesn't fully
+  rule out) a brief round-robin scheduling delay to audio sampling on that
+  path only — recording is still unaffected either way, since the
+  recorder/sampler file I/O task (28) outranks both. See the private
+  research companion for the full task roster and evidence.
 - All three new getters (MUTE `0x8000b0c0`, EFX TYPE `0x8000b270`,
   COMPRESSOR `0x8000b1c0`) decompile to single-instruction, unguarded memory
   reads with no locking, no RAM writes and no calls of their own — the same
