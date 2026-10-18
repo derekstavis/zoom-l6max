@@ -36,19 +36,33 @@ blue-button setting use eight consecutive controllers:
 
 Values are 0-127 control positions, the same values the knob popup reads. A
 channel-1 LEVEL change therefore sends controller `51`. Identifiers `50`-`5D`
-are button-type values. The stock firmware only sends changes; it does not
-report values set before a controller connected.
+are button-type values:
+
+| Setting | Identifier | Default controller |
+| --- | --- | --- |
+| MUTE, channels 1-8 | `50`-`57` | `5D`, `5E`, `5F`, `66`-`6A` |
+| CH 5 MONO x2 | `58` | `6D` |
+| CH 6 MONO x2 | `59` | `6E` |
+| USB 1/2 | `5A` | `71` |
+| USB 3/4 | `5B` | `72` |
+| EFX TYPE | `5C` | `75` |
+| COMPRESSOR | `5D` | `77` |
+
+The stock firmware only sends changes; it does not report values set before a
+controller connected.
 
 ## State request (midi-sync patch)
 
 | Message | Effect |
 | --- | --- |
-| Control Change 127, value 64-127, on the configured MIDI channel | Device sends all 80 continuous values as Control Change using the current CC map |
+| Control Change 127, value 64-127, on the configured MIDI channel | Device sends all 80 continuous values, then 4 button-type globals (CH 5 MONO x2, CH 6 MONO x2, USB 1/2, USB 3/4 — identifiers `58`-`5B`), as Control Change using the current CC map |
 
 Controller 127 is outside the assignable range, so it cannot collide with a
 mixer controller. Values below 64 are ignored, so a button release does nothing.
 Replies use the same port, channel and CC map as live changes. Replies to a
-request are sent in channel order, then setting order within a channel.
+request are sent in channel order then setting order within a channel, then
+the 4 globals in identifier order. MUTE (`50`-`57`), EFX TYPE (`5C`) and
+COMPRESSOR (`5D`) are not included: their state sources remain unmapped.
 
 ## Evidence and limits
 

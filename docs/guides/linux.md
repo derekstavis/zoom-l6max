@@ -112,7 +112,7 @@ L6_MIDI_SYNC=1 cargo run -p midi-smoke -- --qemu "$QEMU" --firmware-dir firmware
 
 `QEMU` is the path of the built `qemu-system-arm`. Without `L6_MIDI_SYNC`,
 `midi-smoke` verifies the knob CC and the host CC to LED path as on macOS. With
-it, the check sends CC 127 and requires 80 Control Change replies, which only a
+it, the check sends CC 127 and requires 84 Control Change replies, which only a
 midi-sync image produces.
 
 ## AppImage

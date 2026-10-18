@@ -72,7 +72,19 @@ below, drops anything above 127, and calls `0x8003f9b0(identifier, value)`.
 | PAN | `0x8000b1d0` | `0x40` |
 | LEVEL | `0x8000b0b0` | `0x48` |
 
-Identifier = base + channel index (0-7). See the
+Identifier = base + channel index (0-7). After the 80 per-channel values, four
+single global toggles follow, each sent once (not per channel): the patch
+reads a fixed slot of the same per-slot flag table `0x8000b190` the knob patch
+never needed, and calls the same sender with a fixed identifier.
+
+| Setting | Getter | Slot | Identifier |
+| --- | --- | --- | --- |
+| CH 5 MONO x2 | `0x8000b190` | `4` | `0x58` |
+| CH 6 MONO x2 | `0x8000b190` | `6` | `0x59` |
+| USB 1/2 | `0x8000b190` | `8` | `0x5A` |
+| USB 3/4 | `0x8000b190` | `10` | `0x5B` |
+
+See the
 [mixer MIDI reference](../../docs/firmware/protocols/mixer-midi.md) for the CC
 numbers this yields.
 
@@ -106,10 +118,11 @@ L6_MIDI_SYNC=1 cargo run -p midi-smoke -- --firmware-dir firmware-midi-sync-v113
 
 `cpu_sim.py` executes the real patched hook, veneer and displaced prologue. It
 stubs only the getters, the channel mapper, the stock sender and the stock
-handler body. It checks that a request sends 80 distinct identifiers with the
-right getter for each setting, that other messages reach the stock handler
-untouched, that the configured MIDI channel is honoured and that out-of-range
-values are skipped. Run against the unpatched image it fails, as it should.
+handler body. It checks that a request sends 84 distinct identifiers — the 80
+per-channel values plus the 4 global toggles below — with the right getter and
+argument for each, that other messages reach the stock handler untouched,
+that the configured MIDI channel is honoured and that out-of-range values are
+skipped. Run against the unpatched image it fails, as it should.
 
 `midi-smoke` with `L6_MIDI_SYNC=1` boots the patched firmware in the emulator
 and sends a live CC 127 request over the real USB Mixer Control port,
@@ -117,15 +130,20 @@ confirming 80 Control Change replies on the configured channel and CC map.
 Also confirmed combined with `knob-dialog` and `din-mixer-control` in one
 image: `midi-smoke` (sync unaffected), `din-editor-mixer-smoke` (its own fix
 unaffected), `input-smoke`, and `patched-update-smoke` (full SD update
-install) all pass against the three-patch build.
+install) all pass against the three-patch build. This predates the 4 global
+toggles, which are `cpu_sim.py`-verified only — `midi-smoke` has not yet been
+re-run to confirm the 84-reply count live in QEMU.
 
 ## Limitations
 
 - Run in QEMU, both alone and combined with `knob-dialog` and
   `din-mixer-control`; not run on an L6max. Emulator timing is not
   cycle-accurate to real silicon.
-- Only the 80 continuous settings are synced. Button-type values (identifiers
-  `0x50`-`0x5D`) are not, because their state sources are not mapped.
+- The 80 continuous settings and 4 of the 14 button-type values (identifiers
+  `0x50`-`0x5D`) are synced: CH 5 MONO x2, CH 6 MONO x2, USB 1/2 and USB 3/4
+  (`0x58`-`0x5B`). The other 10 — MUTE on all 8 channels (`0x50`-`0x57`), EFX
+  TYPE (`0x5C`) and COMPRESSOR (`0x5D`) — are not, because their state sources
+  remain unmapped.
 - The request must arrive on the configured MIDI channel, and the stock
   receive gating applies. Whether `mixerControlViaMidi` gates the parser before
   this handler is not established.
