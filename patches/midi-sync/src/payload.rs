@@ -26,8 +26,8 @@ unsafe fn stored_value(source: Source, audio: u32) -> u32 {
     }
 }
 
-/// Sends every setting of every channel through the stock sender, which applies
-/// the user's CC map, MIDI channel and output gating.
+/// Sends every setting of every channel, then the global toggles, through the
+/// stock sender, which applies the user's CC map, MIDI channel and output gating.
 unsafe fn broadcast_state() {
     unsafe {
         for channel in 0..CHANNELS {
@@ -44,6 +44,13 @@ unsafe fn broadcast_state() {
                     call2(MIDI_SEND_CC, id as u32, raw);
                 }
             }
+        }
+        for toggle in GLOBAL_TOGGLES {
+            let raw = call1(MIXER_GET_CHANNEL_FLAG, toggle.slot);
+            if raw > 127 {
+                continue;
+            }
+            call2(MIDI_SEND_CC, toggle.id as u32, raw);
         }
     }
 }
