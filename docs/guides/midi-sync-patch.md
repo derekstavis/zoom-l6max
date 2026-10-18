@@ -17,8 +17,9 @@ experiment, not an official ZOOM release.
    [mixer MIDI](../firmware/protocols/mixer-midi.md#controller-numbers).
 2. Have the controller send Control Change **127**, value 127, on that channel
    when it connects, or from a button.
-3. The L6max replies with 80 Control Change messages (eight channels, ten
-   settings each). Map them to fader travel, encoder rings or both.
+3. The L6max replies with 84 Control Change messages: eight channels of ten
+   settings each, then 4 global toggles (CH 5 MONO x2, CH 6 MONO x2, USB 1/2,
+   USB 3/4). Map them to fader travel, encoder rings, LEDs or any combination.
 
 Send nothing else special: ordinary Control Change keeps working as before.
 
@@ -53,7 +54,8 @@ Hook details, resources and limits are in the
 ## Limits
 
 - Supported main image: 1.10 only (SHA-256 in the reference).
-- Only the 80 continuous values are synced, not button states.
+- The 80 continuous values and 4 of 14 button-type states are synced (CH 5/6
+  MONO x2, USB 1/2, USB 3/4). MUTE and the remaining two button states are not.
 - The request must use the configured MIDI channel.
 - Fader surfaces that echo their own movement can feed back; enable their
   motor-feedback suppression.

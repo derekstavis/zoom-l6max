@@ -4,7 +4,8 @@
 //! The stock Control Change sender takes a parameter identifier, which the
 //! user's CC map (editor message `31 0E`) translates into a controller number.
 //! Identifiers form ten groups of eight physical channels, one group per blue
-//! button setting.
+//! button setting (`SOURCES`/`GROUP_BASE`), plus four single global toggles
+//! (`GLOBAL_TOGGLES`) that aren't per channel at all.
 
 /// Blue-button settings in the order the encoder dispatcher numbers them.
 pub const MODES: usize = 10;
@@ -63,6 +64,27 @@ pub fn is_sync_request(status: u8, controller: u8, value: u8, configured_channel
         && value >= SYNC_REQUEST_MIN_VALUE
 }
 
+/// A button-type parameter that is a single global toggle rather than one of
+/// eight per-channel values — so, unlike `SOURCES`, each entry here is sent
+/// exactly once per sync, not once per physical channel. `slot` is the fixed
+/// index `MIXER_GET_CHANNEL_FLAG` (in `firmware.rs`) expects; `id` is the
+/// parameter identifier the stock sender expects, matching `0x54 + <physical
+/// button index>` the same way the per-channel groups match `GROUP_BASE +
+/// <channel>`. Confirmed for these four; see `firmware.rs` for what's still open.
+pub struct GlobalToggle {
+    pub slot: u32,
+    pub id: u8,
+}
+
+/// In physical button order (4, 5, 6, 7), which is also ascending identifier
+/// order: CH 5 MONO x2, CH 6 MONO x2, USB 1/2, USB 3/4.
+pub const GLOBAL_TOGGLES: [GlobalToggle; 4] = [
+    GlobalToggle { slot: 4, id: 0x58 },
+    GlobalToggle { slot: 6, id: 0x59 },
+    GlobalToggle { slot: 8, id: 0x5A },
+    GlobalToggle { slot: 10, id: 0x5B },
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -89,6 +111,18 @@ mod tests {
         }
         assert_eq!(parameter_id(MODES, 0), None);
         assert_eq!(parameter_id(0, CHANNELS), None);
+    }
+
+    #[test]
+    fn global_toggles_have_unique_identifiers_outside_the_per_channel_range() {
+        let mut seen = [false; 0x5e];
+        for toggle in GLOBAL_TOGGLES {
+            let id = toggle.id as usize;
+            assert!(id >= 0x50 && id < 0x5e, "out of the button-type range: {id:#x}");
+            assert!(!seen[id], "duplicate identifier: {id:#x}");
+            seen[id] = true;
+            assert!(toggle.slot <= MAX_MIXER_CHANNEL, "slot out of range: {}", toggle.slot);
+        }
     }
 
     #[test]
