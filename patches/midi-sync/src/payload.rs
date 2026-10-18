@@ -22,12 +22,16 @@ unsafe fn stored_value(source: Source, audio: u32) -> u32 {
             Source::SubMix => call1(MIXER_GET_SUBMIX, audio),
             Source::Pan => call1(MIXER_GET_PAN, audio),
             Source::Level => call1(MIXER_GET_LEVEL, audio),
+            Source::Mute => call1(MIXER_GET_MUTE, audio),
         }
     }
 }
 
-/// Sends every setting of every channel, then the global toggles, through the
-/// stock sender, which applies the user's CC map, MIDI channel and output gating.
+/// Sends every setting of every channel (now including MUTE), the four
+/// slot-based global toggles, and EFX TYPE/COMPRESSOR (each its own getter,
+/// not slot-based), through the stock sender, which applies the user's CC
+/// map, MIDI channel and output gating. Covers every one of the stock
+/// firmware's 94 parameter identifiers.
 unsafe fn broadcast_state() {
     unsafe {
         for channel in 0..CHANNELS {
@@ -51,6 +55,14 @@ unsafe fn broadcast_state() {
                 continue;
             }
             call2(MIDI_SEND_CC, toggle.id as u32, raw);
+        }
+        let efx_type = call1(MIXER_GET_EFX_TYPE, 0);
+        if efx_type <= 127 {
+            call2(MIDI_SEND_CC, EFX_TYPE_ID as u32, efx_type);
+        }
+        let compressor = call0(MIXER_GET_COMPRESSOR);
+        if compressor <= 127 {
+            call2(MIDI_SEND_CC, COMPRESSOR_ID as u32, compressor);
         }
     }
 }

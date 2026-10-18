@@ -3,12 +3,18 @@
 //!
 //! The stock Control Change sender takes a parameter identifier, which the
 //! user's CC map (editor message `31 0E`) translates into a controller number.
-//! Identifiers form ten groups of eight physical channels, one group per blue
-//! button setting (`SOURCES`/`GROUP_BASE`), plus four single global toggles
-//! (`GLOBAL_TOGGLES`) that aren't per channel at all.
+//! Identifiers form eleven groups of eight physical channels — the ten blue-
+//! button settings plus MUTE, which turned out to follow the identical
+//! per-channel shape once its getter was found (`SOURCES`/`GROUP_BASE`) — plus
+//! six single global toggles that aren't per channel at all: four slot-based
+//! ones (`GLOBAL_TOGGLES`) and EFX TYPE / COMPRESSOR, which read through
+//! different getter functions entirely (handled directly in `payload.rs`).
+//! Together these 11×8 + 6 = 94 identifiers are every slot the stock firmware
+//! has (`controlChangeSlotCount` in the editor protocol) — full parity.
 
-/// Blue-button settings in the order the encoder dispatcher numbers them.
-pub const MODES: usize = 10;
+/// Blue-button settings in the order the encoder dispatcher numbers them,
+/// plus MUTE (index 10) once its getter was found.
+pub const MODES: usize = 11;
 /// Physical channels with a channel encoder.
 pub const CHANNELS: usize = 8;
 /// Controller 127 can never be assigned in the CC map (assignments above 119
@@ -20,7 +26,7 @@ pub const SYNC_REQUEST_MIN_VALUE: u8 = 64;
 pub const MAX_MIXER_CHANNEL: u32 = 11;
 
 /// First parameter identifier of each setting's group of eight channels.
-const GROUP_BASE: [u8; MODES] = [0x00, 0x08, 0x10, 0x18, 0x28, 0x30, 0x38, 0x20, 0x40, 0x48];
+const GROUP_BASE: [u8; MODES] = [0x00, 0x08, 0x10, 0x18, 0x28, 0x30, 0x38, 0x20, 0x40, 0x48, 0x50];
 
 /// Which stock getter, and with which extra argument, reads a setting.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -32,6 +38,7 @@ pub enum Source {
     SubMix,
     Pan,
     Level,
+    Mute,
 }
 
 /// Getter for each setting; matches the order of the blue-button titles.
@@ -46,6 +53,7 @@ pub const SOURCES: [Source; MODES] = [
     Source::SubMix,
     Source::Pan,
     Source::Level,
+    Source::Mute,
 ];
 
 /// Identifier the stock sender expects for `mode` on physical `channel`.
@@ -85,17 +93,25 @@ pub const GLOBAL_TOGGLES: [GlobalToggle; 4] = [
     GlobalToggle { slot: 10, id: 0x5B },
 ];
 
+/// EFX TYPE: identifier `0x5C`, read through `MIXER_GET_EFX_TYPE` (a
+/// different getter, with a different shape, than `GLOBAL_TOGGLES` above —
+/// handled directly in `payload.rs` rather than forced into that table).
+pub const EFX_TYPE_ID: u8 = 0x5C;
+/// COMPRESSOR: identifier `0x5D`, read through `MIXER_GET_COMPRESSOR`. Same
+/// reasoning as `EFX_TYPE_ID`.
+pub const COMPRESSOR_ID: u8 = 0x5D;
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn identifiers_are_unique_and_cover_eighty_parameters() {
-        let mut seen = [false; 0x50];
+    fn identifiers_are_unique_and_cover_eighty_eight_parameters() {
+        let mut seen = [false; 0x58];
         for mode in 0..MODES {
             for channel in 0..CHANNELS {
                 let id = parameter_id(mode, channel).unwrap() as usize;
-                assert!(id < 0x50 && !seen[id], "duplicate or out of range: {id:#x}");
+                assert!(id < 0x58 && !seen[id], "duplicate or out of range: {id:#x}");
                 seen[id] = true;
             }
         }
@@ -104,7 +120,7 @@ mod tests {
 
     #[test]
     fn identifiers_match_the_stock_dispatch_table() {
-        let first = [0x00, 0x08, 0x10, 0x18, 0x28, 0x30, 0x38, 0x20, 0x40, 0x48];
+        let first = [0x00, 0x08, 0x10, 0x18, 0x28, 0x30, 0x38, 0x20, 0x40, 0x48, 0x50];
         for (mode, id) in first.into_iter().enumerate() {
             assert_eq!(parameter_id(mode, 0), Some(id));
             assert_eq!(parameter_id(mode, 7), Some(id + 7));
@@ -118,11 +134,14 @@ mod tests {
         let mut seen = [false; 0x5e];
         for toggle in GLOBAL_TOGGLES {
             let id = toggle.id as usize;
-            assert!(id >= 0x50 && id < 0x5e, "out of the button-type range: {id:#x}");
+            assert!(id >= 0x58 && id < 0x5e, "out of the global range: {id:#x}");
             assert!(!seen[id], "duplicate identifier: {id:#x}");
             seen[id] = true;
             assert!(toggle.slot <= MAX_MIXER_CHANNEL, "slot out of range: {}", toggle.slot);
         }
+        assert_eq!(EFX_TYPE_ID, 0x5C);
+        assert_eq!(COMPRESSOR_ID, 0x5D);
+        assert!(!seen[EFX_TYPE_ID as usize] && !seen[COMPRESSOR_ID as usize], "collides with a slot-based global");
     }
 
     #[test]

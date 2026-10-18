@@ -55,14 +55,14 @@ controller connected.
 
 | Message | Effect |
 | --- | --- |
-| Control Change 127, value 64-127, on the configured MIDI channel | Device sends all 80 continuous values, then 4 button-type globals (CH 5 MONO x2, CH 6 MONO x2, USB 1/2, USB 3/4 — identifiers `58`-`5B`), as Control Change using the current CC map |
+| Control Change 127, value 64-127, on the configured MIDI channel | Device sends all 94 parameter identifiers — the 10 continuous settings and MUTE for every channel, then the 6 button-type globals (CH 5 MONO x2, CH 6 MONO x2, USB 1/2, USB 3/4, EFX TYPE, COMPRESSOR — identifiers `58`-`5D`) — as Control Change using the current CC map |
 
 Controller 127 is outside the assignable range, so it cannot collide with a
 mixer controller. Values below 64 are ignored, so a button release does nothing.
 Replies use the same port, channel and CC map as live changes. Replies to a
-request are sent in channel order then setting order within a channel, then
-the 4 globals in identifier order. MUTE (`50`-`57`), EFX TYPE (`5C`) and
-COMPRESSOR (`5D`) are not included: their state sources remain unmapped.
+request are sent in channel order then setting order within a channel
+(MUTE last, identifier `50`-`57`), then the 6 globals in identifier order.
+Full coverage: every one of the 94 stock parameter identifiers is included.
 
 ## Evidence and limits
 
