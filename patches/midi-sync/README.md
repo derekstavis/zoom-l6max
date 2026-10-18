@@ -57,10 +57,12 @@ at offsets 5 and 6. The patch compares the status with the configured channel
 from the settings lookup at `0x8003feb0`, so it matches what the stock handler
 would accept.
 
-Broadcast order is physical channel 1-8, and within each channel the ten
-blue-button settings. For each, the patch asks the channel mapper
-`0x800564b0` for the mixer channel, reads the stored value with the getter
-below, drops anything above 127, and calls `0x8003f9b0(identifier, value)`.
+Broadcast order is physical channel 1-8, and within each channel the eleven
+blue-button settings (the original ten, plus MUTE — found after the initial
+release, see [Limitations](#limitations)). For each, the patch asks the
+channel mapper `0x800564b0` for the mixer channel, reads the stored value
+with the getter below, drops anything above 127, and calls
+`0x8003f9b0(identifier, value)`.
 
 | Setting | Getter (as in the [knob patch](../knob-dialog/src/firmware.rs)) | Identifier base |
 | --- | --- | --- |
@@ -71,20 +73,28 @@ below, drops anything above 127, and calls `0x8003f9b0(identifier, value)`.
 | EFX | `0x8000b0f0` | `0x38` |
 | PAN | `0x8000b1d0` | `0x40` |
 | LEVEL | `0x8000b0b0` | `0x48` |
+| MUTE | `0x8000b0c0` | `0x50` |
 
-Identifier = base + channel index (0-7). After the 80 per-channel values, four
-single global toggles follow, each sent once (not per channel): the patch
-reads a fixed slot of the same per-slot flag table `0x8000b190` the knob patch
-never needed, and calls the same sender with a fixed identifier.
+Identifier = base + channel index (0-7). MUTE's getter sits in the address
+gap between `LEVEL` (`0x8000b0b0`) and `EFX` (`0x8000b0f0`); its setter is
+`0x8000bb90` (not called by this patch, which only reads state).
 
-| Setting | Getter | Slot | Identifier |
+After the 88 per-channel values, six single globals follow, each sent once
+(not per channel). Four read a fixed slot of a per-slot flag table
+`0x8000b190` the knob patch never needed; the other two (EFX TYPE,
+COMPRESSOR) read through their own, differently-shaped getters.
+
+| Setting | Getter | Argument | Identifier |
 | --- | --- | --- | --- |
-| CH 5 MONO x2 | `0x8000b190` | `4` | `0x58` |
-| CH 6 MONO x2 | `0x8000b190` | `6` | `0x59` |
-| USB 1/2 | `0x8000b190` | `8` | `0x5A` |
-| USB 3/4 | `0x8000b190` | `10` | `0x5B` |
+| CH 5 MONO x2 | `0x8000b190` | slot `4` | `0x58` |
+| CH 6 MONO x2 | `0x8000b190` | slot `6` | `0x59` |
+| USB 1/2 | `0x8000b190` | slot `8` | `0x5A` |
+| USB 3/4 | `0x8000b190` | slot `10` | `0x5B` |
+| EFX TYPE | `0x8000b270` | bus `0` | `0x5C` |
+| COMPRESSOR | `0x8000b1c0` | none | `0x5D` |
 
-See the
+This is all 94 of the stock firmware's parameter identifiers
+(`controlChangeSlotCount` in the editor protocol) — full coverage. See the
 [mixer MIDI reference](../../docs/firmware/protocols/mixer-midi.md) for the CC
 numbers this yields.
 
@@ -99,7 +109,7 @@ numbers this yields.
   no hook, no data and no firmware state; both read mixer values through the
   same getters without modifying them.
 - A combined image was verified to apply, to pass the CPU simulation, and to
-  pass the QEMU smoke checks (knob modes, 80 sync replies).
+  pass the QEMU smoke checks (knob modes, 94 sync replies).
 - `din-mixer-control` also calls into `0x8003f7c8` (from the DIN MIDI IN path
   instead of the USB Mixer Control port). Combining is safe and tested: this
   patch's own hook only intercepts its CC-127 broadcast request and otherwise
@@ -118,36 +128,37 @@ L6_MIDI_SYNC=1 cargo run -p midi-smoke -- --firmware-dir firmware-midi-sync-v113
 
 `cpu_sim.py` executes the real patched hook, veneer and displaced prologue. It
 stubs only the getters, the channel mapper, the stock sender and the stock
-handler body. It checks that a request sends 84 distinct identifiers — the 80
-per-channel values plus the 4 global toggles below — with the right getter and
-argument for each, that other messages reach the stock handler untouched,
-that the configured MIDI channel is honoured and that out-of-range values are
-skipped. Run against the unpatched image it fails, as it should.
+handler body. It checks that a request sends 94 distinct identifiers — the 88
+per-channel values (ten original settings plus MUTE) plus the 6 globals below
+— with the right getter and argument for each, that other messages reach the
+stock handler untouched, that the configured MIDI channel is honoured and
+that out-of-range values are skipped. Run against the unpatched image it
+fails, as it should.
 
 `midi-smoke` with `L6_MIDI_SYNC=1` boots the patched firmware in the emulator
 and sends a live CC 127 request over the real USB Mixer Control port,
-confirming 80 Control Change replies on the configured channel and CC map.
-Also confirmed combined with `knob-dialog` and `din-mixer-control` in one
-image: `midi-smoke` (sync unaffected), `din-editor-mixer-smoke` (its own fix
-unaffected), `input-smoke`, and `patched-update-smoke` (full SD update
-install) all pass against the three-patch build. This predates the 4 global
-toggles, which are `cpu_sim.py`-verified only — `midi-smoke` has not yet been
-re-run to confirm the 84-reply count live in QEMU.
+confirming 94 Control Change replies on the configured channel and CC map —
+re-run and reconfirmed (previously 84, before MUTE/EFX TYPE/COMPRESSOR were
+found) against both this patch alone and the three-patch combined build
+(`knob-dialog` + `midi-sync` + `din-mixer-control`). Also reconfirmed on the
+combined build: `din-editor-mixer-smoke` (both with and without
+`L6_DIN_MIXER_CONTROL_FIXED=1`, matching its own documented expectations) and
+the non-sync `midi-smoke` knob check. `patched-update-smoke` (full SD-card update-install flow) was also reconfirmed
+against the combined build. `input-smoke` was not re-run this pass.
 
 ## Limitations
 
 - Run in QEMU, both alone and combined with `knob-dialog` and
   `din-mixer-control`; not run on an L6max. Emulator timing is not
   cycle-accurate to real silicon.
-- The 80 continuous settings and 4 of the 14 button-type values (identifiers
-  `0x50`-`0x5D`) are synced: CH 5 MONO x2, CH 6 MONO x2, USB 1/2 and USB 3/4
-  (`0x58`-`0x5B`). The other 10 — MUTE on all 8 channels (`0x50`-`0x57`), EFX
-  TYPE (`0x5C`) and COMPRESSOR (`0x5D`) — are not, because their state sources
-  remain unmapped.
+- All 94 of the stock firmware's parameter identifiers are synced — the 10
+  original continuous settings, MUTE (found after the initial release), and
+  all 6 button-type globals (CH 5/6 MONO x2, USB 1/2, USB 3/4, EFX TYPE,
+  COMPRESSOR). Full coverage, nothing left unmapped.
 - The request must arrive on the configured MIDI channel, and the stock
   receive gating applies. Whether `mixerControlViaMidi` gates the parser before
   this handler is not established.
-- A full dump is 80 three-byte messages (240 bytes) in the 2048-byte transmit
+- A full dump is 94 three-byte messages (282 bytes) in the 2048-byte transmit
   ring, which the stock queue writes without a full check. A host that does not
   read the port can lose older unread bytes, as with stock traffic.
 - A fader surface that echoes its own movement back can form a feedback loop

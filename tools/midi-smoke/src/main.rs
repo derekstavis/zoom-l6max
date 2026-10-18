@@ -4,7 +4,7 @@
 //! Linux) unless `L6_MIDI_DIRECT=1`, which speaks USB MIDI straight to the
 //! emulated device and needs no host MIDI system or `/dev/snd/seq` access.
 //! `L6_MIDI_SYNC=1` also exercises the midi-sync patch: CC 127 must be answered
-//! with 84 Control Changes (needs a patched image).
+//! with 94 Control Changes (needs a patched image).
 mod client;
 
 use client::{DirectClient, MidiClient, wait_for};
@@ -53,11 +53,11 @@ fn run() -> Result<(), String> {
         let mut replies = 0;
         wait_for(&mut *client, Duration::from_secs(20), idle, |_| {
             replies += 1;
-            replies == 84
+            replies == 94
         })?;
         println!("midi-sync: {replies} Control Change replies to CC 127");
-        if replies != 84 {
-            return Err(format!("expected 84 CC replies, saw {replies}"));
+        if replies != 94 {
+            return Err(format!("expected 94 CC replies, saw {replies}"));
         }
     }
     client.release();
