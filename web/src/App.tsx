@@ -116,6 +116,14 @@ export default function App() {
                   <p className="text-muted-foreground text-sm leading-relaxed">
                     {patch.description}
                   </p>
+                  {patch.demoGif && (
+                    <img
+                      src={`${import.meta.env.BASE_URL}demos/${patch.demoGif}`}
+                      alt={`${patch.title} demo`}
+                      className="mt-1 w-fit max-w-full rounded-md border"
+                      loading="lazy"
+                    />
+                  )}
                   <a
                     className="text-muted-foreground w-fit text-xs underline underline-offset-3 hover:text-foreground"
                     href={patch.readmeUrl}
