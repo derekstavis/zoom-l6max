@@ -30,8 +30,8 @@ cargo install wasm-bindgen-cli --version <version from Cargo.lock> --locked
 npm run build
 ```
 
-Output goes to `dist/`, rooted at the `/zoom-l6max/` base path (see
-`vite.config.ts`) for GitHub Pages.
+Output goes to `dist/`, rooted at `/` (see `vite.config.ts`) for GitHub
+Pages, served from the custom domain `l6-patches.stavis.me`.
 
 ## Stack
 
