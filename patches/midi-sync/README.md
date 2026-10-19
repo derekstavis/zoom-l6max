@@ -1,10 +1,25 @@
 # Read mixer values over MIDI
 
-Controllers on the mixer-control MIDI port (for example motorized-fader
-surfaces) can ask the L6max to send its whole channel mixer state. The stock
-firmware already sends a Control Change for each live change; it never sends
-values that existed before the controller connected. This patch adds that
-missing request. The panel image stays original.
+A MIDI controller — a motorized-fader surface, for example — only finds out
+about settings it's there to see change live. The L6max's stock firmware never
+tells a newly connected controller what the mixer's values already were, so
+the controller's faders and knobs start blank or out of sync until someone
+touches every control by hand. This patch adds a request a controller can
+send to get the mixer's entire state in one go.
+
+**To request it:** send Control Change **127** with a value of 64 or higher,
+on the MIDI channel the mixer is already configured to use. The L6max replies
+with its normal per-setting Control Change messages, covering every channel —
+the same messages it already sends whenever a value changes live, so a
+controller doesn't need any special handling to understand them.
+
+The rest of this page documents how the patch is built and verified.
+
+## How it works
+
+The stock firmware already sends a Control Change for each live change; it
+never sends values that existed before the controller connected. This patch
+adds that missing request. The panel image stays original.
 
 A Control Change **127** with a value of 64 or more, on the configured MIDI
 channel, makes the firmware send every channel setting through its own Control

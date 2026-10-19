@@ -1,5 +1,17 @@
 # Show knob values on display
 
+Turn any channel knob — an EQ band, level, pan, or an aux send — and the
+L6max's screen shows the value you just set, for about two seconds: dB for EQ
+and level, Hz or kHz for frequency, percent for sends, or a left/right
+position for pan. The stock firmware changes the value but never displays it,
+so there's no way to tell exactly where a knob landed without comparing by
+ear. This patch adds that readout; nothing about how the knobs themselves work
+changes.
+
+The rest of this page documents how the patch is built and verified.
+
+## How it works
+
 Investigation pointed to the main MCU as the owner of mixer parameter values
 and LCD rendering. The panel MCU reports encoder movement over UART and drives
 indicators. This experiment modifies the main firmware; the panel image stays
