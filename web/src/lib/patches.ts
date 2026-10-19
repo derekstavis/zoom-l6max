@@ -18,6 +18,7 @@ export const PATCHES: PatchInfo[] = [
       'Shows a popup with the actual value — dB, Hz, percent, or pan position — when you turn a channel knob. The stock firmware changes the value but never displays it.',
     readmeUrl:
       'https://github.com/derekstavis/zoom-l6max/blob/main/patches/knob-dialog/README.md',
+    demoGif: 'knob-dialog.gif',
   },
   {
     id: 'midi-sync',
