@@ -90,16 +90,6 @@ export default function App() {
         </p>
       </header>
 
-      <Alert>
-        <ShieldCheck />
-        <AlertTitle>Your firmware file never leaves this tab</AlertTitle>
-        <AlertDescription>
-          Patching happens right here on your computer. Nothing is uploaded
-          or sent anywhere — close this page and there's no trace of your
-          file anywhere else.
-        </AlertDescription>
-      </Alert>
-
       <Card>
         <CardHeader>
           <CardTitle>1. Choose patches</CardTitle>
