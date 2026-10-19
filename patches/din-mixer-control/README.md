@@ -1,4 +1,4 @@
-# DIN mixer control
+# Mixer control over MIDI jack
 
 Zoom's manual documents a "Mixer Control via MIDI" setting (`Menu → Mixer →
 Mixer Control via MIDI`, or the equivalent toggle in ZOOM L6 Editor): turning

@@ -1,4 +1,4 @@
-# MIDI state sync
+# Read mixer values over MIDI
 
 Controllers on the mixer-control MIDI port (for example motorized-fader
 surfaces) can ask the L6max to send its whole channel mixer state. The stock

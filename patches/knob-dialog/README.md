@@ -1,4 +1,4 @@
-# Channel knob value notifications
+# Show knob values on display
 
 Investigation pointed to the main MCU as the owner of mixer parameter values
 and LCD rendering. The panel MCU reports encoder movement over UART and drives
