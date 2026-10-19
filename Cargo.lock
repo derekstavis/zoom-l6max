@@ -1665,6 +1665,8 @@ dependencies = [
  "firmware-patch-core",
  "l6fw",
  "serde_json",
+ "sha2",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -6189,6 +6191,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "23f0c9c52aa7cd7d77769a4cfe2a9adb1b331f489a41d912ce14513d5ab995c6"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "wasm-patch-smoke"
+version = "0.1.0"
+dependencies = [
+ "firmware-patch-core",
+ "firmware-patch-wasm",
+ "l6fw",
+ "sha2",
 ]
 
 [[package]]

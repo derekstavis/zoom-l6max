@@ -129,13 +129,12 @@ fn find_windows(
                  but that isn't a sentinel value we assigned — compilation isn't as deterministic as assumed"
             )
         })?;
-        if let Some(last) = windows.last_mut() {
-            if last.payload_offset + last.length == offset
-                && last.firmware_address + last.length as u32 == address
-            {
-                last.length += 1;
-                continue;
-            }
+        if let Some(last) = windows.last_mut()
+            && last.payload_offset + last.length == offset
+            && last.firmware_address + last.length as u32 == address
+        {
+            last.length += 1;
+            continue;
         }
         windows.push(Window {
             payload_offset: offset,
