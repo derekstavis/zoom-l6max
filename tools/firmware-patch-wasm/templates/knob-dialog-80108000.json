@@ -1,0 +1,289 @@
+{
+  "base": "0x80108000",
+  "hooks": [
+    {
+      "address": "0x80006110",
+      "length": 4,
+      "target": "0x80108358"
+    },
+    {
+      "address": "0x800064c0",
+      "length": 6,
+      "target": "0x801083f4"
+    },
+    {
+      "address": "0x80006660",
+      "length": 4,
+      "target": "0x801083cc"
+    },
+    {
+      "address": "0x800063b8",
+      "length": 6,
+      "target": "0x80108878"
+    },
+    {
+      "address": "0x80006370",
+      "length": 6,
+      "target": "0x80108138"
+    },
+    {
+      "address": "0x800068a0",
+      "length": 4,
+      "target": "0x8010816c"
+    },
+    {
+      "address": "0x800062d0",
+      "length": 4,
+      "target": "0x80108334"
+    },
+    {
+      "address": "0x80006070",
+      "length": 4,
+      "target": "0x801083a8"
+    },
+    {
+      "address": "0x80006348",
+      "length": 4,
+      "target": "0x80108290"
+    },
+    {
+      "address": "0x800065f8",
+      "length": 4,
+      "target": "0x80108384"
+    },
+    {
+      "address": "0x80006560",
+      "length": 6,
+      "target": "0x80108190"
+    },
+    {
+      "address": "0x800068f8",
+      "length": 6,
+      "target": "0x801082a8"
+    },
+    {
+      "address": "0x800069b0",
+      "length": 6,
+      "target": "0x80108268"
+    },
+    {
+      "address": "0x80006bd0",
+      "length": 4,
+      "target": "0x801081e0"
+    },
+    {
+      "address": "0x80007080",
+      "length": 4,
+      "target": "0x801089e0"
+    },
+    {
+      "address": "0x800070b0",
+      "length": 4,
+      "target": "0x80108a60"
+    },
+    {
+      "address": "0x80007090",
+      "length": 4,
+      "target": "0x80108a20"
+    },
+    {
+      "address": "0x80006fa8",
+      "length": 4,
+      "target": "0x80108204"
+    },
+    {
+      "address": "0x80061ab0",
+      "length": 4,
+      "target": "0x80108924"
+    },
+    {
+      "address": "0x80006d50",
+      "length": 4,
+      "target": "0x80108970"
+    },
+    {
+      "address": "0x80006d00",
+      "length": 6,
+      "target": "0x801088d8"
+    },
+    {
+      "address": "0x80061738",
+      "length": 4,
+      "target": "0x801089bc"
+    },
+    {
+      "address": "0x80005ee0",
+      "length": 4,
+      "target": "0x8010889c"
+    },
+    {
+      "address": "0x80024eb8",
+      "length": 4,
+      "target": "0x801081b4"
+    },
+    {
+      "address": "0x8008bd40",
+      "length": 4,
+      "target": "0x80108aa0"
+    },
+    {
+      "address": "0x80006060",
+      "length": 4,
+      "target": "0x80108250"
+    },
+    {
+      "address": "0x80005e70",
+      "length": 4,
+      "target": "0x801080fc"
+    }
+  ],
+  "knob_dialog_call_sites": [
+    {
+      "address": "0x8000648e",
+      "original": "0x8005f600",
+      "target": "0x801082e4"
+    },
+    {
+      "address": "0x80006126",
+      "original": "0x80091048",
+      "target": "0x801088cc"
+    },
+    {
+      "address": "0x800062c0",
+      "original": "0x80090ad0",
+      "target": "0x801088c0"
+    }
+  ],
+  "knob_dialog_entry": "0x80108000",
+  "name": "knob-dialog",
+  "payload_file": "knob-dialog-80108000.bin",
+  "payload_length": 8012,
+  "window_byte_total": 108,
+  "windows": [
+    {
+      "firmware_address": "0x80006110",
+      "length": 4,
+      "payload_offset": 2796
+    },
+    {
+      "firmware_address": "0x800064c0",
+      "length": 6,
+      "payload_offset": 2808
+    },
+    {
+      "firmware_address": "0x80006660",
+      "length": 4,
+      "payload_offset": 2824
+    },
+    {
+      "firmware_address": "0x800063b8",
+      "length": 6,
+      "payload_offset": 2836
+    },
+    {
+      "firmware_address": "0x80006370",
+      "length": 6,
+      "payload_offset": 2852
+    },
+    {
+      "firmware_address": "0x800068a0",
+      "length": 4,
+      "payload_offset": 2868
+    },
+    {
+      "firmware_address": "0x800062d2",
+      "length": 2,
+      "payload_offset": 2882
+    },
+    {
+      "firmware_address": "0x80006070",
+      "length": 4,
+      "payload_offset": 2900
+    },
+    {
+      "firmware_address": "0x80006348",
+      "length": 4,
+      "payload_offset": 2912
+    },
+    {
+      "firmware_address": "0x800065f8",
+      "length": 4,
+      "payload_offset": 2924
+    },
+    {
+      "firmware_address": "0x80006560",
+      "length": 6,
+      "payload_offset": 2936
+    },
+    {
+      "firmware_address": "0x800069b0",
+      "length": 6,
+      "payload_offset": 2972
+    },
+    {
+      "firmware_address": "0x80006bd0",
+      "length": 4,
+      "payload_offset": 2988
+    },
+    {
+      "firmware_address": "0x80007080",
+      "length": 4,
+      "payload_offset": 3000
+    },
+    {
+      "firmware_address": "0x800070b0",
+      "length": 4,
+      "payload_offset": 3012
+    },
+    {
+      "firmware_address": "0x80007090",
+      "length": 4,
+      "payload_offset": 3024
+    },
+    {
+      "firmware_address": "0x80006fa8",
+      "length": 4,
+      "payload_offset": 3036
+    },
+    {
+      "firmware_address": "0x80061ab0",
+      "length": 4,
+      "payload_offset": 3048
+    },
+    {
+      "firmware_address": "0x80006d50",
+      "length": 4,
+      "payload_offset": 3060
+    },
+    {
+      "firmware_address": "0x80061738",
+      "length": 4,
+      "payload_offset": 3096
+    },
+    {
+      "firmware_address": "0x80005ee0",
+      "length": 4,
+      "payload_offset": 3108
+    },
+    {
+      "firmware_address": "0x80024eb8",
+      "length": 4,
+      "payload_offset": 3120
+    },
+    {
+      "firmware_address": "0x8008bd40",
+      "length": 4,
+      "payload_offset": 3132
+    },
+    {
+      "firmware_address": "0x80006060",
+      "length": 4,
+      "payload_offset": 3144
+    },
+    {
+      "firmware_address": "0x80005e70",
+      "length": 4,
+      "payload_offset": 3156
+    }
+  ]
+}

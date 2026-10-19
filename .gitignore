@@ -1,6 +1,10 @@
 # Firmware packages, executable images, and extracted package components.
 *.bin
 *.BIN
+# Exception: our own compiled payload templates for the browser patcher.
+# Verified Zoom-byte-free by firmware-patch-wasm-prebuild's own self-check
+# before being written — see tools/firmware-patch-wasm-prebuild/src/main.rs.
+!/tools/firmware-patch-wasm/templates/*.bin
 *.elf
 *.hex
 *.uf2

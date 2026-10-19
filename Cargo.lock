@@ -1659,6 +1659,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "firmware-patch-wasm"
+version = "0.1.0"
+dependencies = [
+ "firmware-patch-core",
+ "l6fw",
+ "serde_json",
+]
+
+[[package]]
+name = "firmware-patch-wasm-prebuild"
+version = "0.1.0"
+dependencies = [
+ "firmware-patch-compile",
+ "firmware-patch-core",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "firmware-update-smoke"
 version = "0.1.0"
 dependencies = [

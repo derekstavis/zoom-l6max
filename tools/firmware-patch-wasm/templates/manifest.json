@@ -1,0 +1,40 @@
+{
+  "source_firmware_sha256": "980d92272c1f84bed200b4d2f83575202f6a00082c928d99b9e8b53af8d44461",
+  "units": [
+    {
+      "base": "0x80108000",
+      "metadata_file": "din-mixer-control-80108000.json",
+      "name": "din-mixer-control"
+    },
+    {
+      "base": "0x801084a0",
+      "metadata_file": "din-mixer-control-801084a0.json",
+      "name": "din-mixer-control"
+    },
+    {
+      "base": "0x80109f50",
+      "metadata_file": "din-mixer-control-80109f50.json",
+      "name": "din-mixer-control"
+    },
+    {
+      "base": "0x8010a3f0",
+      "metadata_file": "din-mixer-control-8010a3f0.json",
+      "name": "din-mixer-control"
+    },
+    {
+      "base": "0x80108000",
+      "metadata_file": "knob-dialog-80108000.json",
+      "name": "knob-dialog"
+    },
+    {
+      "base": "0x80108000",
+      "metadata_file": "midi-sync-80108000.json",
+      "name": "midi-sync"
+    },
+    {
+      "base": "0x80109f50",
+      "metadata_file": "midi-sync-80109f50.json",
+      "name": "midi-sync"
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+[package]
+name = "firmware-patch-wasm-prebuild"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+firmware-patch-compile.workspace = true
+firmware-patch-core.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
