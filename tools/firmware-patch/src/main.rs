@@ -1,4 +1,8 @@
 //! Reproducible, revision-guarded firmware experiment. Never edits its input.
+use firmware_patch_core::{
+    CallSiteEdit, FIRST_PAYLOAD, HookEdit, PATCHES, PatchEdits, apply_patch, verify_firmware,
+    write_image_length_and_version,
+};
 use sha2::{Digest, Sha256};
 use std::{
     fs,
@@ -47,27 +51,6 @@ fn llvm_tool(
                 .into()
         })
 }
-fn branch(from: u32, to: u32, link: bool) -> [u8; 4] {
-    let displacement = to.wrapping_sub(from + 4);
-    assert!(displacement as i32 >= -16_777_216 && (displacement as i32) < 16_777_216);
-    assert_eq!(displacement & 1, 0);
-    let s = (displacement >> 24) & 1;
-    let j1 = (!(displacement >> 23) ^ s) & 1;
-    let j2 = (!(displacement >> 22) ^ s) & 1;
-    let first = 0xf000 | (s << 10) | ((displacement >> 12) & 0x3ff);
-    let second = (if link { 0xd000 } else { 0x9000 })
-        | (j1 << 13)
-        | (j2 << 11)
-        | ((displacement >> 1) & 0x7ff);
-    let mut bytes = [0; 4];
-    bytes[..2].copy_from_slice(&(first as u16).to_le_bytes());
-    bytes[2..].copy_from_slice(&(second as u16).to_le_bytes());
-    bytes
-}
-/// Patches in catalog order. Output never depends on the order of `--patch` flags.
-const PATCHES: [&str; 3] = ["knob-dialog", "midi-sync", "din-mixer-control"];
-const FIRST_PAYLOAD: u32 = 0x80108000;
-const SLOT_END: u32 = 0x801a2ff8;
 const USAGE: &str = "Usage: firmware-patch INPUT_UNPACKED_DIR OUTPUT_DIR [--patch NAME]... [--update-version FOUR_DIGITS]\n\
 Patches: knob-dialog (default), midi-sync, din-mixer-control. Repeat --patch to combine them.";
 
@@ -220,18 +203,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let version = options.version.as_str();
     let mut firmware = fs::read(source.join("main_firmware.bin"))?;
     let original_length = firmware.len();
+    verify_firmware(&firmware)?;
     let digest = format!("{:x}", Sha256::digest(&firmware));
-    if digest != "980d92272c1f84bed200b4d2f83575202f6a00082c928d99b9e8b53af8d44461" {
-        return Err("unsupported main firmware SHA-256".into());
-    }
-    assert_eq!(
-        &firmware[0x36c74..0x36c78],
-        &branch(0x80036c74, 0x80053b28, true)
-    );
-    assert_eq!(&firmware[0x40c..0x410], &0x8007eea9u32.to_le_bytes());
-    if original_length > 0x108000 {
-        return Err("payload would overwrite original firmware".into());
-    }
     // Validate every hook region before compiling or modifying the output image.
     let roots = options
         .patches
@@ -268,48 +241,57 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let base = end;
         let (payload, symbols) = compile(&source, root, &output, name, base)?;
         let hooks = &tables[index];
-        if base + payload.len() as u32 > SLOT_END {
-            return Err("patch exceeds observed application slot".into());
-        }
-        let offset = (base - 0x80000000) as usize;
-        let consumed = offset + payload.len() - original_length;
-        if consumed > padding.len() || padding[..consumed].iter().any(|&b| b != 0xff) {
-            return Err("payload would overwrite non-erased reserved bytes".into());
-        }
-        firmware.resize(offset, 0xff);
-        firmware.extend(&payload);
-        end = (base + payload.len() as u32 + 15) & !15;
-        let mut applied_hooks = Vec::new();
+        let mut edits = PatchEdits::new(
+            hooks
+                .iter()
+                .map(|(address, hook, length, _)| {
+                    Ok(HookEdit {
+                        address: *address,
+                        target: symbol(&symbols, hook)?,
+                        length: *length,
+                    })
+                })
+                .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()?,
+        );
         if *name == "knob-dialog" {
-            firmware[0x36c74..0x36c78].copy_from_slice(&branch(
-                0x80036c74,
-                symbol(&symbols, "knob_changed")?,
-                true,
-            ));
-        }
-        for (address, hook, length, hash) in hooks {
-            let offset = (address - 0x80000000) as usize;
-            let target = symbol(&symbols, hook)?;
-            firmware[offset..offset + 4].copy_from_slice(&branch(*address, target, false));
-            for chunk in firmware[offset + 4..offset + length].chunks_exact_mut(2) {
-                chunk.copy_from_slice(&[0, 0xbf]);
-            }
-            applied_hooks.push(serde_json::json!({"address":address,"symbol":hook,"target":target,"displaced_length":length,"displaced_sha256":hash}));
-        }
-        if *name == "knob-dialog" {
-            for (address, call, target) in [
-                (0x8000648e, "notification_initialize_hook", 0x8005f600),
+            edits.knob_dialog_entry = Some(symbol(&symbols, "knob_changed")?);
+            edits.knob_dialog_call_sites = [
+                (0x8000648eu32, "notification_initialize_hook", 0x8005f600u32),
                 (0x80006126, "semaphore_take_hook", 0x80091048),
                 (0x800062c0, "semaphore_give_hook", 0x80090ad0),
-            ] {
-                let offset = (address - 0x80000000) as usize;
-                if firmware[offset..offset + 4] != branch(address, target, true) {
-                    return Err(format!("call guard failed: {call}").into());
-                }
-                let redirect = symbol(&symbols, call)?;
-                firmware[offset..offset + 4].copy_from_slice(&branch(address, redirect, true));
-                applied_hooks
-                    .push(serde_json::json!({"address":address,"symbol":call,"target":redirect}));
+            ]
+            .into_iter()
+            .map(|(address, call, original)| {
+                Ok(CallSiteEdit {
+                    address,
+                    original,
+                    target: symbol(&symbols, call)?,
+                })
+            })
+            .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()?;
+        }
+        let applied_patch = apply_patch(
+            &mut firmware,
+            original_length,
+            base,
+            &payload,
+            &edits,
+            &padding,
+        )?;
+        end = applied_patch.next_base;
+        let mut applied_hooks = Vec::new();
+        for (hook_edit, (address, hook, length, hash)) in edits.hooks.iter().zip(hooks) {
+            applied_hooks.push(serde_json::json!({"address":address,"symbol":hook,"target":hook_edit.target,"displaced_length":length,"displaced_sha256":hash}));
+        }
+        if *name == "knob-dialog" {
+            for (call_edit, (_, call, _)) in edits.knob_dialog_call_sites.iter().zip([
+                (0x8000648eu32, "notification_initialize_hook", 0x8005f600u32),
+                (0x80006126, "semaphore_take_hook", 0x80091048),
+                (0x800062c0, "semaphore_give_hook", 0x80090ad0),
+            ]) {
+                applied_hooks.push(
+                    serde_json::json!({"address":call_edit.address,"symbol":call,"target":call_edit.target}),
+                );
             }
             knob_report.insert(
                 "knob_changed".into(),
@@ -320,7 +302,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 symbol(&symbols, "notification_tick_hook")?.into(),
             );
         }
-        applied.push(serde_json::json!({"name":name,"payload_address":format!("{base:#x}"),"payload_length":payload.len(),"hooks":applied_hooks}));
+        applied.push(serde_json::json!({"name":name,"payload_address":format!("{base:#x}"),"payload_length":applied_patch.payload_len,"hooks":applied_hooks}));
     }
     let consumed = firmware.len() - original_length;
     // Preserve the fixed package slots, consuming only erased main padding.
@@ -336,12 +318,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &padding[consumed..],
     )?;
     let mut trailer = fs::read(output.join("main_trailer.bin"))?;
-    trailer[..4].copy_from_slice(&(firmware.len() as u32).to_le_bytes());
-    trailer[4..8].copy_from_slice(version.as_bytes());
-    fs::write(output.join("main_trailer.bin"), trailer)?;
     let mut footer = fs::read(output.join("package_footer.bin"))?;
-    footer[0x38..0x3c].copy_from_slice(&(firmware.len() as u32).to_le_bytes());
-    footer[0x3c..0x40].copy_from_slice(version.as_bytes());
+    write_image_length_and_version(&mut trailer, &mut footer, firmware.len() as u32, version);
+    fs::write(output.join("main_trailer.bin"), trailer)?;
     fs::write(output.join("package_footer.bin"), footer)?;
     let mut manifest: serde_json::Value =
         serde_json::from_slice(&fs::read(output.join("manifest.json"))?)?;
@@ -381,21 +360,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::branch;
-    #[test]
-    fn thumb_branches_match_original_firmware_instructions() {
-        assert_eq!(
-            branch(0x80036c74, 0x80053b28, true),
-            [0x1c, 0xf0, 0x58, 0xff]
-        );
-        assert_eq!(
-            branch(0x80053b54, 0x80053710, false),
-            [0xff, 0xf7, 0xdc, 0xbd]
-        );
-    }
-}
+// Thumb-branch encoding is tested in `firmware-patch-core`, which owns `branch()`.
 
 #[cfg(test)]
 #[path = "../../../patches/knob-dialog/src/values.rs"]
