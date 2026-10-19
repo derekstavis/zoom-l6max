@@ -13,6 +13,7 @@ license = "MIT"
 l6max-host = { path = "emulator/host" }
 l6fw = { path = "tools/l6fw" }
 firmware-patch-core = { path = "tools/firmware-patch-core" }
+firmware-patch-compile = { path = "tools/firmware-patch-compile" }
 sd-image = { path = "tools/sd-image" }
 qemu-build = { path = "tools/qemu-build" }
 l6max-diagnostics = { path = "tools/diagnostics" }
