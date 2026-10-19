@@ -1,15 +1,25 @@
 # Mixer control over MIDI jack
 
-Zoom's manual documents a "Mixer Control via MIDI" setting (`Menu → Mixer →
-Mixer Control via MIDI`, or the equivalent toggle in ZOOM L6 Editor): turning
-it on is supposed to let a MIDI device connected to the physical MIDI IN/OUT
-(DIN/TRS) jacks control the mixer, the same way the USB Mixer Control port
-already does. The stock firmware never implements that for the IN direction:
-the setting exists, toggles correctly, and gates an unrelated OUT-side debug
-mirror, but the DIN UART receive parser has no code path that applies a
-received message to the mixer. This patch adds it.
+The L6max can already be controlled from a computer over MIDI via its USB
+port — that's the "Mixer Control via MIDI" setting (`Menu → Mixer → Mixer
+Control via MIDI`, or the matching toggle in ZOOM L6 Editor). The same
+setting is supposed to also work over the mixer's physical MIDI IN jack, so a
+standalone controller or sequencer can drive the mixer with no computer
+involved. The stock firmware never actually implements that: the setting
+exists and toggles fine, it just doesn't do anything when turned on for that
+jack. This patch makes turning the setting on actually work for MIDI IN, the
+same as it already does over USB.
 
-## What it changes
+(This patch is named "din" after the setting's usual MIDI terminology, but
+the L6max's physical jack is a 3.5mm TRS connector, not a 5-pin DIN.)
+
+The rest of this page documents how the patch is built and verified.
+
+## How it works
+
+Zoom's firmware toggles the setting correctly and gates an unrelated OUT-side
+debug mirror, but the DIN UART receive parser has no code path that applies a
+received message to the mixer. This patch adds it.
 
 The DIN UART receive parser (`MidiUartRcvMsg`) already has exactly one
 consumer of a just-completed message at the point this patch hooks: a

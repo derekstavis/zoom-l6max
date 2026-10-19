@@ -5,6 +5,8 @@ export interface PatchInfo {
   readmeUrl: string
   /** Optional demo clip filename under `public/demos/`, e.g. recorded from the emulator. */
   demoGif?: string
+  /** Optional plain-language instructions for triggering the patch from outside gear (e.g. a MIDI command). */
+  requestCommand?: string
 }
 
 // Descriptions summarize each patch's own README in the main repo — see the
@@ -25,6 +27,7 @@ export const PATCHES: PatchInfo[] = [
     title: 'Read mixer values over MIDI',
     description:
       "Lets a MIDI controller (for example a motorized-fader surface) request the mixer's entire current state. The stock firmware only ever announces changes made after the controller connects.",
+    requestCommand: 'Send Control Change 127 with a value of 64 or higher, on the mixer’s configured MIDI channel.',
     readmeUrl:
       'https://github.com/derekstavis/zoom-l6max/blob/main/patches/midi-sync/README.md',
   },
