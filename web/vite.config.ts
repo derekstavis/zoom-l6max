@@ -5,9 +5,9 @@ import { defineConfig } from 'vite'
 
 // https://vite.dev/config/
 export default defineConfig({
-  // Served from https://derekstavis.github.io/zoom-l6max/ — asset URLs must
-  // be rooted at that subpath, not the domain root.
-  base: '/zoom-l6max/',
+  // Served from https://l6-patcher.stavis.me/ — a custom domain at its own
+  // root, not a github.io subpath, so asset URLs are rooted at '/'.
+  base: '/',
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: {
