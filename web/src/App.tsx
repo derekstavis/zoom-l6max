@@ -144,8 +144,22 @@ export default function App() {
         <CardHeader>
           <CardTitle>2. Upload your firmware update file</CardTitle>
           <CardDescription>
-            The official Zoom update package (the file you'd otherwise copy to
-            an SD card). Only the stock 1.10 MAIN image is supported.
+            <code className="text-foreground bg-muted rounded px-1 py-0.5 text-xs">
+              L6max.BIN
+            </code>{' '}
+            from the official Zoom update package — the file you'd otherwise
+            copy straight to an SD card. Only the stock 1.10 MAIN image is
+            supported.{' '}
+            <a
+              className="underline underline-offset-3 hover:text-foreground"
+              href="https://zoomcorp.com/en/us/digital-mixer-multi-track-recorders/digital-mixer-recorder/livetrak-l6max/l6max-support/"
+              target="_blank"
+              rel="noreferrer"
+            >
+              Don't have it? Get it from Zoom's L6max support page
+              <ExternalLink className="ml-0.5 inline size-3 align-text-top" />
+            </a>
+            .
           </CardDescription>
         </CardHeader>
         <CardContent>
