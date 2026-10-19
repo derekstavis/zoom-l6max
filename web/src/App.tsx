@@ -124,6 +124,11 @@ export default function App() {
                       loading="lazy"
                     />
                   )}
+                  {patch.requestCommand && (
+                    <p className="bg-muted text-muted-foreground mt-1 w-fit rounded-md px-2 py-1 text-xs leading-relaxed">
+                      {patch.requestCommand}
+                    </p>
+                  )}
                   <a
                     className="text-muted-foreground w-fit text-xs underline underline-offset-3 hover:text-foreground"
                     href={patch.readmeUrl}
