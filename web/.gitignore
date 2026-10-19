@@ -1,0 +1,7 @@
+node_modules
+dist
+dist-ssr
+*.local
+
+# Built from tools/firmware-patch-wasm by `npm run wasm:build`; not source.
+/src/wasm/generated/
