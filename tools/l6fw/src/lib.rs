@@ -23,6 +23,15 @@ fn segments(main_length: usize) -> [(&'static str, usize, usize); 10] {
     ]
 }
 
+/// The package's segment layout for a given main-image length — offsets are
+/// fixed, only `main_firmware.bin`'s end (and everything after it, up to the
+/// trailer) shifts. Exposed so callers that resize `main_firmware.bin`
+/// in-memory (rather than through `unpack`/`repack`'s own files) can recompute
+/// a manifest's `size`/`offset` fields for the two affected segments.
+pub fn layout(main_length: usize) -> [(&'static str, usize, usize); 10] {
+    segments(main_length)
+}
+
 fn sha256(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
@@ -79,19 +88,31 @@ pub fn check_layout(data: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
+/// Splits a validated package into its named segments and a fresh manifest,
+/// without touching the filesystem. Shared by `unpack` (writes files) and
+/// `unpack_bytes` (keeps everything in memory, for the in-browser patcher).
+fn unpack_core(data: &[u8]) -> Result<(Value, Vec<(&'static str, Vec<u8>)>), String> {
+    check_layout(data)?;
+    let mut entries = Vec::new();
+    let mut parts = Vec::new();
+    for (name, start, end) in segments(u32le(data, 0x1a31f8) as usize) {
+        let part = data[start..end].to_vec();
+        entries.push(
+            json!({"file":name,"offset":start,"size":end-start,"original_sha256":sha256(&part)}),
+        );
+        parts.push((name, part));
+    }
+    let manifest = json!({"format":FORMAT,"original_sha256":sha256(data),"segments":entries});
+    Ok((manifest, parts))
+}
+
 pub fn unpack(source: &Path, out: &Path) -> Result<(), String> {
     let data = fs::read(source).map_err(|e| e.to_string())?;
-    check_layout(&data)?;
+    let (manifest, parts) = unpack_core(&data)?;
     fs::create_dir(out).map_err(|e| e.to_string())?;
-    let mut entries = Vec::new();
-    for (name, start, end) in segments(u32le(&data, 0x1a31f8) as usize) {
-        let part = &data[start..end];
+    for (name, part) in &parts {
         fs::write(out.join(name), part).map_err(|e| e.to_string())?;
-        entries.push(
-            json!({"file":name,"offset":start,"size":end-start,"original_sha256":sha256(part)}),
-        );
     }
-    let manifest = json!({"format":FORMAT,"original_sha256":sha256(&data),"segments":entries});
     fs::write(
         out.join("manifest.json"),
         format!(
@@ -112,17 +133,36 @@ pub fn unpack(source: &Path, out: &Path) -> Result<(), String> {
     Ok(())
 }
 
-pub fn repack(input: &Path, output: &Path, recompute_checksum: bool) -> Result<(), String> {
-    let manifest: Value =
-        serde_json::from_slice(&fs::read(input.join("manifest.json")).map_err(|e| e.to_string())?)
-            .map_err(|e| e.to_string())?;
+/// In-memory equivalent of `unpack`: validates `data` and returns its fresh
+/// manifest plus a name → bytes map of every segment, with nothing written to
+/// disk. Used by the WASM patcher, which never has a filesystem.
+pub fn unpack_bytes(
+    data: &[u8],
+) -> Result<(Value, std::collections::BTreeMap<String, Vec<u8>>), String> {
+    let (manifest, parts) = unpack_core(data)?;
+    Ok((
+        manifest,
+        parts.into_iter().map(|(n, b)| (n.to_string(), b)).collect(),
+    ))
+}
+
+/// Assembles a package from its manifest and segments, reading each named
+/// segment through `read`. Shared by `repack` (reads files) and
+/// `repack_bytes` (reads from an in-memory map). Returns the assembled bytes
+/// and the list of segments that changed since the manifest's own
+/// `original_sha256` was recorded.
+fn repack_core(
+    manifest: &Value,
+    read: impl Fn(&str) -> Result<Vec<u8>, String>,
+    recompute_checksum: bool,
+) -> Result<(Vec<u8>, Vec<&'static str>), String> {
     if manifest["format"] != FORMAT {
         return Err("unsupported manifest format".into());
     }
     let entries = manifest["segments"]
         .as_array()
         .ok_or("manifest has no segment list")?;
-    let trailer = fs::read(input.join("main_trailer.bin")).map_err(|e| e.to_string())?;
+    let trailer = read("main_trailer.bin")?;
     if trailer.len() != 8 {
         return Err("main trailer must have eight bytes".into());
     }
@@ -143,7 +183,7 @@ pub fn repack(input: &Path, output: &Path, recompute_checksum: bool) -> Result<(
         {
             return Err(format!("manifest mismatch for {name}"));
         }
-        let part = fs::read(input.join(name)).map_err(|e| e.to_string())?;
+        let part = read(name)?;
         if part.len() != end - start {
             return Err(format!(
                 "{name}: expected {} bytes, got {}",
@@ -171,6 +211,19 @@ pub fn repack(input: &Path, output: &Path, recompute_checksum: bool) -> Result<(
     if changed.is_empty() && manifest["original_sha256"].as_str() != Some(&digest) {
         return Err("assembled hash disagrees with the manifest".into());
     }
+    Ok((assembled, changed))
+}
+
+pub fn repack(input: &Path, output: &Path, recompute_checksum: bool) -> Result<(), String> {
+    let manifest: Value =
+        serde_json::from_slice(&fs::read(input.join("manifest.json")).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
+    let (assembled, changed) = repack_core(
+        &manifest,
+        |name| fs::read(input.join(name)).map_err(|e| e.to_string()),
+        recompute_checksum,
+    )?;
+    let digest = sha256(&assembled);
     if output.exists() {
         return Err(format!("refusing to overwrite {}", output.display()));
     }
@@ -199,6 +252,27 @@ pub fn repack(input: &Path, output: &Path, recompute_checksum: bool) -> Result<(
         }
     }
     Ok(())
+}
+
+/// In-memory equivalent of `repack`: assembles the final package bytes from a
+/// manifest and a name → bytes map, with nothing read from or written to
+/// disk. Used by the WASM patcher.
+pub fn repack_bytes(
+    manifest: &Value,
+    segments: &std::collections::BTreeMap<String, Vec<u8>>,
+    recompute_checksum: bool,
+) -> Result<Vec<u8>, String> {
+    let (assembled, _changed) = repack_core(
+        manifest,
+        |name| {
+            segments
+                .get(name)
+                .cloned()
+                .ok_or_else(|| format!("missing segment {name}"))
+        },
+        recompute_checksum,
+    )?;
+    Ok(assembled)
 }
 #[cfg(test)]
 mod tests {
@@ -233,6 +307,76 @@ mod tests {
             .fold(0u32, |s, &b| s.wrapping_add(b as u32));
         data[0x1fc..0x200].copy_from_slice(&sum.to_be_bytes());
         data
+    }
+    #[test]
+    fn unpack_bytes_and_repack_bytes_roundtrip_in_memory() {
+        let bytes = fixture(0x107fe8);
+        let (manifest, segments) = unpack_bytes(&bytes).unwrap();
+        let assembled = repack_bytes(&manifest, &segments, true).unwrap();
+        assert_eq!(assembled, bytes);
+    }
+    #[test]
+    fn unpack_bytes_matches_unpack_to_disk() {
+        let bytes = fixture(0x107fe8);
+        let directory =
+            std::env::temp_dir().join(format!("l6-package-in-memory-{}", std::process::id()));
+        fs::create_dir(&directory).unwrap();
+        let source = directory.join("source.bin");
+        let unpacked = directory.join("unpacked");
+        fs::write(&source, &bytes).unwrap();
+        unpack(&source, &unpacked).unwrap();
+        let (manifest, segments) = unpack_bytes(&bytes).unwrap();
+        for (name, _, _) in self::segments(0x107fe8) {
+            assert_eq!(
+                fs::read(unpacked.join(name)).unwrap(),
+                segments[name],
+                "{name} differs between on-disk and in-memory unpack"
+            );
+        }
+        let on_disk_manifest: Value =
+            serde_json::from_slice(&fs::read(unpacked.join("manifest.json")).unwrap()).unwrap();
+        assert_eq!(on_disk_manifest, manifest);
+        fs::remove_dir_all(directory).unwrap();
+    }
+    #[test]
+    fn repack_bytes_reflects_a_resized_main_image() {
+        let original = fixture(0x107fe8);
+        let (mut manifest, mut segments) = unpack_bytes(&original).unwrap();
+        // Grow main_firmware.bin by 16 bytes, as a patch would, and keep the
+        // manifest consistent the same way firmware-patch-core's caller must.
+        let grown_length = 0x107fe8 + 16;
+        segments
+            .get_mut("main_firmware.bin")
+            .unwrap()
+            .extend_from_slice(&[0xaa; 16]);
+        for (name, start, end) in layout(grown_length) {
+            let index = manifest["segments"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .position(|e| e["file"] == name)
+                .unwrap();
+            manifest["segments"][index]["offset"] = json!(start);
+            manifest["segments"][index]["size"] = json!(end - start);
+        }
+        segments.insert(
+            "padding_before_secondary.bin".into(),
+            segments["padding_before_secondary.bin"][16..].to_vec(),
+        );
+        let mut trailer = segments["main_trailer.bin"].clone();
+        trailer[..4].copy_from_slice(&(grown_length as u32).to_le_bytes());
+        segments.insert("main_trailer.bin".into(), trailer);
+        let mut footer = segments["package_footer.bin"].clone();
+        footer[0x38..0x3c].copy_from_slice(&(grown_length as u32).to_le_bytes());
+        segments.insert("package_footer.bin".into(), footer);
+        let assembled = repack_bytes(&manifest, &segments, true).unwrap();
+        assert_eq!(assembled.len(), original.len());
+        check_layout(&assembled).unwrap();
+        assert_eq!(
+            u32le(&assembled, 0x1a31f8) as usize,
+            grown_length,
+            "repacked main length should reflect the grown image"
+        );
     }
     #[test]
     fn layout_rejects_growth_into_panel_and_inconsistent_footer() {
