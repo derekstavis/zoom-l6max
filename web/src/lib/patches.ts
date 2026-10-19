@@ -23,20 +23,21 @@ export const PATCHES: PatchInfo[] = [
     demoGif: 'knob-dialog.gif',
   },
   {
-    id: 'midi-sync',
-    title: 'Read mixer values over MIDI',
-    description:
-      "Lets a MIDI controller (for example a motorized-fader surface) request the mixer's entire current state. The stock firmware only ever announces changes made after the controller connects.",
-    requestCommand: 'Send Control Change 127 with a value of 64 or higher, on the mixer’s configured MIDI channel.',
-    readmeUrl:
-      'https://github.com/derekstavis/zoom-l6max/blob/main/patches/midi-sync/README.md',
-  },
-  {
     id: 'din-mixer-control',
     title: 'Mixer control over MIDI jack',
     description:
       "Makes the mixer's documented \"Mixer Control via MIDI\" setting work over the physical TRS MIDI IN jack, not just USB — the stock firmware never implements that direction despite the setting existing.",
     readmeUrl:
       'https://github.com/derekstavis/zoom-l6max/blob/main/patches/din-mixer-control/README.md',
+    demoGif: 'din-mixer-control.gif',
+  },
+  {
+    id: 'midi-sync',
+    title: 'Read mixer values over MIDI',
+    description:
+      "Lets a MIDI controller (for example a motorized-fader surface or the editor app) request the mixer's entire current state. Pairs with mixer control above: without it, a motorized surface starts out of sync until you touch each fader. The stock firmware only ever announces changes made after the controller connects.",
+    requestCommand: 'Send Control Change 127 with a value of 64 or higher, on the mixer’s configured MIDI channel.',
+    readmeUrl:
+      'https://github.com/derekstavis/zoom-l6max/blob/main/patches/midi-sync/README.md',
   },
 ]
