@@ -71,13 +71,12 @@ export default function App() {
     <div className="mx-auto flex min-h-svh max-w-2xl flex-col gap-8 px-4 py-10 sm:px-6">
       <header className="flex flex-col gap-3">
         <h1 className="text-3xl font-semibold tracking-tight">
-          L6max firmware patcher
+          Zoom L6max Firmware Patches
         </h1>
         <p className="text-muted-foreground text-sm leading-relaxed">
-          Build a patched update package for the Zoom LiveTrak L6max, entirely
-          in this browser tab. Pick the patches you want, upload your own
-          firmware update file, and download the result — nothing is
-          uploaded anywhere.{' '}
+          Build a patched update package for the Zoom LiveTrak L6max. Pick the
+          patches you want, upload your own firmware update file, and
+          download the result.{' '}
           <a
             className="underline underline-offset-3 hover:text-foreground"
             href="https://github.com/derekstavis/zoom-l6max"
@@ -248,8 +247,7 @@ export default function App() {
 
       <footer className="text-muted-foreground mt-4 text-center text-xs">
         Not affiliated with or endorsed by Zoom Corporation. Experimental,
-        independently reverse-engineered firmware patches — use at your own
-        risk.
+        independently developed firmware patches — use at your own risk.
       </footer>
     </div>
   )
