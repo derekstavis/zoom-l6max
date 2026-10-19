@@ -3,6 +3,8 @@ export interface PatchInfo {
   title: string
   description: string
   readmeUrl: string
+  /** Optional demo clip filename under `public/demos/`, e.g. recorded from the emulator. */
+  demoGif?: string
 }
 
 // Descriptions summarize each patch's own README in the main repo — see the
@@ -11,7 +13,7 @@ export interface PatchInfo {
 export const PATCHES: PatchInfo[] = [
   {
     id: 'knob-dialog',
-    title: 'Channel knob value notifications',
+    title: 'Show knob values on display',
     description:
       'Shows a popup with the actual value — dB, Hz, percent, or pan position — when you turn a channel knob. The stock firmware changes the value but never displays it.',
     readmeUrl:
@@ -19,7 +21,7 @@ export const PATCHES: PatchInfo[] = [
   },
   {
     id: 'midi-sync',
-    title: 'MIDI state sync',
+    title: 'Read mixer values over MIDI',
     description:
       "Lets a MIDI controller (for example a motorized-fader surface) request the mixer's entire current state. The stock firmware only ever announces changes made after the controller connects.",
     readmeUrl:
@@ -27,9 +29,9 @@ export const PATCHES: PatchInfo[] = [
   },
   {
     id: 'din-mixer-control',
-    title: 'DIN mixer control',
+    title: 'Mixer control over MIDI jack',
     description:
-      "Makes the mixer's documented \"Mixer Control via MIDI\" setting work over the physical MIDI IN (DIN) jack, not just USB — the stock firmware never implements the DIN direction despite the setting existing.",
+      "Makes the mixer's documented \"Mixer Control via MIDI\" setting work over the physical TRS MIDI IN jack, not just USB — the stock firmware never implements that direction despite the setting existing.",
     readmeUrl:
       'https://github.com/derekstavis/zoom-l6max/blob/main/patches/din-mixer-control/README.md',
   },
