@@ -94,8 +94,9 @@ export default function App() {
         <ShieldCheck />
         <AlertTitle>Your firmware file never leaves this tab</AlertTitle>
         <AlertDescription>
-          Everything — unpacking, patching, and repacking — runs locally in
-          your browser via WebAssembly. No file is sent to any server.
+          Patching happens right here on your computer. Nothing is uploaded
+          or sent anywhere — close this page and there's no trace of your
+          file anywhere else.
         </AlertDescription>
       </Alert>
 
@@ -148,7 +149,7 @@ export default function App() {
               L6max.BIN
             </code>{' '}
             from the official Zoom update package — the file you'd otherwise
-            copy straight to an SD card. Only the stock 1.10 MAIN image is
+            copy straight to an SD card. Only the stock 1.10 firmware is
             supported.{' '}
             <a
               className="underline underline-offset-3 hover:text-foreground"
