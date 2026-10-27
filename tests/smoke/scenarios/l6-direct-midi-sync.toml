@@ -1,0 +1,79 @@
+version = 1
+name = "l6-direct-midi-sync"
+models = ["l6"]
+backends = ["headless"]
+fixture = "prepared"
+main_sha256 = "22de029238e790dde9319ef3315b13da0de1581861a7680b3e7464834e51f549"
+
+[[step]]
+action = "delay"
+guest_ms = 40000
+guest_timeout_ms = 45000
+wall_timeout_s = 900
+
+[[step]]
+action = "press"
+control = "ch4-mono"
+
+[[step]]
+action = "delay"
+guest_ms = 1950
+
+[[step]]
+action = "press"
+control = "ch4-mono"
+
+[[step]]
+action = "delay"
+guest_ms = 4950
+
+[[step]]
+action = "direct-usb-midi-round-trip"
+guest_timeout_ms = 15000
+wall_timeout_s = 120
+
+[[step]]
+action = "host-midi-sync"
+guest_timeout_ms = 30000
+wall_timeout_s = 120
+
+[[step]]
+action = "l6-midi-ring-pin-sweep"
+cc = 83
+guest_timeout_ms = 7000
+wall_timeout_s = 30
+
+[[step]]
+action = "l6-midi-ring-pin-sweep"
+cc = 84
+guest_timeout_ms = 7000
+wall_timeout_s = 30
+
+[[step]]
+action = "l6-midi-ring-pin-sweep"
+cc = 85
+guest_timeout_ms = 7000
+wall_timeout_s = 30
+
+[[step]]
+action = "l6-midi-ring-pin-sweep"
+cc = 86
+guest_timeout_ms = 7000
+wall_timeout_s = 30
+
+[[step]]
+action = "l6-midi-ring-pin-sweep"
+cc = 87
+guest_timeout_ms = 7000
+wall_timeout_s = 30
+
+[[step]]
+action = "l6-midi-ring-pin-sweep"
+cc = 88
+guest_timeout_ms = 7000
+wall_timeout_s = 30
+
+[[step]]
+action = "l6-midi-mute-indicators"
+guest_timeout_ms = 7000
+wall_timeout_s = 30

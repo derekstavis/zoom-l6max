@@ -1,0 +1,12 @@
+[package]
+name = "l6fs"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+l6max-host.workspace = true
+sd-image.workspace = true
+fatfs.workspace = true
+libc.workspace = true

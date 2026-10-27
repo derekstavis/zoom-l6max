@@ -1,0 +1,426 @@
+version = 1
+
+[[case]]
+id = "controls"
+suites = ["quick"]
+models = ["l6", "l6max"]
+scenario = "scenarios/controls.toml"
+
+[[case]]
+id = "boot"
+suites = []
+models = ["l6", "l6max"]
+scenario = "scenarios/boot.toml"
+
+[[case]]
+id = "encoder"
+suites = []
+models = ["l6", "l6max"]
+scenario = "scenarios/encoder.toml"
+
+[[case]]
+id = "mute"
+suites = []
+models = ["l6", "l6max"]
+scenario = "scenarios/mute.toml"
+
+[[case]]
+id = "audio-path"
+suites = ["devices", "regression", "full"]
+models = ["l6", "l6max"]
+scenario = "scenarios/audio-path.toml"
+environment = { L6_AUDIO_TRACE = "1" }
+volatile = true
+no_sd = true
+
+[[case]]
+id = "buttons"
+suites = []
+models = ["l6", "l6max"]
+scenario = "scenarios/buttons.toml"
+
+[[case]]
+id = "factory-protocol"
+suites = ["full"]
+models = ["l6max"]
+scenario = "scenarios/factory-protocol.toml"
+volatile = true
+no_sd = true
+
+[[case]]
+id = "firmware-update"
+suites = ["full"]
+models = ["l6", "l6max"]
+scenario = "scenarios/firmware-update.toml"
+needs_configuration = true
+volatile = true
+no_sd = true
+wall_timeout_s = 1200
+
+[[case]]
+id = "indicators"
+suites = []
+models = ["l6", "l6max"]
+scenario = "scenarios/indicators.toml"
+
+[[case]]
+id = "l6max-input-smoke"
+suites = ["regression", "full"]
+models = ["l6max"]
+scenario = "scenarios/l6max-input-smoke.toml"
+volatile = true
+no_sd = true
+wall_timeout_s = 1800
+
+[[case]]
+id = "editor-pad-assignments"
+suites = ["full"]
+models = ["l6", "l6max"]
+scenario = "scenarios/editor-pad-assignments.toml"
+needs_configuration = true
+fixture = "prepared"
+wall_timeout_s = 1200
+
+[[case]]
+id = "l6max-sound-pad-playback"
+suites = ["full"]
+models = ["l6max"]
+scenario = "scenarios/l6max-sound-pad-playback.toml"
+needs_configuration = true
+environment = { L6_AUDIO_SAMPLE_TRACE = "1" }
+wall_timeout_s = 1800
+
+[[case]]
+id = "l6max-ui-pad-assignments"
+suites = ["full"]
+models = ["l6max"]
+scenario = "scenarios/l6max-ui-pad-assignments.toml"
+needs_configuration = true
+wall_timeout_s = 2400
+
+[[case]]
+id = "l6-editor-pad-playback"
+suites = ["full"]
+models = ["l6"]
+scenario = "scenarios/l6-editor-pad-playback.toml"
+needs_configuration = true
+environment = { L6_AUDIO_SAMPLE_TRACE = "1" }
+wall_timeout_s = 1800
+
+[[case]]
+id = "l6-sound-pad-playback"
+suites = ["full"]
+models = ["l6"]
+scenario = "scenarios/l6-sound-pad-playback.toml"
+needs_configuration = true
+environment = { L6_AUDIO_SAMPLE_TRACE = "1" }
+wall_timeout_s = 1800
+
+[[case]]
+id = "l6-input-sweep"
+suites = ["regression", "full"]
+models = ["l6"]
+scenario = "scenarios/l6-input-sweep.toml"
+volatile = true
+no_sd = true
+wall_timeout_s = 1800
+
+[[case]]
+id = "l6-din-sweep"
+suites = ["full"]
+models = ["l6"]
+scenario = "scenarios/l6-din-sweep.toml"
+no_sd = true
+needs_configuration = true
+fixture = "prepared"
+wall_timeout_s = 900
+
+[[case]]
+id = "l6-din-usb-forwarding"
+suites = ["full"]
+models = ["l6"]
+scenario = "scenarios/l6-din-usb-forwarding.toml"
+volatile = true
+no_sd = true
+wall_timeout_s = 1800
+
+[[case]]
+id = "l6max-din-mixer-control"
+suites = ["full"]
+models = ["l6max"]
+scenario = "scenarios/l6max-din-mixer-control.toml"
+needs_configuration = true
+wall_timeout_s = 900
+
+[[case]]
+id = "l6max-din-mixer-control-patched"
+suites = []
+models = ["l6max"]
+scenario = "scenarios/l6max-din-mixer-control-patched.toml"
+needs_configuration = true
+wall_timeout_s = 900
+
+[[case]]
+id = "knob-dialog"
+suites = ["full"]
+models = ["l6max"]
+scenario = "scenarios/knob-dialog.toml"
+needs_configuration = true
+volatile = true
+no_sd = true
+
+[[case]]
+id = "l6-event-dispatch"
+suites = ["full"]
+models = ["l6"]
+scenario = "scenarios/l6-event-dispatch.toml"
+volatile = true
+no_sd = true
+wall_timeout_s = 1800
+
+[[case]]
+id = "l6-panel-event-map"
+suites = ["full"]
+models = ["l6"]
+scenario = "scenarios/l6-panel-event-map.toml"
+volatile = true
+no_sd = true
+wall_timeout_s = 1800
+
+[[case]]
+id = "l6-main-gpio-events"
+suites = []
+models = ["l6"]
+scenario = "scenarios/l6-main-gpio-events.toml"
+needs_configuration = true
+fixture = "prepared"
+no_sd = true
+wall_timeout_s = 900
+
+[[case]]
+id = "l6-recorder-record-stop"
+suites = []
+models = ["l6"]
+scenario = "scenarios/l6-recorder-record-stop.toml"
+needs_configuration = true
+fixture = "prepared"
+wall_timeout_s = 900
+
+[[case]]
+id = "l6-recorder-playback"
+suites = ["full"]
+models = ["l6"]
+scenario = "scenarios/l6-recorder-playback.toml"
+needs_configuration = true
+fixture = "l6-recorder-playback"
+environment = { L6_AUDIO_SAMPLE_TRACE = "1" }
+wall_timeout_s = 900
+
+[[case]]
+id = "l6max-recorder-playback"
+suites = ["full"]
+models = ["l6max"]
+scenario = "scenarios/l6max-recorder-playback.toml"
+needs_configuration = true
+fixture = "l6max-recorder-playback"
+environment = { L6_AUDIO_SAMPLE_TRACE = "1" }
+wall_timeout_s = 1800
+
+[[case]]
+id = "l6-usb-startup"
+suites = []
+models = ["l6"]
+scenario = "scenarios/l6-usb-startup.toml"
+volatile = true
+no_sd = true
+wall_timeout_s = 600
+
+[[case]]
+id = "host-midi"
+suites = ["full"]
+models = ["l6", "l6max"]
+scenario = "scenarios/host-midi.toml"
+needs_configuration = true
+fixture = "prepared"
+no_sd = true
+wall_timeout_s = 900
+
+[[case]]
+id = "host-midi-sync"
+suites = ["full"]
+models = ["l6max"]
+scenario = "scenarios/host-midi-sync.toml"
+needs_configuration = true
+fixture = "prepared"
+no_sd = true
+wall_timeout_s = 900
+
+[[case]]
+id = "l6-midi-sync"
+suites = ["full"]
+models = ["l6"]
+scenario = "scenarios/l6-midi-sync.toml"
+needs_configuration = true
+fixture = "prepared"
+volatile = true
+no_sd = true
+wall_timeout_s = 180
+
+[[case]]
+id = "l6-direct-midi-sync"
+suites = ["full"]
+models = ["l6"]
+scenario = "scenarios/l6-direct-midi-sync.toml"
+needs_configuration = true
+fixture = "prepared"
+volatile = true
+no_sd = true
+wall_timeout_s = 900
+
+[[case]]
+id = "l6max-direct-midi-sync"
+suites = ["full"]
+models = ["l6max"]
+scenario = "scenarios/l6max-direct-midi-sync.toml"
+needs_configuration = true
+fixture = "prepared"
+volatile = true
+no_sd = true
+wall_timeout_s = 900
+
+[[case]]
+id = "patched-update"
+suites = ["full"]
+models = ["l6", "l6max"]
+scenario = "scenarios/patched-update.toml"
+needs_configuration = true
+fixture = "patched-update"
+volatile = true
+no_sd = true
+
+[[case]]
+id = "persistence"
+suites = ["lifecycle", "full"]
+models = ["l6max"]
+scenario = "scenarios/persistence.toml"
+no_sd = true
+wall_timeout_s = 1800
+
+[[case]]
+id = "popup-concurrency"
+suites = ["full"]
+models = ["l6max"]
+scenario = "scenarios/popup-concurrency.toml"
+needs_configuration = true
+volatile = true
+no_sd = true
+
+[[case]]
+id = "power"
+suites = ["lifecycle", "full"]
+models = ["l6", "l6max"]
+scenario = "scenarios/power.toml"
+
+[[case]]
+id = "storage"
+suites = ["devices", "full"]
+models = ["l6", "l6max"]
+scenario = "scenarios/storage.toml"
+
+[[case]]
+id = "usb"
+suites = ["devices", "full"]
+models = ["l6", "l6max"]
+scenario = "scenarios/usb.toml"
+volatile = true
+no_sd = true
+
+[[case]]
+id = "wasm-patch"
+suites = ["full"]
+models = ["l6", "l6max"]
+scenario = "scenarios/wasm-patch.toml"
+volatile = true
+no_sd = true
+wall_timeout_s = 900
+
+[[case]]
+id = "ui-input-l6-gui"
+suites = ["full"]
+models = ["l6"]
+scenario = "scenarios/ui-input-l6.toml"
+gui = true
+
+[[case]]
+id = "ui-input-l6"
+suites = ["full"]
+models = ["l6"]
+scenario = "scenarios/ui-input-l6.toml"
+
+[[case]]
+id = "gui-power"
+suites = ["full"]
+models = ["l6", "l6max"]
+scenario = "scenarios/gui-power.toml"
+volatile = true
+no_sd = true
+
+[[case]]
+id = "gui-bundle"
+suites = ["full"]
+models = ["l6max"]
+gui = true
+needs_configuration = true
+
+[[case]]
+id = "gui-menu"
+suites = ["full"]
+models = ["l6max"]
+gui = true
+needs_configuration = true
+
+[[case]]
+id = "gestures"
+suites = []
+models = ["l6", "l6max"]
+scenario = "scenarios/gestures.toml"
+
+[[case]]
+id = "button-reports"
+suites = []
+models = ["l6max"]
+scenario = "scenarios/button-reports.toml"
+wall_timeout_s = 1800
+
+[[case]]
+id = "usb-storage"
+suites = ["devices", "full"]
+models = ["l6max"]
+scenario = "scenarios/usb-storage.toml"
+
+[[case]]
+id = "panel"
+suites = ["regression", "full", "panel"]
+models = ["l6", "l6max"]
+scenario = "scenarios/panel.toml"
+wall_timeout_s = 2400
+
+[[case]]
+id = "storage-empty"
+suites = ["devices", "full"]
+models = ["l6", "l6max"]
+scenario = "scenarios/storage-empty.toml"
+no_sd = true
+
+[[case]]
+id = "control"
+suites = []
+models = ["l6max"]
+scenario = "scenarios/control.toml"
+wall_timeout_s = 1800
+
+[[case]]
+id = "switches"
+suites = []
+models = ["l6max"]
+scenario = "scenarios/switches.toml"

@@ -551,12 +551,27 @@ dependencies = [
 
 [[package]]
 name = "bit-set"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "08807e080ed7f9d5433fa9b275196cfc35414f66a0c79d864dc51a0d825231a3"
+dependencies = [
+ "bit-vec 0.8.0",
+]
+
+[[package]]
+name = "bit-set"
 version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "34ddef2995421ab6a5c779542c81ee77c115206f4ad9d5a8e05f4ff49716a3dd"
 dependencies = [
- "bit-vec",
+ "bit-vec 0.9.1",
 ]
+
+[[package]]
+name = "bit-vec"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5e764a1d40d510daf35e07be9eb06e75770908c27d411ee6c92109c9840eaaf7"
 
 [[package]]
 name = "bit-vec"
@@ -969,19 +984,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "control-smoke"
-version = "0.1.0"
-dependencies = [
- "image",
- "l6max-host",
- "serde_json",
-]
-
-[[package]]
 name = "convert_case"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "633458d4ef8c78b72454de2d54fd6ab2e60f9e02be22f3c6104cdc8a4e0fceb9"
+dependencies = [
+ "unicode-segmentation",
+]
+
+[[package]]
+name = "convert_case"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "affbf0190ed2caf063e3def54ff444b449371d55c58e513a95ab98eca50adb49"
 dependencies = [
  "unicode-segmentation",
 ]
@@ -1278,7 +1293,7 @@ version = "2.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "799a97264921d8623a957f6c3b9011f3b5492f557bbb7a5a19b7fa6d06ba8dcb"
 dependencies = [
- "convert_case",
+ "convert_case 0.10.0",
  "proc-macro2",
  "quote",
  "rustc_version",
@@ -1305,14 +1320,6 @@ dependencies = [
  "block-buffer",
  "crypto-common",
  "subtle",
-]
-
-[[package]]
-name = "din-editor-mixer-smoke"
-version = "0.1.0"
-dependencies = [
- "coremidi",
- "l6max-host",
 ]
 
 [[package]]
@@ -1575,16 +1582,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "factory-protocol-smoke"
-version = "0.1.0"
-dependencies = [
- "fatfs",
- "l6max-host",
- "libc",
- "sha2",
-]
-
-[[package]]
 name = "fastrand"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1637,17 +1634,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "aedcfb3409746eddb02b9e19ebda1c3394f759a152e48ee875a0844d1b955484"
 
 [[package]]
-name = "firmware-patch"
-version = "0.1.0"
-dependencies = [
- "firmware-patch-compile",
- "firmware-patch-core",
- "l6fw",
- "serde_json",
- "sha2",
-]
-
-[[package]]
 name = "firmware-patch-compile"
 version = "0.1.0"
 
@@ -1676,15 +1662,6 @@ dependencies = [
  "firmware-patch-compile",
  "firmware-patch-core",
  "serde_json",
- "sha2",
-]
-
-[[package]]
-name = "firmware-update-smoke"
-version = "0.1.0"
-dependencies = [
- "fatfs",
- "l6max-host",
  "sha2",
 ]
 
@@ -1734,6 +1711,12 @@ dependencies = [
  "futures-sink",
  "spin 0.9.9",
 ]
+
+[[package]]
+name = "fnv"
+version = "1.0.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f9eec918d3f24069decb9af1554cad7c880e2da24a9afd88aca000531ab82c1"
 
 [[package]]
 name = "foldhash"
@@ -2094,6 +2077,7 @@ dependencies = [
  "anyhow",
  "async-channel",
  "async-task",
+ "backtrace",
  "bindgen",
  "bitflags 2.13.2",
  "chrono",
@@ -2126,6 +2110,7 @@ dependencies = [
  "pollster 0.4.0",
  "postage",
  "profiling",
+ "proptest",
  "rand 0.9.5",
  "raw-window-handle",
  "refineable",
@@ -2290,6 +2275,7 @@ dependencies = [
  "gpui_linux",
  "gpui_macos",
  "gpui_web",
+ "gpui_wgpu",
  "gpui_windows",
 ]
 
@@ -2353,6 +2339,7 @@ dependencies = [
  "etagere",
  "gpui",
  "gpui_util",
+ "image",
  "itertools 0.14.0",
  "log",
  "parking_lot",
@@ -2393,15 +2380,6 @@ dependencies = [
  "windows-core 0.62.2",
  "windows-numerics 0.3.1",
  "windows-registry",
-]
-
-[[package]]
-name = "gui-probe"
-version = "0.1.0"
-dependencies = [
- "image",
- "l6max-host",
- "serde_json",
 ]
 
 [[package]]
@@ -2720,7 +2698,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "525e9ff3e1a4be2fbea1fdf0e98686a6d98b4d8f937e1bf7402245af1909e8c3"
 dependencies = [
  "byteorder-lite",
- "quick-error",
+ "quick-error 2.0.1",
 ]
 
 [[package]]
@@ -2748,14 +2726,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "indicator-smoke"
-version = "0.1.0"
-dependencies = [
- "image",
- "l6max-host",
-]
-
-[[package]]
 name = "inout"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2763,14 +2733,6 @@ checksum = "879f10e63c20629ecabbb64a8010319738c66a5cd0c29b02d63d272b03751d01"
 dependencies = [
  "block-padding",
  "generic-array",
-]
-
-[[package]]
-name = "input-smoke"
-version = "0.1.0"
-dependencies = [
- "image",
- "l6max-host",
 ]
 
 [[package]]
@@ -2915,22 +2877,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
 
 [[package]]
-name = "knob-dialog-gif"
-version = "0.1.0"
-dependencies = [
- "image",
- "l6max-host",
-]
-
-[[package]]
-name = "knob-dialog-smoke"
-version = "0.1.0"
-dependencies = [
- "image",
- "l6max-host",
-]
-
-[[package]]
 name = "kurbo"
 version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2940,6 +2886,40 @@ dependencies = [
  "euclid",
  "polycool",
  "smallvec",
+]
+
+[[package]]
+name = "l6ctl"
+version = "0.1.0"
+dependencies = [
+ "l6fw",
+ "l6max-host",
+ "serde_json",
+]
+
+[[package]]
+name = "l6dbg"
+version = "0.1.0"
+dependencies = [
+ "coremidi",
+ "image",
+ "l6fw",
+ "l6max-diagnostics",
+ "l6max-host",
+ "serde",
+ "serde_json",
+ "sha2",
+ "toml 0.8.23",
+]
+
+[[package]]
+name = "l6fs"
+version = "0.1.0"
+dependencies = [
+ "fatfs",
+ "l6max-host",
+ "libc",
+ "sd-image",
 ]
 
 [[package]]
@@ -2969,6 +2949,8 @@ dependencies = [
  "raw-window-handle",
  "sha2",
  "smallvec",
+ "smoke-core",
+ "tracing",
 ]
 
 [[package]]
@@ -2986,6 +2968,37 @@ dependencies = [
  "sd-image",
  "serde_json",
  "sha2",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "l6patch"
+version = "0.1.0"
+dependencies = [
+ "firmware-patch-compile",
+ "firmware-patch-core",
+ "l6fw",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
+name = "l6test"
+version = "0.1.0"
+dependencies = [
+ "firmware-patch-wasm",
+ "gif",
+ "image",
+ "l6fw",
+ "l6max-host",
+ "libc",
+ "serde",
+ "serde_json",
+ "sha2",
+ "smoke-core",
+ "toml 0.8.23",
+ "tracing",
 ]
 
 [[package]]
@@ -3225,6 +3238,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "matchers"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d1525a2a28c7f4fa0fc98bb91ae755d1e2d1505079e05539e35bc876b5d65ae9"
+dependencies = [
+ "regex-automata",
+]
+
+[[package]]
 name = "maybe-rayon"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3284,16 +3306,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "midi-smoke"
-version = "0.1.0"
-dependencies = [
- "alsa",
- "coremidi",
- "l6max-host",
- "libc",
-]
-
-[[package]]
 name = "minimal-lexical"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3336,7 +3348,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b2bf919621e7975acb27d881bae2fb993e0d45c8e0446e85e6272971e00dc8df"
 dependencies = [
  "arrayvec",
- "bit-set",
+ "bit-set 0.9.1",
  "bitflags 2.13.2",
  "cfg-if",
  "cfg_aliases",
@@ -4001,14 +4013,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "35fb2e5f958ec131621fdd531e9fc186ed768cbe395337403ae56c17a74c68ec"
 
 [[package]]
-name = "patched-update-smoke"
-version = "0.1.0"
-dependencies = [
- "l6max-host",
- "sha2",
-]
-
-[[package]]
 name = "pathfinder_geometry"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4051,14 +4055,6 @@ dependencies = [
  "collections",
  "serde",
  "serde_json",
-]
-
-[[package]]
-name = "persistence-smoke"
-version = "0.1.0"
-dependencies = [
- "image",
- "l6max-host",
 ]
 
 [[package]]
@@ -4215,24 +4211,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "popup-concurrency-smoke"
-version = "0.1.0"
-dependencies = [
- "l6max-diagnostics",
- "l6max-host",
- "serde_json",
-]
-
-[[package]]
-name = "popup-trigger-probe"
-version = "0.1.0"
-dependencies = [
- "l6max-diagnostics",
- "l6max-host",
- "serde_json",
-]
-
-[[package]]
 name = "portable-atomic"
 version = "1.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4271,13 +4249,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d83eb9bc6d8e5cf568e7a1101d60ee05e81ed50ea106026f3d18deeb046d7661"
 dependencies = [
  "zerovec",
-]
-
-[[package]]
-name = "power-smoke"
-version = "0.1.0"
-dependencies = [
- "l6max-host",
 ]
 
 [[package]]
@@ -4344,6 +4315,36 @@ version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4488a4a36b9a4ba6b9334a32a39971f77c1436ec82c38707bce707699cc3bbcb"
 dependencies = [
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "proptest"
+version = "1.10.0"
+source = "git+https://github.com/proptest-rs/proptest?rev=3dca198a8fef1b32e3a66f1e1897c955b4dc5b5b#3dca198a8fef1b32e3a66f1e1897c955b4dc5b5b"
+dependencies = [
+ "bit-set 0.8.0",
+ "bit-vec 0.8.0",
+ "bitflags 2.13.2",
+ "num-traits",
+ "proptest-macro",
+ "rand 0.9.5",
+ "rand_chacha 0.9.0",
+ "rand_xorshift",
+ "regex-syntax",
+ "rusty-fork",
+ "tempfile",
+ "unarray",
+]
+
+[[package]]
+name = "proptest-macro"
+version = "0.5.0"
+source = "git+https://github.com/proptest-rs/proptest?rev=3dca198a8fef1b32e3a66f1e1897c955b4dc5b5b#3dca198a8fef1b32e3a66f1e1897c955b4dc5b5b"
+dependencies = [
+ "convert_case 0.11.0",
+ "proc-macro2",
  "quote",
  "syn 2.0.119",
 ]
@@ -4440,6 +4441,7 @@ name = "qemu-run"
 version = "0.1.0"
 dependencies = [
  "image",
+ "l6fw",
  "libc",
 ]
 
@@ -4451,6 +4453,12 @@ checksum = "7f6d64c71eb498fe9eae14ce4ec935c555749aef511cca85b5568910d6e48001"
 dependencies = [
  "bytemuck",
 ]
+
+[[package]]
+name = "quick-error"
+version = "1.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a1d01941d82fa2ab50be1e79e6714289dd7cde78eba4c074bc5a4374f650dfe0"
 
 [[package]]
 name = "quick-error"
@@ -4548,6 +4556,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "rand_xorshift"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "513962919efc330f829edb2535844d1b912b0fbe2ca165d613e4e8788bb05a5a"
+dependencies = [
+ "rand_core 0.9.5",
+]
+
+[[package]]
 name = "range-alloc"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4603,7 +4620,7 @@ dependencies = [
  "avif-serialize",
  "imgref",
  "loop9",
- "quick-error",
+ "quick-error 2.0.1",
  "rav1e",
  "rayon",
  "rgb",
@@ -4852,6 +4869,18 @@ name = "rustversion"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
+
+[[package]]
+name = "rusty-fork"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cc6bf79ff24e648f6da1f8d1f011e9cac26491b619e6b9280f2b47f1774e6ee2"
+dependencies = [
+ "fnv",
+ "quick-error 1.2.3",
+ "tempfile",
+ "wait-timeout",
+]
 
 [[package]]
 name = "rustybuzz"
@@ -5228,6 +5257,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f9395f0f0eee849a9b707b2f06bb92a6a422090e2123bb2ef8e87a0e61892a8e"
 
 [[package]]
+name = "smoke-core"
+version = "0.1.0"
+dependencies = [
+ "aho-corasick",
+ "alsa",
+ "coremidi",
+ "fatfs",
+ "firmware-patch-core",
+ "firmware-patch-wasm",
+ "image",
+ "l6fw",
+ "l6max-diagnostics",
+ "l6max-host",
+ "libc",
+ "serde",
+ "serde_json",
+ "sha2",
+ "toml 0.8.23",
+ "tracing",
+]
+
+[[package]]
 name = "smol"
 version = "2.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5292,14 +5343,6 @@ name = "static_assertions"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
-
-[[package]]
-name = "storage-smoke"
-version = "0.1.0"
-dependencies = [
- "image",
- "l6max-host",
-]
 
 [[package]]
 name = "strict-num"
@@ -5626,7 +5669,7 @@ dependencies = [
  "fax",
  "flate2",
  "half",
- "quick-error",
+ "quick-error 2.0.1",
  "weezl",
  "zune-jpeg",
 ]
@@ -5838,17 +5881,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "tracing-serde"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "704b1aeb7be0d0a84fc9828cae51dab5970fee5088f83d1dd7ee6f6246fc6ff1"
+dependencies = [
+ "serde",
+ "tracing-core",
+]
+
+[[package]]
 name = "tracing-subscriber"
 version = "0.3.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cb7f578e5945fb242538965c2d0b04418d38ec25c79d160cd279bf0731c8d319"
 dependencies = [
+ "matchers",
  "nu-ansi-term",
+ "once_cell",
+ "regex-automata",
+ "serde",
+ "serde_json",
  "sharded-slab",
  "smallvec",
  "thread_local",
+ "tracing",
  "tracing-core",
  "tracing-log",
+ "tracing-serde",
 ]
 
 [[package]]
@@ -5882,6 +5942,12 @@ dependencies = [
  "tempfile",
  "windows-sys 0.61.2",
 ]
+
+[[package]]
+name = "unarray"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eaea85b334db583fe3274d12b4cd1880032beab409c0d774be044d4480ab9a94"
 
 [[package]]
 name = "unicode-bidi"
@@ -5959,24 +6025,6 @@ dependencies = [
  "idna",
  "percent-encoding",
  "serde",
-]
-
-[[package]]
-name = "usb-files"
-version = "0.1.0"
-dependencies = [
- "fatfs",
- "l6max-host",
- "libc",
-]
-
-[[package]]
-name = "usb-smoke"
-version = "0.1.0"
-dependencies = [
- "image",
- "l6max-host",
- "libc",
 ]
 
 [[package]]
@@ -6115,6 +6163,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "wait-timeout"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "09ac3b126d3914f9849036f826e054cbabdc8519970b8998ddaf3b5bd3c65f11"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "waker-fn"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6199,16 +6256,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "23f0c9c52aa7cd7d77769a4cfe2a9adb1b331f489a41d912ce14513d5ab995c6"
 dependencies = [
  "unicode-ident",
-]
-
-[[package]]
-name = "wasm-patch-smoke"
-version = "0.1.0"
-dependencies = [
- "firmware-patch-core",
- "firmware-patch-wasm",
- "l6fw",
- "sha2",
 ]
 
 [[package]]
@@ -6384,8 +6431,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2f519832254e56965a9940c4af57dcb75f702b6f6fa4a0b172f685395843a4d7"
 dependencies = [
  "arrayvec",
- "bit-set",
- "bit-vec",
+ "bit-set 0.9.1",
+ "bit-vec 0.9.1",
  "bitflags 2.13.2",
  "bytemuck",
  "cfg_aliases",
@@ -6456,7 +6503,7 @@ dependencies = [
  "android_system_properties",
  "arrayvec",
  "ash",
- "bit-set",
+ "bit-set 0.9.1",
  "bitflags 2.13.2",
  "block2 0.6.2",
  "bytemuck",

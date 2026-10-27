@@ -1,5 +1,7 @@
 //! CoreMIDI virtual sources and destinations.
-use super::{HostMidi, endpoint_name};
+use super::{
+    HostMidi, MANUFACTURER_NAME, client_name_for_ports, endpoint_name, model_name_for_ports,
+};
 use coremidi::{Client, PacketBuffer, VirtualDestination, VirtualSource};
 use std::{
     io,
@@ -20,7 +22,8 @@ fn error(status: i32) -> io::Error {
 impl HostMidi for CoreMidiPorts {
     fn open(names: &[&str]) -> io::Result<Self> {
         let (tx, received) = mpsc::sync_channel::<(u8, Vec<u8>)>(128);
-        let client = Client::new("L6max Emulator").map_err(error)?;
+        let client = Client::new(client_name_for_ports(names)).map_err(error)?;
+        let model = model_name_for_ports(names);
         let mut destinations = Vec::new();
         let mut sources = Vec::new();
         for (cable, &name) in names.iter().enumerate() {
@@ -34,8 +37,13 @@ impl HostMidi for CoreMidiPorts {
                     }
                 })
                 .map_err(error)?;
+            let _ = destination.set_property_string("model", model);
+            let _ = destination.set_property_string("manufacturer", MANUFACTURER_NAME);
             destinations.push(destination);
-            sources.push(client.virtual_source(&name).map_err(error)?);
+            let source = client.virtual_source(&name).map_err(error)?;
+            let _ = source.set_property_string("model", model);
+            let _ = source.set_property_string("manufacturer", MANUFACTURER_NAME);
+            sources.push(source);
         }
         Ok(Self {
             received,

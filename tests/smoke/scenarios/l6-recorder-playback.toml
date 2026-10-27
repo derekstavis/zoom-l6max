@@ -1,0 +1,31 @@
+version = 1
+name = "l6-recorder-playback"
+models = ["l6"]
+fixture = "l6-recorder-playback"
+backends = ["headless"]
+main_sha256 = "827c7c5cb2a43cc3a011d4556462b8cb9539242f817ebeed7727d66a36c03799"
+
+[[step]]
+action = "wait"
+until = "boot-ready"
+guest_timeout_ms = 600000
+wall_timeout_s = 1800
+
+# The saved recorder mode must already select a valid MASTER.WAV. This value
+# was recovered from the L6 mode-0 file scanner and prevents a silent false pass.
+[[step]]
+action = "expect-memory"
+address = 0x806101a8
+bytes = [128, 187, 0, 0, 0, 0, 0, 0]
+
+[[step]]
+action = "delay"
+guest_ms = 5000
+guest_timeout_ms = 10000
+wall_timeout_s = 300
+
+[[step]]
+action = "l6-recorder-playback"
+target = 4
+guest_timeout_ms = 20000
+wall_timeout_s = 600

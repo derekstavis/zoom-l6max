@@ -67,6 +67,14 @@ jobs:
         run: |
           cc -std=c11 -Wall -Wextra -Werror emulator/qemu/tests/indicators.c -o "$RUNNER_TEMP/l6-indicators"
           "$RUNNER_TEMP/l6-indicators"
+      - name: Test RT SAI register and FIFO model
+        run: |
+          cc -std=c11 -Wall -Wextra -Werror emulator/qemu/tests/sai.c -o "$RUNNER_TEMP/l6-sai"
+          "$RUNNER_TEMP/l6-sai"
+      - name: Test RT eDMA TCD executor
+        run: |
+          cc -std=c11 -Wall -Wextra -Werror emulator/qemu/tests/edma.c -o "$RUNNER_TEMP/l6-edma"
+          "$RUNNER_TEMP/l6-edma"
       - name: Build custom QEMU
         run: cargo run --locked -p qemu-build -- --minimal
       - name: Package and verify app

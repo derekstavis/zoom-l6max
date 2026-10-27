@@ -13,7 +13,20 @@ same as it already does over USB.
 (This patch is named "din" after the setting's usual MIDI terminology, but
 the L6max's physical jack is a 3.5mm TRS connector, not a 5-pin DIN.)
 
-The rest of this page documents how the patch is built and verified.
+## Model support
+
+The DIN receive patch targets L6max. L6 has a different native route: its DIN
+CC parser submits mapped records to a generic event queue, and the stock Main
+class-2 handler applies queued values through the native channel setters. A
+volatile QEMU DIN sweep verifies that path end to end: LPUART2 receives and
+drains 384 bytes, Main consumes all 66 mapped events, native setters run, and
+mixer RAM plus the channel-1 indicator change. L6 DIN mixer control is
+provided by stock firmware and does not need this patch. The earlier L6
+handler-argument hypothesis was disproved by the stock queued-event test.
+
+The native and browser builders select the L6max profile only for L6max
+firmware. L6's native event route is documented in
+[`development/testing.md`](../../docs/development/testing.md).
 
 ## How it works
 
@@ -42,7 +55,7 @@ arrived on that port. The jig check's own behavior is untouched.
   and prohibition on reserved mutable RAM.
 - `hooks.tsv`: hook address, length and expected byte hash.
 
-The builder is [`firmware-patch`](../../tools/firmware-patch/src/main.rs). See
+The builder is [`l6patch`](../../docs/development/tools/l6patch.md). See
 the [patch conventions](../README.md).
 
 ## Build
@@ -53,9 +66,9 @@ From the repository root, with an unpacked package:
 
 ```sh
 rustup target add thumbv7em-none-eabihf
-cargo run -p firmware-patch -- unpacked firmware-din-mixer-control-v113 --patch din-mixer-control
+cargo run -p l6patch -- unpacked firmware-din-mixer-control-v113 --patch din-mixer-control
 # All three patches in one image:
-cargo run -p firmware-patch -- unpacked firmware-full-v113 \
+cargo run -p l6patch -- unpacked firmware-full-v113 \
   --patch knob-dialog --patch midi-sync --patch din-mixer-control
 ```
 
@@ -63,7 +76,7 @@ cargo run -p firmware-patch -- unpacked firmware-full-v113 \
 
 | Address | Length | Replaces | Behavior |
 | --- | --- | --- | --- |
-| `0x8003e8ee` | 4 | One instruction (`movw r0,#0x90b4`) right after the DIN receive parser finishes a complete message and releases its lock, before the factory-jig check | Call the stock USB Mixer Control port handler (`0x8003f7c8`) with the same message when `mixerControlViaMidi` is on and the message is 3 bytes; always replay the displaced instruction and resume the parser |
+| `0x8003e8ee` | 4 | After the DIN receive parser finishes a complete message and releases its lock, before the factory-jig check | Call the stock USB Mixer Control port handler (`0x8003f7c8`) with the same message when `mixerControlViaMidi` is on and the message is 3 bytes; always replay the displaced instruction and resume the parser |
 
 The message buffer `MidiUartRcvMsg` builds (`&_DAT_80898938`, a scratch area
 with the message's status byte at `+4` and its data bytes at `+5`/`+6`) uses
@@ -78,24 +91,21 @@ treated identically whether or not `midi-sync` is present.
 ## Validation
 
 ```sh
-cargo run -p firmware-patch -- unpacked firmware-din-mixer-control-v113 --patch din-mixer-control
-cargo run -p din-editor-mixer-smoke -- --firmware-dir firmware-din-mixer-control-v113 --volatile
-L6_DIN_MIXER_CONTROL_FIXED=1 cargo run -p din-editor-mixer-smoke -- \
-  --firmware-dir firmware-din-mixer-control-v113 --volatile
-cargo run -p patched-update-smoke -- firmware-din-mixer-control-v113/L6max.bin --volatile
+cargo run -p l6patch -- unpacked firmware-din-mixer-control-v113 --patch din-mixer-control
+cargo run --offline --locked -p l6test -- run --config smoke.local.toml \
+  --case l6max-din-mixer-control-patched --model l6max
+cargo run --offline --locked -p l6test -- run --config smoke.local.toml \
+  --case l6max-din-mixer-control --model l6max
 ```
 
-`din-editor-mixer-smoke` runs the editor's own MIDI protocol (identity, global
-setting dump, then the `mixerControlViaMidi` parameter change) to turn the
-setting on exactly as the real application would, then sends a fader Control
-Change into the DIN MIDI IN jack and checks the firmware-driven channel-1 GPIO
-ring, with `L6_DIN_MIXER_CONTROL_FIXED=1` flipping its expectation from the
-stock gap to this patch's fix. `patched-update-smoke` validates the package
-through the full SD-card update-install flow (its own post-install check is
-specific to `knob-dialog`, so it only fully passes when that patch is also
-combined in).
+The driver cases run the editor's identity request, global-setting dump, and
+`mixerControlViaMidi` parameter change before testing the USB reference route,
+DIN input, and mute-echo suppression. Configure a `din-mixer-patched` fixture
+for the patched case; the stock case uses the regular prepared L6max fixture.
+Both cases still need live qualification. The separate `patched-update` case
+validates package installation and its configured post-install behavior.
 
-Confirmed, both alone and combined with `knob-dialog` and `midi-sync`:
+Confirmed on L6max, both alone and combined with `knob-dialog` and `midi-sync`:
 
 - The update package installs correctly: GPIO shutdown saves the install
   marker, the installed main image matches the built payload byte for byte,
@@ -105,7 +115,7 @@ Confirmed, both alone and combined with `knob-dialog` and `midi-sync`:
   (confirmed on channel-1 LEVEL), the same as the USB Mixer Control port.
 - `midi-sync`'s own CC 127 state broadcast (80 replies) and `knob-dialog`'s
   notification behavior both still work unchanged in the combined build.
-- General boot and input behavior (`input-smoke`) is unaffected.
+- General boot and input behavior is covered by the `l6max-input-smoke` driver case.
 
 ## Limitations
 
@@ -116,8 +126,9 @@ Confirmed, both alone and combined with `knob-dialog` and `midi-sync`:
   changes that behavior or the firmware's other DIN IN behavior (it still also
   bridges unconditionally to `L6max MIDI I/O Port` on USB cable 0, regardless
   of this patch).
-- Not run on an L6max. Update-package acceptance by the physical bootloader
-  remains unverified.
+- The patch does not apply to L6, whose stock firmware already routes mapped
+  DIN Control Changes through its native event queue. Update-package
+  acceptance by the physical bootloader remains unverified.
 - The hook splices into the DIN UART receive path, not a clean function entry;
   the veneer preserves every register, but the added call's stack depth in
   that context has not been formally analyzed, only exercised cleanly in the

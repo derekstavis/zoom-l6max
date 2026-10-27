@@ -1,0 +1,10 @@
+version = 1
+name = "boot"
+models = ["l6", "l6max"]
+fixture = "prepared"
+
+[[step]]
+action = "wait"
+until = "boot-ready"
+guest_timeout_ms = 120000
+wall_timeout_s = 600

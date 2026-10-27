@@ -4,39 +4,47 @@ use gpui::{
     Bounds, Div, PathBuilder, Pixels, Point, Window, canvas, div, point, prelude::*, px, rgb,
 };
 
-/// An endless encoder with nine independently driven LED segments.
-/// Bit zero starts at the lower left, matching the physical wiring order.
-pub fn encoder(size: f32, mask: u32) -> Div {
-    div().size(px(size)).flex_shrink_0().child(
-        canvas(
-            |_, _, _| (),
-            move |bounds, (), window, _| {
-                let (center, diameter) = geometry(bounds);
-                circle(window, center, diameter * 0.49, 0x171616);
-                circle(window, center, diameter * 0.475, 0x343638);
-                for segment in 0..9 {
-                    annular_segment(
-                        window,
-                        center,
-                        diameter * 0.395,
-                        diameter * 0.468,
-                        136.0 + segment as f32 * 30.0,
-                        164.0 + segment as f32 * 30.0,
-                        if mask & (1 << segment) != 0 {
-                            0xf59a52
-                        } else {
-                            0x56595d
-                        },
-                    );
+pub fn knob_with_input(
+    size: f32,
+    color: u32,
+    value: u32,
+    input: super::encoder::EncoderInput,
+) -> Div {
+    let mut knob = knob(size, color, value).cursor(gpui::CursorStyle::OpenHand);
+    if let Some(on_start) = input.drag_start {
+        knob = knob.on_mouse_down(gpui::MouseButton::Left, move |event, _, _| {
+            on_start(event.position.x.as_f32(), event.position.y.as_f32());
+        });
+    }
+    if let Some(on_scroll) = input.scroll {
+        knob = knob.on_scroll_wheel(move |event, _, cx| {
+            let delta = match event.delta {
+                gpui::ScrollDelta::Lines(p) => {
+                    if p.y.abs() >= p.x.abs() {
+                        p.y
+                    } else {
+                        p.x
+                    }
                 }
-                circle(window, center, diameter * 0.375, 0x151618);
-                circle(window, center, diameter * 0.350, 0x37393c);
-                circle(window, center, diameter * 0.294, 0x282a2c);
-                circle(window, center, diameter * 0.279, 0x494b4e);
-            },
-        )
-        .size_full(),
-    )
+                gpui::ScrollDelta::Pixels(p) => {
+                    if p.y.abs() >= p.x.abs() {
+                        p.y.as_f32() / 24.0
+                    } else {
+                        p.x.as_f32() / 24.0
+                    }
+                }
+            };
+            on_scroll(delta);
+            cx.stop_propagation();
+        });
+    }
+    if let Some(on_end) = input.drag_end {
+        let on_out = on_end.clone();
+        knob = knob
+            .on_mouse_up(gpui::MouseButton::Left, move |_, _, _| on_end())
+            .on_mouse_up_out(gpui::MouseButton::Left, move |_, _, _| on_out());
+    }
+    knob
 }
 
 /// A colored analog knob. ADC values are clamped to the physical 0..1023 range.
@@ -109,41 +117,6 @@ fn circle(window: &mut Window, center: Point<Pixels>, radius: f32, color: u32) {
         false,
         true,
         offset(center, radius, 0.0),
-    );
-    builder.close();
-    if let Ok(path) = builder.build() {
-        window.paint_path(path, rgb(color));
-    }
-}
-
-fn annular_segment(
-    window: &mut Window,
-    center: Point<Pixels>,
-    inner: f32,
-    outer: f32,
-    start: f32,
-    end: f32,
-    color: u32,
-) {
-    if outer <= 0.0 {
-        return;
-    }
-    let mut builder = PathBuilder::fill();
-    builder.move_to(polar(center, outer, start));
-    builder.arc_to(
-        point(px(outer), px(outer)),
-        px(0.0),
-        false,
-        true,
-        polar(center, outer, end),
-    );
-    builder.line_to(polar(center, inner, end));
-    builder.arc_to(
-        point(px(inner), px(inner)),
-        px(0.0),
-        false,
-        false,
-        polar(center, inner, start),
     );
     builder.close();
     if let Ok(path) = builder.build() {

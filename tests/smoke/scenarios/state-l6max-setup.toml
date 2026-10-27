@@ -1,0 +1,61 @@
+version = 1
+name = "state-l6max-setup"
+models = ["l6max"]
+backends = ["headless"]
+fixture = "fresh"
+
+# Complete the date editor and confirm the first-boot settings.
+[[step]]
+action = "wait"
+until = "boot-ready"
+guest_timeout_ms = 120000
+wall_timeout_s = 600
+
+[[step]]
+action = "include"
+path = "fragments/recorder-next.toml"
+[[step]]
+action = "include"
+path = "fragments/edit-date-field.toml"
+[[step]]
+action = "include"
+path = "fragments/recorder-next.toml"
+[[step]]
+action = "include"
+path = "fragments/edit-date-field.toml"
+[[step]]
+action = "include"
+path = "fragments/recorder-next.toml"
+[[step]]
+action = "include"
+path = "fragments/edit-date-field.toml"
+[[step]]
+action = "include"
+path = "fragments/recorder-next.toml"
+[[step]]
+action = "include"
+path = "fragments/edit-date-field.toml"
+[[step]]
+action = "include"
+path = "fragments/recorder-next.toml"
+[[step]]
+action = "include"
+path = "fragments/edit-date-field.toml"
+[[step]]
+action = "include"
+path = "fragments/recorder-next.toml"
+[[step]]
+action = "press"
+control = "recorder.confirm"
+[[step]]
+action = "delay"
+guest_ms = 1050
+[[step]]
+action = "press"
+control = "recorder.confirm"
+[[step]]
+action = "delay"
+guest_ms = 3000
+[[step]]
+action = "expect-settings"
+restored = false

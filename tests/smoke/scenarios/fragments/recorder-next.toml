@@ -1,0 +1,8 @@
+# Original persistence probe pacing: 50 ms key hold plus 1000 ms settling.
+[[step]]
+action = "press"
+control = "recorder.down"
+
+[[step]]
+action = "delay"
+guest_ms = 1050

@@ -63,6 +63,12 @@ impl MenuSmoke {
                 if panel.bundle.is_none() {
                     return Err("Run from an app bundle".into());
                 }
+                let expected_qemu = std::env::var("L6_MENU_SMOKE_QEMU_SHA256")
+                    .map_err(|_| "L6_MENU_SMOKE_QEMU_SHA256 is required")?;
+                crate::bundle::verify_bundled_qemu(
+                    &panel.bundle.as_ref().unwrap().resources,
+                    &expected_qemu,
+                )?;
                 window.dispatch_action(Box::new(OpenFirmware), cx);
                 self.stage = 1;
             }

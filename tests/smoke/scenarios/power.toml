@@ -1,0 +1,44 @@
+version = 1
+name = "power"
+models = ["l6", "l6max"]
+backends = ["headless"]
+fixture = "prepared"
+
+[[step]]
+action = "include"
+path = "fragments/prepared-home.toml"
+
+[[step]]
+models = ["l6max"]
+action = "power-press"
+hold_ms = 100
+powered = true
+guest_timeout_ms = 5000
+wall_timeout_s = 60
+
+[[step]]
+models = ["l6"]
+action = "power-press"
+hold_ms = 1000
+powered = false
+wall_timeout_s = 60
+
+[[step]]
+models = ["l6max"]
+action = "power-press"
+hold_ms = 3500
+powered = false
+wall_timeout_s = 60
+
+[[step]]
+action = "restart"
+
+[[step]]
+action = "wait"
+until = "boot-ready"
+guest_timeout_ms = 120000
+wall_timeout_s = 600
+
+[[step]]
+models = ["l6max"]
+action = "expect-recorder"

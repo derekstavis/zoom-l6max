@@ -1,0 +1,65 @@
+version = 1
+name = "l6max-input-smoke"
+models = ["l6max"]
+fixture = "prepared"
+backends = ["headless"]
+
+[[step]]
+action = "wait"
+until = "boot-ready"
+guest_timeout_ms = 600000
+wall_timeout_s = 1800
+
+[[step]]
+action = "l6max-input-timing"
+guest_timeout_ms = 60000
+wall_timeout_s = 120
+
+[[step]]
+action = "l6max-panel-key-map"
+guest_timeout_ms = 10000
+wall_timeout_s = 120
+
+[[step]]
+action = "press"
+control = "recorder-function-4"
+
+[[step]]
+action = "expect-button-report"
+control = "recorder-function-4"
+
+[[step]]
+action = "press"
+control = "recorder-function-2"
+
+[[step]]
+action = "expect-button-report"
+control = "recorder-function-2"
+
+[[step]]
+action = "press"
+control = "recorder-function-4"
+
+[[step]]
+action = "expect-button-report"
+control = "recorder-function-4"
+
+[[step]]
+action = "press"
+control = "recorder-function-3"
+
+[[step]]
+action = "expect-button-report"
+control = "recorder-function-3"
+
+[[step]]
+action = "press"
+control = "recorder-function-1"
+
+[[step]]
+action = "press"
+control = "rec-play-stop"
+
+[[step]]
+action = "press"
+control = "rec-record"

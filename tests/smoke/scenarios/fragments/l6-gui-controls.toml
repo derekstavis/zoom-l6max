@@ -1,0 +1,161 @@
+[[step]]
+action = "checkpoint"
+name = "l6-ui-controls-before"
+
+[[step]]
+action = "press"
+control = "ch3-mono"
+
+[[step]]
+action = "expect-trace-count"
+pattern = "l6 main LPUART2 (MIDI jacks) TX 6d\n"
+count = 1
+checkpoint = "l6-ui-controls-before"
+
+[[step]]
+action = "expect-button-led"
+control = "ch3-mono"
+checkpoint = "l6-ui-controls-before"
+changed = true
+
+[[step]]
+action = "press"
+control = "ch4-mono"
+
+[[step]]
+action = "expect-trace-count"
+pattern = "l6 main LPUART2 (MIDI jacks) TX 6e\n"
+count = 1
+checkpoint = "l6-ui-controls-before"
+
+[[step]]
+action = "expect-button-led"
+control = "ch4-mono"
+checkpoint = "l6-ui-controls-before"
+changed = true
+
+[[step]]
+action = "press"
+control = "ch5-usb-1-2"
+
+[[step]]
+action = "expect-trace-count"
+pattern = "l6 main LPUART2 (MIDI jacks) TX 71\n"
+count = 1
+checkpoint = "l6-ui-controls-before"
+
+[[step]]
+action = "expect-button-led"
+control = "ch5-usb-1-2"
+checkpoint = "l6-ui-controls-before"
+changed = true
+
+[[step]]
+action = "press"
+control = "ch6-usb-3-4"
+
+[[step]]
+action = "expect-trace-count"
+pattern = "l6 main LPUART2 (MIDI jacks) TX 72\n"
+count = 1
+checkpoint = "l6-ui-controls-before"
+
+[[step]]
+action = "expect-button-led"
+control = "ch6-usb-3-4"
+checkpoint = "l6-ui-controls-before"
+changed = true
+
+[[step]]
+action = "press"
+control = "comp-master"
+
+[[step]]
+action = "expect-trace-count"
+pattern = "l6 main LPUART2 (MIDI jacks) TX 77\n"
+count = 1
+checkpoint = "l6-ui-controls-before"
+
+[[step]]
+action = "expect-button-led"
+control = "comp-master"
+checkpoint = "l6-ui-controls-before"
+changed = true
+
+[[step]]
+action = "press"
+control = "efx-type"
+
+[[step]]
+action = "expect-trace-count"
+pattern = "l6 main LPUART2 (MIDI jacks) TX 75\n"
+count = 1
+checkpoint = "l6-ui-controls-before"
+
+[[step]]
+action = "expect-effect"
+effect = "room"
+
+[[step]]
+action = "press"
+control = "phantom-48v"
+
+[[step]]
+action = "expect-button-report"
+control = "phantom-48v"
+
+[[step]]
+action = "expect-button-led"
+control = "phantom-48v"
+checkpoint = "l6-ui-controls-before"
+changed = true
+
+[[step]]
+action = "press"
+control = "play"
+
+[[step]]
+action = "press"
+control = "tap"
+
+[[step]]
+action = "press"
+control = "sound-pad-1"
+
+[[step]]
+action = "press"
+control = "sound-pad-2"
+
+[[step]]
+action = "press"
+control = "sound-pad-3"
+
+[[step]]
+action = "press"
+control = "sound-pad-4"
+
+[[step]]
+action = "delay"
+guest_ms = 3000
+guest_timeout_ms = 10000
+
+[[step]]
+models = ["l6"]
+action = "save-scene"
+scene = 1
+guest_timeout_ms = 10000
+wall_timeout_s = 120
+
+[[step]]
+models = ["l6"]
+action = "save-scene"
+scene = 2
+guest_timeout_ms = 10000
+wall_timeout_s = 120
+
+[[step]]
+models = ["l6"]
+action = "save-scene"
+scene = 3
+guest_timeout_ms = 10000
+wall_timeout_s = 120

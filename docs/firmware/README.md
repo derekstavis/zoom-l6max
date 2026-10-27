@@ -22,13 +22,17 @@ QEMU process with separate address spaces and a shared virtual clock.
 
 ## Supported revision
 
-The original main image has SHA-256
+The L6max 1.10 MAIN image has SHA-256
 `980d92272c1f84bed200b4d2f83575202f6a00082c928d99b9e8b53af8d44461`.
-The supplied stock package is L6max 1.10; main execution starts at `0x80000000`.
-Addresses and patch hooks are revision-specific, not established for L6 or
-other releases. Application names are assigned from behavior rather than
-recovered symbols. Reviewed FreeRTOS names are used in patch bindings; the
-exact kernel release and configuration remain unproven.
+The supplied stock package is L6max 1.10; main execution starts at
+`0x80000000`. Addresses and patch hooks in the L6max investigation are
+revision-specific and are not established for other L6max releases. The
+separate L6 1.10 `midi-sync` hook profile is documented in the [model
+compatibility guide](../guides/model-compatibility.md) and
+[MIDI-sync patch guide](../guides/midi-sync-patch.md); it does not establish
+L6 equivalents for other patches. Application names are assigned from
+behavior rather than recovered symbols. Reviewed FreeRTOS names are used in
+patch bindings; the exact kernel release and configuration remain unproven.
 
 ## Evidence boundaries
 

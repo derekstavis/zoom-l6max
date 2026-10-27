@@ -1,0 +1,18 @@
+version = 1
+name = "mute"
+models = ["l6", "l6max"]
+fixture = "prepared"
+
+[[step]]
+action = "include"
+path = "fragments/prepared-level.toml"
+
+[[step]]
+action = "press"
+control = "channel.1.mute"
+
+[[step]]
+action = "expect-mute"
+channel = 1
+guest_timeout_ms = 3000
+wall_timeout_s = 30

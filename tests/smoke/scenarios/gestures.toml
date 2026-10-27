@@ -1,0 +1,32 @@
+version = 1
+name = "gestures"
+models = ["l6", "l6max"]
+fixture = "prepared"
+
+[[step]]
+action = "include"
+path = "fragments/prepared-level.toml"
+
+[[step]]
+action = "encoder"
+channel = 1
+steps = 12
+gesture = "drag-vertical"
+
+[[step]]
+action = "expect-ring"
+channel = 1
+changed = true
+only = true
+
+[[step]]
+action = "encoder"
+channel = 2
+steps = 12
+gesture = "drag-horizontal"
+
+[[step]]
+action = "expect-ring"
+channel = 2
+changed = true
+only = true

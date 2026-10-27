@@ -1,0 +1,22 @@
+version = 1
+name = "editor-pad-assignments"
+models = ["l6", "l6max"]
+fixture = "prepared"
+backends = ["headless"]
+
+[[step]]
+action = "include"
+path = "fragments/editor-pad-setup-l6.toml"
+
+[[step]]
+action = "include"
+path = "fragments/editor-pad-setup-l6max.toml"
+
+[[step]]
+action = "include"
+path = "fragments/editor-pad-usb-ready.toml"
+
+[[step]]
+action = "editor-pad-assignments"
+guest_timeout_ms = 60000
+wall_timeout_s = 900

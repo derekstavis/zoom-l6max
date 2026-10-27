@@ -1,0 +1,89 @@
+[[step]]
+action = "switch"
+control = "ch5-pad-switch"
+enabled = true
+
+[[step]]
+action = "expect-button-report"
+control = "ch5-pad-switch"
+
+[[step]]
+action = "switch"
+control = "ch5-pad-switch"
+enabled = false
+
+[[step]]
+action = "expect-button-report"
+control = "ch5-pad-switch"
+
+[[step]]
+action = "switch"
+control = "ch6-pad-switch"
+enabled = true
+
+[[step]]
+action = "expect-button-report"
+control = "ch6-pad-switch"
+
+[[step]]
+action = "switch"
+control = "ch6-pad-switch"
+enabled = false
+
+[[step]]
+action = "expect-button-report"
+control = "ch6-pad-switch"
+
+[[step]]
+action = "switch"
+control = "ch7-pad-switch"
+enabled = true
+
+[[step]]
+action = "expect-button-report"
+control = "ch7-pad-switch"
+
+[[step]]
+action = "switch"
+control = "ch7-pad-switch"
+enabled = false
+
+[[step]]
+action = "expect-button-report"
+control = "ch7-pad-switch"
+
+[[step]]
+action = "switch"
+control = "ch8-pad-switch"
+enabled = true
+
+[[step]]
+action = "expect-button-report"
+control = "ch8-pad-switch"
+
+[[step]]
+action = "switch"
+control = "ch8-pad-switch"
+enabled = false
+
+[[step]]
+action = "expect-button-report"
+control = "ch8-pad-switch"
+
+[[step]]
+action = "switch"
+control = "master-submix-switch"
+enabled = true
+
+[[step]]
+action = "expect-button-report"
+control = "master-submix-switch"
+
+[[step]]
+action = "switch"
+control = "master-submix-switch"
+enabled = false
+
+[[step]]
+action = "expect-button-report"
+control = "master-submix-switch"

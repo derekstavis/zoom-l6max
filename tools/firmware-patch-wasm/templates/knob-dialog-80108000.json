@@ -4,136 +4,163 @@
     {
       "address": "0x80006110",
       "length": 4,
+      "symbol": "notification_pop_hook",
       "target": "0x80108358"
     },
     {
       "address": "0x800064c0",
       "length": 6,
+      "symbol": "notification_tick_hook",
       "target": "0x801083f4"
     },
     {
       "address": "0x80006660",
       "length": 4,
+      "symbol": "notification_show_hook",
       "target": "0x801083cc"
     },
     {
       "address": "0x800063b8",
       "length": 6,
+      "symbol": "overlays_clear_hook",
       "target": "0x80108878"
     },
     {
       "address": "0x80006370",
       "length": 6,
+      "symbol": "busy_hide_hook",
       "target": "0x80108138"
     },
     {
       "address": "0x800068a0",
       "length": 4,
+      "symbol": "busy_show_hook",
       "target": "0x8010816c"
     },
     {
       "address": "0x800062d0",
       "length": 4,
+      "symbol": "notification_pause_hook",
       "target": "0x80108334"
     },
     {
       "address": "0x80006070",
       "length": 4,
+      "symbol": "notification_remove_hook",
       "target": "0x801083a8"
     },
     {
       "address": "0x80006348",
       "length": 4,
+      "symbol": "notification_current_hook",
       "target": "0x80108290"
     },
     {
       "address": "0x800065f8",
       "length": 4,
+      "symbol": "notification_redraw_request_hook",
       "target": "0x80108384"
     },
     {
       "address": "0x80006560",
       "length": 6,
+      "symbol": "busy_tick_hook",
       "target": "0x80108190"
     },
     {
       "address": "0x800068f8",
       "length": 6,
+      "symbol": "notification_draw_hook",
       "target": "0x801082a8"
     },
     {
       "address": "0x800069b0",
       "length": 6,
+      "symbol": "notification_bind_hook",
       "target": "0x80108268"
     },
     {
       "address": "0x80006bd0",
       "length": 4,
+      "symbol": "display_scene_refresh_hook",
       "target": "0x801081e0"
     },
     {
       "address": "0x80007080",
       "length": 4,
+      "symbol": "widget_polarity_hook",
       "target": "0x801089e0"
     },
     {
       "address": "0x800070b0",
       "length": 4,
+      "symbol": "widget_y_hook",
       "target": "0x80108a60"
     },
     {
       "address": "0x80007090",
       "length": 4,
+      "symbol": "widget_resource_hook",
       "target": "0x80108a20"
     },
     {
       "address": "0x80006fa8",
       "length": 4,
+      "symbol": "localized_text_hook",
       "target": "0x80108204"
     },
     {
       "address": "0x80061ab0",
       "length": 4,
+      "symbol": "text_layout_hook",
       "target": "0x80108924"
     },
     {
       "address": "0x80006d50",
       "length": 4,
+      "symbol": "text_measure_hook",
       "target": "0x80108970"
     },
     {
       "address": "0x80006d00",
       "length": 6,
+      "symbol": "text_copy_hook",
       "target": "0x801088d8"
     },
     {
       "address": "0x80061738",
       "length": 4,
+      "symbol": "text_scroll_hook",
       "target": "0x801089bc"
     },
     {
       "address": "0x80005ee0",
       "length": 4,
+      "symbol": "scene_clear_hook",
       "target": "0x8010889c"
     },
     {
       "address": "0x80024eb8",
       "length": 4,
+      "symbol": "callback_unregister_hook",
       "target": "0x801081b4"
     },
     {
       "address": "0x8008bd40",
       "length": 4,
+      "symbol": "window_push_hook",
       "target": "0x80108aa0"
     },
     {
       "address": "0x80006060",
       "length": 4,
+      "symbol": "notification_active_hook",
       "target": "0x80108250"
     },
     {
       "address": "0x80005e70",
       "length": 4,
+      "symbol": "background_draw_hook",
       "target": "0x801080fc"
     }
   ],
@@ -155,9 +182,10 @@
     }
   ],
   "knob_dialog_entry": "0x80108000",
+  "model": "L6max",
   "name": "knob-dialog",
   "payload_file": "knob-dialog-80108000.bin",
-  "payload_length": 8012,
+  "payload_length": 7916,
   "window_byte_total": 108,
   "windows": [
     {

@@ -1,0 +1,11 @@
+[[step]]
+action = "delay"
+guest_ms = 18000
+guest_timeout_ms = 30000
+wall_timeout_s = 180
+
+[[step]]
+action = "wait"
+until = "mixer-ready"
+guest_timeout_ms = 30000
+wall_timeout_s = 180

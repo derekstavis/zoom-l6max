@@ -1,0 +1,13 @@
+version = 1
+name = "button-reports"
+models = ["l6", "l6max"]
+fixture = "prepared"
+
+[[step]]
+action = "include"
+path = "fragments/prepared-level.toml"
+
+[[step]]
+models = ["l6max"]
+action = "include"
+path = "fragments/button-reports.toml"

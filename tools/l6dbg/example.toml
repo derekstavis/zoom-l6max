@@ -1,0 +1,17 @@
+version = 1
+model = "l6"
+wall_timeout_s = 600
+
+[[step]]
+action = "wait"
+guest_ms = 20000
+
+[[step]]
+action = "snapshot"
+name = "startup"
+
+[[step]]
+action = "trace"
+name = "panel-uart"
+contains = "panel USART1 TX"
+limit = 20

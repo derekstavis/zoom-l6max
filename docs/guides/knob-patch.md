@@ -20,7 +20,7 @@ present, otherwise the toolchain's `rust-lld` (no other install needed; see the
 
 ```sh
 rustup target add thumbv7em-none-eabihf
-cargo run -p firmware-patch -- unpacked firmware-knob-dialog-recorder-fix-v112
+cargo run -p l6patch -- unpacked firmware-knob-dialog-recorder-fix-v112
 ```
 
 The builder validates the original main SHA-256 and displaced hook regions,
@@ -44,7 +44,7 @@ encoder. This starts patched images directly and does not exercise installation.
 Use a new SD image and an isolated persistent device:
 
 ```sh
-cargo run -p sd-image -- emulator/state/knob-update-card.img --demo firmware-knob-dialog-recorder-fix-v112/L6max.bin
+cargo run -p l6fs -- card demo emulator/state/knob-update-card.img --firmware-package firmware-knob-dialog-recorder-fix-v112/L6max.bin
 cargo run -p l6max-gui -- /path/to/qemu-system-arm --firmware-dir unpacked --state-dir emulator/state/knob-update-device --sd-image emulator/state/knob-update-card.img
 ```
 

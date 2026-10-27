@@ -22,10 +22,15 @@ use std::{
 #[derive(Clone)]
 pub struct Options {
     pub qemu: Option<PathBuf>,
+    /// Optional QEMU `-audiodev` specification, including its `id=` field.
+    pub audio_device: Option<String>,
     pub firmware_dir: PathBuf,
-    /// An `L6max.bin` update package. When `firmware_dir` has no unpacked
+    /// An L6 or L6max update package. When `firmware_dir` has no unpacked
     /// images, this (or a package found by [`Options::prepare`]) is unpacked.
     pub firmware_package: Option<PathBuf>,
+    /// Optional target package used by the patched-update smoke lifecycle.
+    /// The running firmware still comes from `firmware_dir`/`firmware_package`.
+    pub update_package: Option<PathBuf>,
     /// Build QEMU and unpack firmware on first use. Packaged apps ship both and
     /// turn this off.
     pub auto_setup: bool,
@@ -37,14 +42,22 @@ pub struct Options {
     /// Connect the USB cable (and its 3 MIDI ports) as soon as the engine
     /// starts, rather than waiting for a later [`Engine::connect_usb`] call.
     pub usb_enabled: bool,
+    /// Present USB VBUS before firmware boot without starting the native MIDI
+    /// bridge. Typed USB scenarios own the host tokens and use this mode.
+    pub usb_cable_at_start: bool,
     /// Connect the DIN/TRS MIDI IN/OUT jacks as soon as the engine starts,
     /// rather than waiting for a later [`Engine::connect_midi`] call.
     pub midi_enabled: bool,
     pub timing: Timing,
-    pub ui_input_smoke: bool,
+    pub smoke_scenario: Option<PathBuf>,
     pub update_bootloader: bool,
     /// Optional local GDB socket for deterministic firmware diagnostics.
     pub gdb_socket: Option<PathBuf>,
+    /// Optional local socket for `l6ctl` commands to a running emulator.
+    pub control_socket: Option<PathBuf>,
+    /// Leave all guest CPUs paused after QMP setup so a diagnostic can attach
+    /// GDB breakpoints before firmware execution begins.
+    pub start_paused: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -53,14 +66,65 @@ pub enum Timing {
     Paced,
     /// QEMU continuously adjusts the instruction/time ratio.
     Adaptive,
+    /// Use QEMU's host virtual clock without instruction counting.
+    HostClock,
+    /// Use the host virtual clock and one TCG execution thread per vCPU.
+    HostClockMulti,
 }
 
 impl Timing {
-    fn icount(self) -> &'static str {
+    fn accelerator(self) -> &'static str {
         match self {
-            Self::Paced => "shift=3,align=on,sleep=on",
-            Self::Adaptive => "shift=auto,sleep=on",
+            Self::Paced | Self::Adaptive | Self::HostClock => "tcg,thread=single",
+            Self::HostClockMulti => "tcg,thread=multi",
         }
+    }
+
+    fn icount(self) -> Option<&'static str> {
+        match self {
+            Self::Paced => Some("shift=3,align=on,sleep=on"),
+            Self::Adaptive => Some("shift=auto,sleep=on"),
+            Self::HostClock | Self::HostClockMulti => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod timing_tests {
+    use super::{Options, Timing};
+
+    #[test]
+    fn host_clock_disables_icount_without_changing_tcg_threading() {
+        assert_eq!(Timing::HostClock.accelerator(), "tcg,thread=single");
+        assert_eq!(Timing::HostClockMulti.accelerator(), "tcg,thread=multi");
+        assert_eq!(Timing::HostClock.icount(), None);
+        assert_eq!(Timing::HostClockMulti.icount(), None);
+        assert_eq!(Timing::Paced.icount(), Some("shift=3,align=on,sleep=on"));
+        assert_eq!(Timing::Adaptive.icount(), Some("shift=auto,sleep=on"));
+    }
+
+    #[test]
+    fn host_clock_multi_is_selectable_for_diagnostics() {
+        let options = Options::parse_args(["--timing".into(), "host-clock-multi".into()]).unwrap();
+        assert!(matches!(options.timing, Timing::HostClockMulti));
+    }
+
+    #[test]
+    fn usb_cable_can_be_present_without_starting_the_midi_bridge() {
+        let options = Options::parse_args(["--usb-cable-at-start".into()]).unwrap();
+        assert!(options.usb_cable_at_start);
+        assert!(!options.usb_enabled);
+    }
+
+    #[test]
+    fn legacy_ui_smoke_flag_directs_to_the_supervised_driver() {
+        let error = match Options::parse_args(["--ui-input-smoke".into()]) {
+            Ok(_) => panic!("legacy UI smoke flag unexpectedly parsed"),
+            Err(error) => error,
+        };
+        assert!(error.contains("migrated"));
+        assert!(error.contains("-p l6test"));
+        assert!(error.contains("--backend gui"));
     }
 }
 
@@ -78,8 +142,10 @@ impl Options {
         let workspace = crate::paths::repository_root();
         let mut options = Self {
             qemu: env::var_os("L6_QEMU").map(PathBuf::from),
+            audio_device: env::var("L6_AUDIODEV").ok(),
             firmware_dir: workspace.join("unpacked"),
             firmware_package: env::var_os("L6_FIRMWARE").map(PathBuf::from),
+            update_package: None,
             auto_setup: true,
             logs: workspace.join("emulator/logs"),
             sd_image: None,
@@ -87,26 +153,49 @@ impl Options {
             state_dir: Some(workspace.join("emulator/state")),
             trace_sd: false,
             usb_enabled: false,
+            usb_cable_at_start: false,
             midi_enabled: false,
             timing: Timing::Paced,
-            ui_input_smoke: false,
+            smoke_scenario: None,
             update_bootloader: false,
             gdb_socket: None,
+            control_socket: None,
+            start_paused: false,
         };
         let mut args = arguments.into_iter();
         while let Some(arg) = args.next() {
             match arg.to_string_lossy().as_ref() {
-                "--ui-input-smoke" => options.ui_input_smoke = true,
+                "--ui-input-smoke" => {
+                    return Err("the standalone UI smoke was migrated; run `cargo run -p l6test -- run --case panel --model MODEL --backend gui` instead".into());
+                }
+                "--smoke-scenario" => {
+                    options.smoke_scenario = Some(take_path(&mut args, "--smoke-scenario")?)
+                }
+                "--start-paused" => options.start_paused = true,
                 "--update-bootloader" => options.update_bootloader = true,
                 "--qemu" => options.qemu = Some(take_path(&mut args, "--qemu")?),
+                "--audio-device" => {
+                    options.audio_device = Some(
+                        args.next()
+                            .and_then(|value| value.into_string().ok())
+                            .ok_or("--audio-device requires a QEMU audiodev specification")?,
+                    )
+                }
                 "--firmware-dir" => options.firmware_dir = take_path(&mut args, "--firmware-dir")?,
                 "--firmware-package" => {
                     options.firmware_package = Some(take_path(&mut args, "--firmware-package")?)
                 }
+                "--update-package" => {
+                    options.update_package = Some(take_path(&mut args, "--update-package")?)
+                }
                 "--no-auto-setup" => options.auto_setup = false,
                 "--logs" => options.logs = take_path(&mut args, "--logs")?,
                 "--gdb-socket" => options.gdb_socket = Some(take_path(&mut args, "--gdb-socket")?),
+                "--control-socket" => {
+                    options.control_socket = Some(take_path(&mut args, "--control-socket")?)
+                }
                 "--usb" => options.usb_enabled = true,
+                "--usb-cable-at-start" => options.usb_cable_at_start = true,
                 "--midi" => options.midi_enabled = true,
                 "--trace-sd" => options.trace_sd = true,
                 "--sd-image" => options.sd_image = Some(take_path(&mut args, "--sd-image")?),
@@ -117,12 +206,17 @@ impl Options {
                     options.timing = match args.next().as_deref().and_then(|value| value.to_str()) {
                         Some("paced") => Timing::Paced,
                         Some("adaptive") => Timing::Adaptive,
-                        _ => return Err("--timing requires paced or adaptive".into()),
+                        Some("host-clock") => Timing::HostClock,
+                        Some("host-clock-multi") => Timing::HostClockMulti,
+                        _ => return Err(
+                            "--timing requires paced, adaptive, host-clock, or host-clock-multi"
+                                .into(),
+                        ),
                     };
                 }
                 "--help" | "-h" => {
                     println!(
-                        "Engine options: [QEMU] [--qemu PATH] [--firmware-dir DIR | --firmware-package L6max.bin] [--no-auto-setup] [--logs DIR] [--state-dir DIR | --volatile] [--sd-image FILE | --no-sd] [--update-bootloader] [--usb] [--midi] [--trace-sd] [--timing paced|adaptive] [--ui-input-smoke] [--gdb-socket PATH]"
+                        "Engine options: [QEMU] [--qemu PATH] [--audio-device 'driver=...,id=...'] [--firmware-dir DIR | --firmware-package PACKAGE] [--update-package PACKAGE] [--no-auto-setup] [--logs DIR] [--state-dir DIR | --volatile] [--sd-image FILE | --no-sd] [--update-bootloader] [--usb] [--midi] [--trace-sd] [--timing paced|adaptive|host-clock|host-clock-multi] [--smoke-scenario FILE] [--gdb-socket PATH] [--control-socket PATH] [--start-paused]"
                     );
                     std::process::exit(0);
                 }
@@ -140,6 +234,7 @@ impl Options {
 }
 
 pub struct Engine {
+    model: l6fw::Model,
     children: Vec<Child>,
     pub inputs: Option<Arc<InputHub>>,
     pub management: Vec<QmpClient>,
@@ -147,9 +242,14 @@ pub struct Engine {
     pub usb: Option<Arc<crate::usb::UsbHost>>,
     pub midi: Option<crate::usb_midi::MidiBridge>,
     pub din_midi: Option<crate::din_midi::DinMidiBridge>,
+    control_server: Option<crate::control::ControlServer>,
 }
 
 impl Engine {
+    pub fn model(&self) -> l6fw::Model {
+        self.model
+    }
+
     pub fn start(options: &Options) -> Result<Self, String> {
         let mut prepared;
         let options = if options.auto_setup {
@@ -160,6 +260,7 @@ impl Engine {
             options
         };
         let mut engine = Self {
+            model: l6fw::Model::L6max,
             children: Vec::new(),
             inputs: None,
             management: Vec::new(),
@@ -167,6 +268,7 @@ impl Engine {
             usb: None,
             midi: None,
             din_midi: None,
+            control_server: None,
         };
         let Some(qemu) = &options.qemu else {
             return Ok(engine);
@@ -193,12 +295,26 @@ impl Engine {
                 return Err(format!("missing firmware: {image}"));
             }
         }
+        let main = fs::read(firmware.join("main_firmware.bin"))
+            .map_err(|e| format!("cannot read MAIN firmware image: {e}"))?;
+        let model = match options.state_dir.as_ref() {
+            Some(state) => match fs::read(state.join("main-nor.bin")) {
+                Ok(nor) => l6fw::model_from_main_nor(&nor)
+                    .map_err(|e| format!("cannot identify installed MAIN firmware: {e}"))?,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    l6fw::model_from_main(&main)?
+                }
+                Err(error) => return Err(format!("cannot read installed MAIN NOR: {error}")),
+            },
+            None => l6fw::model_from_main(&main)?,
+        };
+        engine.model = model;
         if options.update_bootloader {
             let state = options
                 .state_dir
                 .as_ref()
                 .ok_or("--update-bootloader requires persistent --state-dir storage")?;
-            let outcome = crate::update_bootloader::install(state, sd.as_deref())
+            let outcome = crate::update_bootloader::install(state, sd.as_deref(), model)
                 .map_err(|e| format!("replacement update bootloader: {e}"))?;
             fs::write(logs.join("update-bootloader.log"), format!("{outcome:?}\n"))
                 .map_err(|e| e.to_string())?;
@@ -225,19 +341,33 @@ impl Engine {
             usb_guest.as_raw_fd(),
             din_midi_guest.as_raw_fd(),
         ];
+        let audio_id = options
+            .audio_device
+            .as_deref()
+            .map(|spec| {
+                spec.split(',')
+                    .find_map(|part| part.strip_prefix("id="))
+                    .filter(|id| !id.is_empty())
+                    .ok_or("--audio-device must contain a nonempty id= field")
+            })
+            .transpose()?;
+        let machine = audio_id.map_or_else(
+            || "l6max-dual".to_owned(),
+            |id| format!("l6max-dual,audiodev={id}"),
+        );
         let mut command = Command::new(&qemu);
         command
-            .args([
-                "-M",
-                "l6max-dual",
-                "-accel",
-                "tcg,thread=single",
-                "-icount",
-                options.timing.icount(),
-                "-smp",
-                "2",
-                "-kernel",
-            ])
+            .arg("-M")
+            .arg(&machine)
+            .args(["-accel", options.timing.accelerator()]);
+        if let Some(plugin) = env::var_os("L6_QEMU_PLUGIN") {
+            command.arg("-plugin").arg(plugin);
+        }
+        if let Some(icount) = options.timing.icount() {
+            command.args(["-icount", icount]);
+        }
+        command
+            .args(["-smp", "2", "-kernel"])
             .arg(firmware.join("main_firmware.bin"))
             .args([
                 "-S",
@@ -261,6 +391,7 @@ impl Engine {
             .arg(logs.join("engine.trace"))
             .current_dir(&logs)
             .env("L6_PANEL_FIRMWARE", firmware.join("secondary_firmware.bin"))
+            .env_remove("L6_MODEL")
             .env("L6_MAIN_INPUT_FD", main_input_guest.as_raw_fd().to_string())
             .env(
                 "L6_PANEL_INPUT_FD",
@@ -268,7 +399,10 @@ impl Engine {
             )
             .env("L6_DISPLAY_FD", display_fd.to_string())
             .env_remove("L6_EXTERNAL_RAM_FD")
-            .env("L6_SERVICE_AUDIO_QUEUE", "1")
+            .env(
+                "L6_SERVICE_AUDIO_QUEUE",
+                env::var("L6_SERVICE_AUDIO_QUEUE").unwrap_or_else(|_| "1".into()),
+            )
             .env_remove("L6_INPUT_FD")
             .env_remove("L6_BUTTON_CONTROL_FILE")
             .env_remove("L6_EXTERNAL_RAM_FILE")
@@ -279,6 +413,9 @@ impl Engine {
             .stderr(Stdio::from(
                 File::create(logs.join("engine.stderr")).map_err(|e| e.to_string())?,
             ));
+        if let Some(spec) = &options.audio_device {
+            command.args(["-audiodev", spec]);
+        }
         if let Some(socket) = &options.gdb_socket {
             command
                 .arg("-gdb")
@@ -308,7 +445,9 @@ impl Engine {
             din_midi_guest.as_raw_fd().to_string(),
         );
         if options.trace_sd {
-            command.args(["-trace", "sdhci_*"]);
+            let trace_file = logs.join("sdhci.trace");
+            let trace_options = format!("enable=sdhci_*,file={}", trace_file.display());
+            command.args(["-trace", trace_options.as_str()]);
         }
         engine.usb = Some(Arc::new(
             crate::usb::UsbHost::new(usb_host).map_err(|e| e.to_string())?,
@@ -339,18 +478,39 @@ impl Engine {
         if !engine.connected() {
             return Err("a firmware process exited during startup".into());
         }
-        for management in &engine.management {
-            management
-                .resume()
-                .map_err(|e| format!("resume guest: {e}"))?;
+        if options.usb_cable_at_start {
+            engine
+                .usb
+                .as_ref()
+                .ok_or("USB cable connection needs a USB host socket")?
+                .connect(true)
+                .map_err(|error| format!("connect USB cable before boot: {error}"))?;
+        }
+        if !options.start_paused {
+            for management in &engine.management {
+                management
+                    .resume()
+                    .map_err(|e| format!("resume guest: {e}"))?;
+            }
         }
         engine.inputs = Some(Arc::new(InputHub::new(main_input, panel_input)));
+        if let Some(path) = options.control_socket.clone() {
+            engine.control_server = Some(crate::control::ControlServer::start(
+                path,
+                engine.inputs.as_ref().unwrap().clone(),
+                model,
+            )?);
+        }
         // The DIN MIDI bridge is always running, draining the UART socket so
         // the guest's transmit side never blocks; whether it is also wired to
         // a native host MIDI port is the `midi_enabled` connect state.
         engine.din_midi = Some(
-            crate::din_midi::DinMidiBridge::start(din_midi_host, options.midi_enabled)
-                .map_err(|e| e.to_string())?,
+            crate::din_midi::DinMidiBridge::start(
+                din_midi_host,
+                options.midi_enabled,
+                crate::host_midi::din_port_name_for_model(model),
+            )
+            .map_err(|e| e.to_string())?,
         );
         if options.usb_enabled {
             engine.connect_usb()?;
@@ -365,7 +525,13 @@ impl Engine {
                 .usb
                 .clone()
                 .ok_or("USB is not available for this engine")?;
-            self.midi = Some(crate::usb_midi::MidiBridge::start(usb).map_err(|e| e.to_string())?);
+            self.midi = Some(
+                crate::usb_midi::MidiBridge::start(
+                    usb,
+                    crate::host_midi::port_names_for_model(self.model),
+                )
+                .map_err(|e| e.to_string())?,
+            );
         }
         Ok(())
     }
@@ -433,7 +599,23 @@ impl Engine {
 
 impl Drop for Engine {
     fn drop(&mut self) {
+        drop(self.control_server.take());
         drop(self.midi.take());
+        if let Some(management) = self.management.first() {
+            let _ = management.quit();
+        }
+        // Give QEMU's QMP quit path time to close audio backends and flush
+        // diagnostics before escalating to a signal. Sending SIGTERM
+        // immediately after quit can interrupt that cleanup.
+        let graceful_deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while std::time::Instant::now() < graceful_deadline
+            && self
+                .children
+                .iter_mut()
+                .any(|c| matches!(c.try_wait(), Ok(None)))
+        {
+            std::thread::sleep(Duration::from_millis(10));
+        }
         for child in &mut self.children {
             if matches!(child.try_wait(), Ok(None)) {
                 unsafe {
@@ -441,9 +623,8 @@ impl Drop for Engine {
                 }
             }
         }
-        // One shared deadline avoids waiting separately for each process.
-        let deadline = std::time::Instant::now() + Duration::from_secs(2);
-        while std::time::Instant::now() < deadline
+        let terminate_deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while std::time::Instant::now() < terminate_deadline
             && self
                 .children
                 .iter_mut()

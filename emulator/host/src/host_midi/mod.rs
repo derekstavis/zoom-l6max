@@ -19,7 +19,54 @@ pub const PORT_NAMES: [&str; 3] = [
     "L6max Mixer Control Port",
     "for L6 Editor Port",
 ];
+pub const L6_DIN_PORT_NAME: &str = "L6 MIDI In/Out Port";
+pub const L6MAX_DIN_PORT_NAME: &str = "L6max MIDI In/Out Port";
+pub const L6_PORT_NAMES: [&str; 3] = [
+    "L6 MIDI I/O Port",
+    "L6 Mixer Control Port",
+    "for L6 Editor Port",
+];
 pub const ENDPOINT_SUFFIX: &str = " (Emulator)";
+pub const L6_CLIENT_NAME: &str = "L6 Emulator";
+pub const L6MAX_CLIENT_NAME: &str = "L6max Emulator";
+
+pub fn port_names_for_model(model: l6fw::Model) -> &'static [&'static str; 3] {
+    match model {
+        l6fw::Model::L6 => &L6_PORT_NAMES,
+        l6fw::Model::L6max => &PORT_NAMES,
+    }
+}
+
+pub fn din_port_name_for_model(model: l6fw::Model) -> &'static str {
+    match model {
+        l6fw::Model::L6 => L6_DIN_PORT_NAME,
+        l6fw::Model::L6max => L6MAX_DIN_PORT_NAME,
+    }
+}
+
+/// `names` is either one of the two 3-entry USB port arrays or a single-entry
+/// DIN port array; both shapes carry the model in their first/only name.
+fn is_l6(names: &[&str]) -> bool {
+    names.first() == Some(&L6_PORT_NAMES[0]) || names.first() == Some(&L6_DIN_PORT_NAME)
+}
+
+pub fn client_name_for_ports(names: &[&str]) -> &'static str {
+    if is_l6(names) {
+        L6_CLIENT_NAME
+    } else {
+        L6MAX_CLIENT_NAME
+    }
+}
+
+/// Model name real hardware would report in its `kMIDIPropertyModel`. The
+/// official editor builds its device name from an endpoint's model and name
+/// properties, so a back end that never sets `model` is invisible to it even
+/// though generic CoreMIDI clients (ours included) only need `name`.
+pub fn model_name_for_ports(names: &[&str]) -> &'static str {
+    if is_l6(names) { "L6" } else { "L6max" }
+}
+
+pub const MANUFACTURER_NAME: &str = "ZOOM Corporation";
 
 /// Name under which a port called `name` appears to host applications.
 pub fn endpoint_name(name: &str) -> String {
@@ -59,6 +106,32 @@ pub use unavailable::Unavailable as NativeMidi;
 pub mod testing {
     use super::*;
     use std::collections::VecDeque;
+
+    #[test]
+    fn midi_port_names_follow_the_detected_firmware_model() {
+        assert_eq!(port_names_for_model(l6fw::Model::L6), &L6_PORT_NAMES);
+        assert_eq!(port_names_for_model(l6fw::Model::L6max), &PORT_NAMES);
+        assert_eq!(din_port_name_for_model(l6fw::Model::L6), L6_DIN_PORT_NAME);
+        assert_eq!(
+            din_port_name_for_model(l6fw::Model::L6max),
+            L6MAX_DIN_PORT_NAME
+        );
+        assert_eq!(
+            client_name_for_ports(port_names_for_model(l6fw::Model::L6)),
+            L6_CLIENT_NAME
+        );
+        assert_eq!(
+            client_name_for_ports(port_names_for_model(l6fw::Model::L6max)),
+            L6MAX_CLIENT_NAME
+        );
+        assert_eq!(client_name_for_ports(&[L6_DIN_PORT_NAME]), L6_CLIENT_NAME);
+        assert_eq!(
+            client_name_for_ports(&[L6MAX_DIN_PORT_NAME]),
+            L6MAX_CLIENT_NAME
+        );
+        assert_eq!(model_name_for_ports(&[L6_DIN_PORT_NAME]), "L6");
+        assert_eq!(model_name_for_ports(&[L6MAX_DIN_PORT_NAME]), "L6max");
+    }
 
     /// In-memory back end: `incoming` is what host applications "sent",
     /// `outgoing` records what the device delivered.

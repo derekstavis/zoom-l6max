@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
-/* Minimal L6max firmware execution boards for QEMU 11.1.2.
+/* Minimal L6/L6max firmware execution boards for QEMU 11.1.2.
  *
  * Copyright (c) 2026. Licensed under GPL-2.0-or-later.
  * These are bring-up boards, not hardware-accurate SoC models.
@@ -9,6 +9,9 @@
 #include "qapi/error.h"
 #include "hw/arm/armv7m.h"
 #include "hw/arm/boot.h"
+#include "hw/core/cpu.h"
+#include "hw/gpio/imx_gpio.h"
+#include "target/arm/cpu.h"
 #include "hw/arm/machines-qom.h"
 #include "hw/core/boards.h"
 #include "hw/core/qdev-clock.h"
@@ -17,14 +20,17 @@
 #include "hw/core/sysbus.h"
 #include "hw/core/resettable.h"
 #include "hw/core/loader.h"
+#include "exec/memop.h"
 #include "hw/sd/sd.h"
 #include "hw/sd/sdhci.h"
+#include "hw/i2c/i2c.h"
 #include "system/address-spaces.h"
 #include "system/blockdev.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
 #include "qemu/timer.h"
 #include "qemu/main-loop.h"
+#include "qemu/audio.h"
 #include "chardev/char-fe.h"
 #include "hw/char/stm32l4x5_usart.h"
 #include "qemu/config-file.h"
@@ -34,6 +40,10 @@
 #include "l6max-display.h"
 #include "l6max-indicators.h"
 #include "l6max-usb.h"
+#include "l6-profile.h"
+#include "l6-sai.h"
+#include "l6-edma.h"
+#include "l6-ccm-analog.h"
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
@@ -51,6 +61,205 @@
 #define L6_INPUT_TX_LIMIT (64 * 1024)
 /* Bring-up debounce default, matching the verified minimum press duration. */
 #define L6_INPUT_RELEASE_GAP_MS 50
+#define L6_LPUART2_BASE 0x188000
+#define L6_LPUART2_IRQ 21
+#define L6_LPUART3_BASE 0x18c000
+#define L6_LPUART3_IRQ 22
+#define L6_LPUART1_BASE 0x184000
+#define L6_LPUART1_IRQ 20
+#define L6_LPUART7_BASE 0x19c000
+#define L6_LPUART7_IRQ 26
+#define L6_MAIN_BUTTON_MENU (1u << 0)
+#define L6_MAIN_BUTTON_PLAY (1u << 1)
+#define L6_MAIN_BUTTON_RECORD (1u << 2)
+
+/* The L6max firmware's I2C register writes match a TLV320ADC6140-compatible
+ * ADC configuration. Keep the emulated slave generic until the physical
+ * codec marking is confirmed; it provides the observed register protocol. */
+#define TYPE_L6MAX_AUDIO_ADC "l6max-audio-adc"
+OBJECT_DECLARE_SIMPLE_TYPE(L6maxAudioADCState, L6MAX_AUDIO_ADC)
+
+struct L6maxAudioADCState {
+    I2CSlave parent_obj;
+    uint8_t registers[128];
+    uint8_t register_pointer;
+    bool expect_register;
+};
+
+static int l6max_audio_adc_send(I2CSlave *i2c, uint8_t data)
+{
+    L6maxAudioADCState *s = L6MAX_AUDIO_ADC(i2c);
+
+    if (s->expect_register) {
+        s->register_pointer = data & 0x7f;
+        s->expect_register = false;
+    } else {
+        s->registers[s->register_pointer] = data;
+        s->register_pointer = (s->register_pointer + 1) & 0x7f;
+        if (g_getenv("L6_AUDIO_TRACE")) {
+            qemu_log_mask(LOG_UNIMP,
+                          "l6max audio ADC I2C address=%02x register=%02x value=%02x\n",
+                          i2c->address, (s->register_pointer - 1) & 0x7f,
+                          data);
+        }
+    }
+    return 0;
+}
+
+static uint8_t l6max_audio_adc_recv(I2CSlave *i2c)
+{
+    L6maxAudioADCState *s = L6MAX_AUDIO_ADC(i2c);
+    uint8_t value = s->registers[s->register_pointer];
+
+    s->register_pointer = (s->register_pointer + 1) & 0x7f;
+    return value;
+}
+
+static int l6max_audio_adc_event(I2CSlave *i2c, enum i2c_event event)
+{
+    L6maxAudioADCState *s = L6MAX_AUDIO_ADC(i2c);
+
+    if (event == I2C_START_SEND) {
+        s->expect_register = true;
+    }
+    return 0;
+}
+
+static void l6max_audio_adc_class_init(ObjectClass *klass, const void *data)
+{
+    I2CSlaveClass *sc = I2C_SLAVE_CLASS(klass);
+
+    (void)data;
+    sc->send = l6max_audio_adc_send;
+    sc->recv = l6max_audio_adc_recv;
+    sc->event = l6max_audio_adc_event;
+}
+
+static const TypeInfo l6max_audio_adc_type_info = {
+    .name = TYPE_L6MAX_AUDIO_ADC,
+    .parent = TYPE_I2C_SLAVE,
+    .instance_size = sizeof(L6maxAudioADCState),
+    .class_init = l6max_audio_adc_class_init,
+};
+
+static void l6max_audio_adc_register_types(void)
+{
+    type_register_static(&l6max_audio_adc_type_info);
+}
+type_init(l6max_audio_adc_register_types)
+
+typedef struct L6BoardProfile {
+    const char *name;
+    hwaddr main_flash_base;
+    unsigned panel_matrix_columns;
+    unsigned encoder_count;
+    hwaddr midi_uart_base;
+    int midi_uart_irq;
+    unsigned midi_uart_number;
+    hwaddr panel_uart_base;
+    int panel_uart_irq;
+    unsigned panel_uart_number;
+    hwaddr panel_boot_gpio_base;
+    uint32_t panel_boot_gpio_mask;
+    hwaddr panel_reset_gpio_base;
+    uint32_t panel_reset_gpio_mask;
+    hwaddr high_ram_base;
+    size_t high_ram_size;
+    hwaddr audio_queue_write_offset;
+    hwaddr audio_queue_read_offset;
+    hwaddr sai_bases[2]; /* Offsets within the MAIN peripheral window. */
+    unsigned sai_count;
+    bool sai1_rx_read_stream_compat;
+    unsigned audio_output_slot;
+    unsigned audio_sample_rate_hz;
+    unsigned audio_source_clock_hz;
+    bool resource_flash;
+    bool oled;
+    bool audio_codec_bus;
+    bool audio_profile_ramp_ack;
+    bool audio_dsp_wait_ack;
+    unsigned main_gpio_button_mask;
+    unsigned power_button_cutoff_ms;
+} L6BoardProfile;
+
+static const L6BoardProfile L6_PROFILE = {
+    .name = "L6",
+    .main_flash_base = 0x80001000,
+    .panel_matrix_columns = 3,
+    .encoder_count = 6,
+    .midi_uart_base = L6_LPUART2_BASE,
+    .midi_uart_irq = L6_LPUART2_IRQ,
+    .midi_uart_number = 2,
+    /* L6's panel service code configures SDK UART instance 6 at 115200 baud;
+     * the runtime handle resolves to LPUART7 (base + IRQ verified in firmware). */
+    .panel_uart_base = L6_LPUART7_BASE,
+    .panel_uart_irq = L6_LPUART7_IRQ,
+    .panel_uart_number = 7,
+    /* The panel service sets GPIO3.7 before pulsing GPIO2.29. */
+    .panel_boot_gpio_base = 0x401c0000,
+    .panel_boot_gpio_mask = 1u << 7,
+    .panel_reset_gpio_base = 0x401bc000,
+    .panel_reset_gpio_mask = 1u << 29,
+    .high_ram_base = 0x801f0000,
+    .high_ram_size = 0x10000,
+    /* L6's callback staging indices are in SRAM at 0x2000bb0c/bb10. */
+    .audio_queue_write_offset = 0xbb0c,
+    .audio_queue_read_offset = 0xbb10,
+    .sai_bases = { 0x384000, 0x38c000 },
+    .sai_count = 2,
+    .audio_output_slot = 0,
+    /* Both stock images pass 24.576 MHz to their SAI divider helpers. This
+     * is the firmware's source-clock assumption, not a measured CCM root. */
+    .audio_sample_rate_hz = 48000,
+    .audio_source_clock_hz = 24576000,
+    .resource_flash = true,
+    .oled = false,
+    .audio_codec_bus = false,
+    .audio_profile_ramp_ack = false,
+    .audio_dsp_wait_ack = false,
+    /* Keep L6max's generic button mask limited to Play. L6 TAP and sound-pad
+     * inputs use the model-specific mappings in l6_main_key_gpio(). */
+    .main_gpio_button_mask = L6_MAIN_BUTTON_PLAY,
+    /* L6 does not emit L6max's GPIO3.3 power-hold falling edge. Model the
+     * front-panel on/off switch after a debounced press instead. */
+    .power_button_cutoff_ms = 500,
+};
+
+static const L6BoardProfile L6MAX_PROFILE = {
+    .name = "L6max",
+    .main_flash_base = 0x80000000,
+    .panel_matrix_columns = 5,
+    .encoder_count = 8,
+    .midi_uart_base = L6_LPUART3_BASE,
+    .midi_uart_irq = L6_LPUART3_IRQ,
+    .midi_uart_number = 3,
+    .panel_uart_base = L6_LPUART1_BASE,
+    .panel_uart_irq = L6_LPUART1_IRQ,
+    .panel_uart_number = 1,
+    /* Recovered L6max updater uses GPIO1.29 BOOT and GPIO5.1 RESET. */
+    .panel_boot_gpio_base = 0x401b8000,
+    .panel_boot_gpio_mask = 1u << 29,
+    .panel_reset_gpio_base = 0x400c0000,
+    .panel_reset_gpio_mask = 1u << 1,
+    /* Preserve the established L6max callback-ring layout. */
+    .audio_queue_write_offset = 0x7d08,
+    .audio_queue_read_offset = 0x7d0c,
+    .sai_bases = { 0x384000 },
+    .sai_count = 1,
+    .sai1_rx_read_stream_compat = true,
+    /* L6max SAI1 uses an eight-slot frame. The sampler's output pair is in
+     * slots 4-5 and is repeated in slots 6-7; slots 2-3 carry other data. */
+    .audio_output_slot = 4,
+    .audio_sample_rate_hz = 48000,
+    .audio_source_clock_hz = 24576000,
+    .oled = true,
+    .audio_codec_bus = true,
+    .audio_profile_ramp_ack = false,
+    .audio_dsp_wait_ack = false,
+    .main_gpio_button_mask = L6_MAIN_BUTTON_MENU | L6_MAIN_BUTTON_PLAY |
+                             L6_MAIN_BUTTON_RECORD,
+    .power_button_cutoff_ms = 0,
+};
 
 typedef struct L6InputTap {
     uint32_t sequence;
@@ -69,17 +278,27 @@ typedef struct L6PanelKey {
 } L6PanelKey;
 
 typedef struct L6MainKey {
-    unsigned id; /* 0=Menu/FUNC1, 1=Play, 2=Record */
+    unsigned id; /* L6max: 0=Menu, 1=Play, 2=Record; L6: host target ID */
     unsigned start_ms;
     unsigned end_ms;
     bool logged;
 } L6MainKey;
+
+typedef struct L6MainGPIOAdapter {
+    struct L6ChipState *chip;
+    DeviceState *device;
+    MemoryRegion *model_mmio;
+    MemoryRegion registers;
+    MemoryRegion aliases;
+    unsigned bank;
+} L6MainGPIOAdapter;
 
 typedef struct L6ChipState {
     ARMv7MState armv7m;
     MemoryRegion flash;
     MemoryRegion flash_alias;
     MemoryRegion itcm;
+    MemoryRegion main_high_ram;
     MemoryRegion sram;
     MemoryRegion dtcm;
     MemoryRegion external_ram;
@@ -88,14 +307,18 @@ typedef struct L6ChipState {
     MemoryRegion usb_region;
     L6USB usb;
     SDHCIState *sdhc;
+    I2CBus *audio_i2c_bus;
     const MemoryRegionOps *sd_ops;
     uint32_t sd_sysctl;
+    uint32_t sd_vend_spec2;
     bool sd_present;
     Clock *sysclk;
     Clock *refclk;
     GHashTable *registers;
     size_t flash_payload_size;
     uint8_t *nor_flash;
+    uint8_t *resource_flash;
+    size_t resource_flash_size;
     uint8_t *persistent_panel;
     uint8_t *persistent_rtc;
     uint8_t *persistent_options;
@@ -112,8 +335,42 @@ typedef struct L6ChipState {
     unsigned nor_program_size;
     unsigned nor_program_cursor;
     unsigned lpspi_log_count;
+    unsigned resource_flash_log_count;
+    uint8_t lpspi_flash_opcode;
+    uint8_t lpspi_flash_header_bytes;
+    uint32_t lpspi_flash_address;
+    uint32_t lpspi_rx_fifo[16];
+    unsigned lpspi_rx_head;
+    unsigned lpspi_rx_count;
     unsigned edma_log_count;
     uint32_t edma_erq;
+    bool audio_trace;
+    unsigned audio_trace_sai_log_count;
+    unsigned audio_trace_edma_log_count;
+    unsigned audio_trace_clock_log_count;
+    unsigned audio_trace_irq_elapsed_ms;
+    uint64_t audio_trace_irq_count[4];
+    uint64_t audio_trace_irq_ack_count[4];
+    L6Sai sai[2];
+    unsigned audio_frame_remainder;
+    bool audio_sample_trace;
+    unsigned audio_sample_trace_ms;
+    uint64_t audio_tx_words[2];
+    uint64_t audio_tx_nonzero_words[2];
+    uint64_t audio_tx_underruns[2];
+    uint32_t audio_tx_first_nonzero[2];
+    uint32_t audio_tx_last_nonzero[2];
+    uint32_t audio_tx_probe[2][8];
+    unsigned audio_tx_probe_count[2];
+    bool audio_tx_probe_logged[2];
+    AudioBackend *audio_backend;
+    SWVoiceOut *audio_voice;
+    GByteArray *audio_pending;
+    FILE *audio_raw_capture;
+    FILE *audio_tdm_capture;
+    FILE *audio_dma_source_capture;
+    bool audio_dma_source_capture_header_written;
+    unsigned audio_tdm_capture_slots;
     L6Display display;
     bool display_dc;
     bool panel;
@@ -126,7 +383,6 @@ typedef struct L6ChipState {
     unsigned main_rx_count;
     unsigned main_ctrl_log_count;
     unsigned main_tx_count;
-    unsigned main_gpio_log_count;
     bool main_boot_select;
     bool main_rom_mode;
     uint8_t rom_flash[0x10000];
@@ -152,33 +408,42 @@ typedef struct L6ChipState {
     /* Panel USART1 is the real stm32l4x5-usart device (register-compatible
      * by inspection: our own CR1/ISR bit usage already matched RM0351
      * bit-for-bit before this). Its chardev is an in-process socket pair;
-     * panel_usart_fd is our end, bridging its bytes to/from the main
-     * chip's still hand-rolled LPUART1 (a different, NXP-derived register
-     * layout with no QEMU model). */
+     * panel_usart_fd is our end, bridging its bytes to/from the profile's
+     * panel UART on the main chip (LPUART7 on L6, LPUART1 on L6max). */
     DeviceState *panel_usart1;
     int panel_usart_fd;
     CharFrontend main_uart;
     bool main_rx_pending;
     uint8_t main_rx_byte;
-    /* LPUART3, the physical MIDI IN/OUT (DIN/TRS) jacks: an inherited
-     * socket, like L6_USB_FD, rather than a Chardev. */
+    /* Model-selected UART for the physical MIDI IN/OUT (DIN/TRS) jacks: an
+     * inherited socket, like L6_USB_FD, rather than a Chardev. */
     int main_midi_fd;
     GByteArray *main_midi_rx;
     bool main_midi_rx_pending;
     uint8_t main_midi_rx_byte;
+    const L6BoardProfile *profile;
     L6PanelKey panel_keys[L6_MAX_PANEL_KEYS];
     unsigned panel_key_count;
     L6MainKey main_keys[L6_MAX_PANEL_KEYS];
     unsigned main_key_count;
     bool service_audio_queue;
+    bool service_audio_profile_ramp_ack;
+    bool service_audio_dsp_ack;
     int input_fd;
     uint8_t input_rx[L6_INPUT_MESSAGE_SIZE];
     bool input_trace;
     int64_t input_trace_until;
+    unsigned input_trace_matrix_count;
+    bool main_gpio_trace;
+    bool main_gpio_output_trace;
+    bool main_gpio_pad_led_trace;
+    unsigned main_gpio_output_log_count;
+    uint32_t main_button_tested_bits[L6_BUTTON_EVENT_COUNT][5];
     unsigned input_rx_size;
     GByteArray *input_tx;
     GQueue input_taps[L6_BUTTON_EVENT_COUNT];
     uint32_t main_gpio[5], main_gpio_generation;
+    L6MainGPIOAdapter main_gpio_adapters[5];
     uint16_t analog_inputs[5], analog_published[5];
     uint32_t analog_generation, adc_channel;
     bool analog_seen[5];
@@ -199,6 +464,51 @@ typedef struct L6ChipState {
     int8_t encoder_direction[L6_ENCODER_COUNT];
     bool encoder_active[L6_ENCODER_COUNT];
 } L6ChipState;
+
+static unsigned l6_encoder_count(L6ChipState *s);
+static bool l6_panel_button_valid(L6ChipState *s, unsigned target);
+static bool l6_main_button_valid(L6ChipState *s, unsigned target);
+static bool l6_main_key_gpio(L6ChipState *s, unsigned id,
+                             hwaddr *port, unsigned *pin);
+static void l6_main_gpio_refresh_inputs(L6ChipState *s);
+
+static void l6_lpi2c_mtdr_write(L6ChipState *s, uint32_t value)
+{
+    uint32_t command = (value >> 8) & 7;
+    uint8_t data = value & 0xff;
+    gpointer msr_key = GUINT_TO_POINTER((0x3f0014 >> 2) + 1);
+    uint32_t msr = GPOINTER_TO_UINT(g_hash_table_lookup(s->registers,
+                                                        msr_key));
+    int result = 0;
+
+    if (!s->audio_i2c_bus) {
+        return;
+    }
+    switch (command) {
+    case 0: /* Transmit data byte. */
+        result = i2c_send(s->audio_i2c_bus, data);
+        break;
+    case 2: /* STOP. */
+        i2c_end_transfer(s->audio_i2c_bus);
+        msr |= 1u << 9; /* SDF */
+        break;
+    case 4: /* START and send/receive the 8-bit address byte. */
+        result = i2c_start_transfer(s->audio_i2c_bus, data >> 1,
+                                    (data & 1) != 0);
+        break;
+    default:
+        result = -1;
+        qemu_log_mask(LOG_UNIMP,
+                      "L6max LPI2C1 unsupported MTDR command=%u value=%04x\n",
+                      command, value & 0x7ff);
+        break;
+    }
+    if (result < 0) {
+        msr |= 1u << 10; /* NDF: no slave acknowledged the operation. */
+    }
+    msr |= 1u; /* TDF: the command/data word has left the transmit FIFO. */
+    g_hash_table_insert(s->registers, msr_key, GUINT_TO_POINTER(msr));
+}
 
 typedef struct L6MachineState {
     MachineState parent;
@@ -232,6 +542,9 @@ OBJECT_DECLARE_SIMPLE_TYPE(L6DualMachineState, L6_DUAL_MACHINE)
  * It is not yet calculated from the UART divisor registers. */
 #define L6_UART_BYTE_NS 100000
 #define L6_UART_QUEUE_LIMIT (64 * 1024)
+#define L6_USDHC_VEND_SPEC2_RESET 0x00019006u
+#define L6_USDHC_VEND_SPEC2_RW_MASK ((1u << 12) | (0x0fu << 3))
+#define L6_USDHC_SYS_CTRL_RESET 0x0080800fu
 
 static void l6_flexspi_rx_window(L6ChipState *s)
 {
@@ -275,6 +588,7 @@ static void l6_input_disconnect(L6ChipState *s)
         l6_display_close(&s->display);
     }
     memset(s->input_button_down, 0, sizeof(s->input_button_down));
+    memset(s->main_button_tested_bits, 0, sizeof(s->main_button_tested_bits));
     memset(s->input_release_requested, 0, sizeof(s->input_release_requested));
     memset(s->input_tap_deadline, 0, sizeof(s->input_tap_deadline));
     for (unsigned button = 0; button < L6_BUTTON_EVENT_COUNT; button++) {
@@ -307,6 +621,15 @@ static void l6_input_reply(L6ChipState *s, uint32_t kind, uint32_t seq,
     l6_input_handlers(s);
 }
 
+static uint32_t l6_button_duration(L6ChipState *s, unsigned target,
+                                   uint32_t duration)
+{
+    if (!s->panel && target == 53 && s->profile->power_button_cutoff_ms) {
+        return s->profile->power_button_cutoff_ms;
+    }
+    return MAX(duration, L6_BUTTON_TAP_TICKS);
+}
+
 static void l6_display_frame_ready(void *opaque, uint32_t generation,
                                    uint32_t slot, uint32_t dirty_pages)
 {
@@ -335,8 +658,8 @@ static void l6_input_command(L6ChipState *s, const uint8_t *message)
     int32_t value = (int32_t)ldl_le_p(message + 16);
     uint32_t duration = ldl_le_p(message + 20);
     bool valid_button = target < L6_BUTTON_EVENT_COUNT &&
-        (s->panel ? (target == 1 || target == 2 || target == 3 || target == 6 || (target >= 7 && target <= 47))
-                  : (target == 0 || target == 4 || target == 5 || target >= 48));
+        (s->panel ? l6_panel_button_valid(s, target)
+                  : l6_main_button_valid(s, target));
 
     if (ldl_le_p(message) != L6_INPUT_MAGIC || !seq) {
         l6_input_disconnect(s);
@@ -359,7 +682,7 @@ static void l6_input_command(L6ChipState *s, const uint8_t *message)
         return;
     }
     if (((kind >= 1 && kind <= 3) && !valid_button) ||
-        (kind == 4 && (!s->panel || target >= L6_ENCODER_COUNT)) ||
+        (kind == 4 && (!s->panel || target >= l6_encoder_count(s))) ||
         kind < 1 || kind > 4 ||
         (kind == 1 && (value != 1 || duration > 60000)) ||
         (kind == 2 && (value != 0 || duration != 0)) ||
@@ -368,9 +691,12 @@ static void l6_input_command(L6ChipState *s, const uint8_t *message)
         l6_input_reply(s, 0x80000003u, seq, target, -EINVAL);
         return;
     }
+    if (s->input_trace && kind <= 3) {
+        s->input_trace_until = qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL) + 1000;
+        s->input_trace_matrix_count = 0;
+    }
     switch (kind) {
     case 1:
-        s->input_trace_until = qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL) + 1000;
         if ((s->input_button_down[target] &&
              !s->input_release_requested[target] &&
              g_queue_is_empty(&s->input_taps[target])) ||
@@ -390,14 +716,14 @@ static void l6_input_command(L6ChipState *s, const uint8_t *message)
             }
             L6InputTap *press = g_new0(L6InputTap, 1);
             press->sequence = seq;
-            press->duration_ms = MAX(duration, L6_BUTTON_TAP_TICKS);
+            press->duration_ms = l6_button_duration(s, target, duration);
             g_queue_push_tail(&s->input_taps[target], press);
             break;
         }
         s->input_button_down[target] = true;
         s->input_release_requested[target] = false;
         s->input_down_deadline[target] = qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL) +
-            MAX(duration, L6_BUTTON_TAP_TICKS);
+            l6_button_duration(s, target, duration);
         l6_input_reply(s, 0x80000001u, seq, target, 1);
         break;
     case 2:
@@ -428,7 +754,7 @@ static void l6_input_command(L6ChipState *s, const uint8_t *message)
         }
         L6InputTap *tap = g_new0(L6InputTap, 1);
         tap->sequence = seq;
-        tap->duration_ms = MAX(duration, L6_BUTTON_TAP_TICKS);
+        tap->duration_ms = l6_button_duration(s, target, duration);
         tap->automatic = true;
         g_queue_push_tail(&s->input_taps[target], tap);
         break;
@@ -472,6 +798,37 @@ static void l6_socket_input_tick(L6ChipState *s)
 {
     int64_t now = qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL);
     for (unsigned button = 0; button < L6_BUTTON_EVENT_COUNT; button++) {
+        bool l6_power_cutoff = !s->panel && button == 53 &&
+            s->profile->power_button_cutoff_ms != 0;
+        if (l6_power_cutoff && s->input_button_down[button] &&
+            now >= s->input_down_deadline[button]) {
+            if (s->input_release_requested[button]) {
+                l6_input_reply(s, 0x80000001u,
+                               s->input_release_sequence[button], button, 0);
+            }
+            s->input_button_down[button] = false;
+            s->input_release_requested[button] = false;
+            qemu_log_mask(LOG_UNIMP,
+                          "l6 board Power button cutoff at %" PRId64 " ms\n",
+                          now);
+            if (!++s->main_gpio_generation) { ++s->main_gpio_generation; }
+            l6_input_reply(s, 0x80000009u, s->main_gpio_generation, 0, 0);
+            qemu_system_shutdown_request(SHUTDOWN_CAUSE_GUEST_SHUTDOWN);
+            return;
+        }
+        if (l6_power_cutoff && s->input_tap_deadline[button] &&
+            now >= s->input_tap_deadline[button]) {
+            l6_input_reply(s, 0x80000002u, s->input_tap_sequence[button],
+                           button, s->input_button_down[button]);
+            s->input_tap_deadline[button] = 0;
+            qemu_log_mask(LOG_UNIMP,
+                          "l6 board Power button cutoff at %" PRId64 " ms\n",
+                          now);
+            if (!++s->main_gpio_generation) { ++s->main_gpio_generation; }
+            l6_input_reply(s, 0x80000009u, s->main_gpio_generation, 0, 0);
+            qemu_system_shutdown_request(SHUTDOWN_CAUSE_GUEST_SHUTDOWN);
+            return;
+        }
         if (s->input_release_requested[button] &&
             now >= s->input_down_deadline[button]) {
             s->input_button_down[button] = false;
@@ -519,18 +876,13 @@ static void l6_sd_detect_tick(L6ChipState *s)
 {
     if (!s->sdhc) { return; }
     bool present = sdbus_get_inserted(&s->sdhc->sdbus);
-    gpointer isr_key = GUINT_TO_POINTER((0x1bc018 >> 2) + 1);
-    gpointer imr_key = GUINT_TO_POINTER((0x1bc014 >> 2) + 1);
-    uint32_t isr = GPOINTER_TO_UINT(g_hash_table_lookup(s->registers, isr_key));
-    uint32_t imr = GPOINTER_TO_UINT(g_hash_table_lookup(s->registers, imr_key));
     if (present != s->sd_present) {
         s->sd_present = present;
-        isr |= 1u << 28;
-        g_hash_table_insert(s->registers, isr_key, GUINT_TO_POINTER(isr));
+        IMXGPIOState *gpio = IMX_GPIO(s->main_gpio_adapters[1].device);
+        gpio->isr |= 1u << 28;
+        qemu_set_irq(gpio->irq[1], !!(gpio->isr & gpio->imr & 0xffff0000u));
         qemu_log_mask(LOG_UNIMP, "l6 SD card detect=%u\n", present);
     }
-    qemu_set_irq(qdev_get_gpio_in(DEVICE(&s->armv7m), 83),
-                 !!(isr & imr & (1u << 28)));
 }
 
 static void l6_input_timer_tick(void *opaque)
@@ -538,6 +890,7 @@ static void l6_input_timer_tick(void *opaque)
     L6ChipState *s = opaque;
     l6_socket_input_tick(s);
     if (!s->panel) { l6_sd_detect_tick(s); }
+    if (!s->panel) { l6_main_gpio_refresh_inputs(s); }
     if (s->panel && !s->cpu_held) {
         l6_encoder_input_tick(s);
     }
@@ -551,6 +904,202 @@ static bool l6_button_down(L6ChipState *s, unsigned button)
         s->input_tap_deadline[button] != 0;
 }
 
+static unsigned l6_encoder_count(L6ChipState *s)
+{
+    return s->profile->encoder_count;
+}
+
+static bool l6_panel_button_valid(L6ChipState *s, unsigned target)
+{
+    if (s->profile == &L6_PROFILE) {
+        /* L6: five direct inputs and a 3 x 8 switch matrix. */
+        return target == 1 || target == 2 || target == 3 || target == 6 ||
+               target == 47 || (target >= 7 && target <= 30);
+    }
+    return target == 1 || target == 2 || target == 3 || target == 6 ||
+           (target >= 7 && target <= 47);
+}
+
+static bool l6_main_button_valid(L6ChipState *s, unsigned target)
+{
+    if (target >= 48) {
+        return true;
+    }
+    unsigned button = target == 0 ? L6_MAIN_BUTTON_MENU :
+                      target == 4 ? L6_MAIN_BUTTON_PLAY :
+                      target == 5 ? L6_MAIN_BUTTON_RECORD : 0;
+    return button && (s->profile->main_gpio_button_mask & button);
+}
+
+/* Timed main-GPIO keys include L6 TAP and the four sound pads. Input pins are
+ * model-specific; retain the recovered reader pin even where pad attribution
+ * still needs confirmation. */
+static bool l6_main_key_gpio(L6ChipState *s, unsigned id,
+                             hwaddr *port, unsigned *pin)
+{
+    if (s->profile == &L6MAX_PROFILE && id >= 48 && id <= 52) {
+        /* L6max control readers 49–52 come from the recovered key table;
+         * control 48 is the EventPort TAP input. GPIO2.30 is a board strap. */
+        static const struct { hwaddr port; unsigned pin; } l6max_pad_keys[] = {
+            { 0x1bc000, 22 }, /* TAP */
+            { 0x1b8000, 21 }, /* Control 49: GPIO1 bit 21 */
+            { 0x1b8000, 25 }, /* Control 50: GPIO1 bit 25 */
+            { 0x1b8000, 26 }, /* Control 51: GPIO1 bit 26 */
+            { 0x1b8000, 0 },  /* Control 52: GPIO1 bit 0 */
+        };
+        *port = l6max_pad_keys[id - 48].port;
+        *pin = l6max_pad_keys[id - 48].pin;
+        return true;
+    }
+    if (s->profile == &L6_PROFILE) {
+        static const struct { unsigned id; hwaddr port; unsigned pin; } l6_keys[] = {
+            { 4, 0x1bc000, 25 }, /* Play/Stop: active-low GPIO2.25 */
+            { 48, 0x1bc000, 22 }, /* TAP: fifth EventPort input */
+            { 49, 0x1bc000, 31 }, /* Sound pad 1 */
+            { 50, 0x1bc000, 30 }, /* Sound pad 2 */
+            { 51, 0x1b8000, 21 }, /* Sound pad 3 */
+            { 52, 0x1b8000, 20 }, /* Sound pad 4 */
+        };
+        for (unsigned i = 0; i < ARRAY_SIZE(l6_keys); i++) {
+            if (l6_keys[i].id == id) {
+                *port = l6_keys[i].port;
+                *pin = l6_keys[i].pin;
+                return true;
+            }
+        }
+        return false;
+    }
+    if (id > 2 || !(s->profile->main_gpio_button_mask & (1u << id))) {
+        return false;
+    }
+    *port = id == 1 ? 0x1b8000 : 0x0c0000;
+    *pin = id == 0 ? 2 : id == 1 ? 20 : 0;
+    return true;
+}
+
+static const hwaddr l6_main_gpio_ports[5] = {
+    0x1b8000, 0x1bc000, 0x1c0000, 0x1c4000, 0x0c0000
+};
+
+static uint32_t l6_main_gpio_input_value(L6ChipState *s, unsigned bank)
+{
+    hwaddr port = l6_main_gpio_ports[bank];
+    uint32_t word = s->main_gpio[bank];
+    uint64_t now_ms = qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL);
+
+    /* Board pull-ups and static strap levels recovered by the old shim. */
+    word |= bank == 4 ? 0x5u : bank == 1 ?
+        ((1u << 31) | (s->profile == &L6_PROFILE ?
+                       ((1u << 30) | (1u << 22)) : 0)) :
+        ((1u << 20) | (1u << 21) | (1u << 25) | (1u << 26) | 1u |
+         (s->profile == &L6_PROFILE ? (1u << 9) : 0));
+    if (bank == 1) {
+        word = (word & ~(1u << 28)) | (s->sd_present ? (1u << 28) : 0);
+        if (s->profile == &L6_PROFILE) {
+            word |= 1u << 25;
+        } else {
+            word &= ~(1u << 25);
+            if (s->input_fd >= 0 && l6_button_down(s, 53)) {
+                word |= 1u << 25;
+            }
+        }
+    }
+
+    for (unsigned i = 0; i < s->main_key_count; i++) {
+        L6MainKey *key = &s->main_keys[i];
+        hwaddr key_port;
+        unsigned pin;
+        if (!l6_main_key_gpio(s, key->id, &key_port, &pin) ||
+            port != key_port || now_ms < key->start_ms ||
+            now_ms >= key->end_ms) {
+            continue;
+        }
+        if (!key->logged) {
+            qemu_log_mask(LOG_UNIMP,
+                          "l6 main key id=%u port=%08x pin=%u at %" PRIu64 " ms\n",
+                          key->id, (unsigned)port, pin, now_ms);
+            key->logged = true;
+        }
+        word &= ~(1u << pin);
+    }
+
+    if (s->input_fd >= 0) {
+        static const struct {
+            unsigned id;
+            unsigned bank;
+            unsigned pin;
+            bool active_high;
+            const L6BoardProfile *profile;
+        } buttons[] = {
+            { 0, 4, 2, false, NULL },
+            { 4, 1, 25, false, &L6_PROFILE },
+            { 4, 0, 20, false, &L6MAX_PROFILE },
+            { 5, 4, 0, false, NULL },
+        };
+        for (unsigned i = 0; i < ARRAY_SIZE(buttons); i++) {
+            if (bank != buttons[i].bank ||
+                (buttons[i].profile && s->profile != buttons[i].profile)) {
+                continue;
+            }
+            bool pressed = l6_button_down(s, buttons[i].id);
+            if (!pressed) {
+                memset(s->main_button_tested_bits[buttons[i].id], 0,
+                       sizeof(s->main_button_tested_bits[buttons[i].id]));
+                if (buttons[i].active_high) {
+                    word &= ~(1u << buttons[i].pin);
+                } else {
+                    word |= 1u << buttons[i].pin;
+                }
+            } else {
+                if (buttons[i].active_high) {
+                    word |= 1u << buttons[i].pin;
+                } else {
+                    word &= ~(1u << buttons[i].pin);
+                }
+            }
+        }
+        if (s->profile == &L6_PROFILE && bank == 0) {
+            if (l6_button_down(s, 53)) {
+                word &= ~(1u << 9);
+            } else {
+                word |= 1u << 9;
+            }
+        }
+        for (unsigned id = 48; id <= 52; id++) {
+            hwaddr key_port;
+            unsigned pin;
+            if (!l6_main_key_gpio(s, id, &key_port, &pin) || key_port != port) {
+                continue;
+            }
+            bool pressed = l6_button_down(s, id);
+            if (!pressed) {
+                memset(s->main_button_tested_bits[id], 0,
+                       sizeof(s->main_button_tested_bits[id]));
+                word |= 1u << pin;
+            } else {
+                word &= ~(1u << pin);
+            }
+        }
+    }
+
+    bool l6_power_bank = s->profile == &L6_PROFILE ? bank == 0 : bank == 1;
+    if (l6_power_bank) {
+        unsigned power_pin = s->profile == &L6_PROFILE ? 9 : 25;
+        bool pressed = (word & (1u << power_pin)) != 0;
+        if (s->profile == &L6_PROFILE) {
+            pressed = !pressed;
+        }
+        if (!s->power_seen || pressed != s->power_published) {
+            s->power_seen = true;
+            s->power_published = pressed;
+            qemu_log_mask(LOG_UNIMP,
+                          "l6 main power input=%u at %" PRIu64 " ms\n",
+                          pressed, now_ms);
+        }
+    }
+    return word;
+}
+
 static void l6_encoder_input_tick(L6ChipState *s)
 {
     if (s->input_fd >= 0) {
@@ -558,7 +1107,7 @@ static void l6_encoder_input_tick(L6ChipState *s)
             { 2, 0, 1, 3 }, /* positive: one Gray-code cycle from idle 3 */
             { 1, 0, 2, 3 }, /* negative: reverse Gray-code cycle */
         };
-        for (unsigned encoder = 0; encoder < L6_ENCODER_COUNT; encoder++) {
+        for (unsigned encoder = 0; encoder < l6_encoder_count(s); encoder++) {
             int32_t target = s->encoder_target[encoder];
             if (!s->encoder_active[encoder] &&
                 target != s->encoder_position[encoder]) {
@@ -768,40 +1317,68 @@ static int l6_main_uart_can_receive(void *opaque)
     return s->main_rx_pending || s->main_rom_mode ? 0 : 1;
 }
 
+/* Both the normal panel/service link and the ROM/update exchange use the
+ * model's physical panel UART: LPUART7 on L6, LPUART1 on L6max. */
+static hwaddr l6_panel_uart_base(const L6ChipState *s)
+{
+    return s->profile->panel_uart_base;
+}
+
+static int l6_panel_uart_irq(const L6ChipState *s)
+{
+    return s->profile->panel_uart_irq;
+}
+
+static unsigned l6_panel_uart_number(const L6ChipState *s)
+{
+    return s->profile->panel_uart_number;
+}
+
 static void l6_main_uart_receive(void *opaque, const uint8_t *buf, int size)
 {
     L6ChipState *s = opaque;
     if (size <= 0 || s->main_rx_pending) {
         return;
     }
+    hwaddr base = l6_panel_uart_base(s);
+    uint32_t ctrl = GPOINTER_TO_UINT(g_hash_table_lookup(s->registers,
+        GUINT_TO_POINTER(((base + 0x18) >> 2) + 1)));
+    /* i.MX RT LPUART CTRL.RE gates reception. Consume but discard bytes that
+     * arrive while disabled; holding one until RE is enabled would invent a
+     * receive FIFO and can stall the UART link behind a stale byte. */
+    if (!(ctrl & (1u << 18))) {
+        qemu_log_mask(LOG_UNIMP,
+                      "l6 main LPUART%u (panel link) RX discarded (RE=0) %02x\n",
+                      l6_panel_uart_number(s), buf[0]);
+        return;
+    }
     s->main_rx_byte = buf[0];
     s->main_rx_pending = true;
     s->main_rx_count++;
-    qemu_log_mask(LOG_UNIMP, "l6 main LPUART1 RX %02x\n", buf[0]);
-    uint32_t ctrl = GPOINTER_TO_UINT(g_hash_table_lookup(s->registers,
-        GUINT_TO_POINTER((0x184018 >> 2) + 1)));
+    qemu_log_mask(LOG_UNIMP, "l6 main LPUART%u (panel link) RX accepted %02x\n",
+                  l6_panel_uart_number(s), buf[0]);
     if (ctrl & (1u << 21)) {
-        qemu_irq_pulse(qdev_get_gpio_in(DEVICE(&s->armv7m), 20));
+        qemu_irq_pulse(qdev_get_gpio_in(DEVICE(&s->armv7m), l6_panel_uart_irq(s)));
     }
 }
 
-/* LPUART3 is IRQn 22 in the i.MX RT1052 CMSIS header (MIMXRT1052.h), the
- * same table that gives LPUART1 the 20 already used below: 20, 21, 22...
- * sequential through LPUART8 at 27. The main firmware's own vector table
- * (unpacked/main_firmware.bin, vector 38 = IRQn 22 + 16) holds a distinct,
- * non-default handler address there, consistent with every other LPUART.
- */
-#define L6_LPUART3_IRQ 22
+/* The SDK UART instance and IRQ are selected by the booted board profile. */
+static hwaddr l6_midi_uart_base(const L6ChipState *s)
+{
+    return s->profile->midi_uart_base;
+}
 
-/* LPUART3 (DIN MIDI) RX: bytes queue from the inherited socket and are
- * handed to the guest one at a time through STAT.RDRF, the same shape as
- * the other LPUARTs. The firmware enables RIE on this port during its own
- * boot (observed in the emulator, unconditionally), so the receive path is
- * pulsed the same way LPUART1's is, rather than left to a polling task.
- */
+static int l6_midi_uart_irq(const L6ChipState *s)
+{
+    return s->profile->midi_uart_irq;
+}
+
+/* Physical MIDI bytes arrive over the inherited socket and are handed to
+ * the model's UART instance one at a time through STAT.RDRF. */
 static void l6_main_midi_read_host(void *opaque)
 {
     L6ChipState *s = opaque;
+    hwaddr base = l6_midi_uart_base(s);
     uint8_t buf[256];
     ssize_t n = read(s->main_midi_fd, buf, sizeof(buf));
     if (n <= 0) {
@@ -812,7 +1389,20 @@ static void l6_main_midi_read_host(void *opaque)
         }
         return;
     }
-    qemu_log_mask(LOG_UNIMP, "l6 main LPUART3 (MIDI jacks) RX %d bytes\n", (int)n);
+    uint32_t ctrl = GPOINTER_TO_UINT(g_hash_table_lookup(s->registers,
+        GUINT_TO_POINTER(((base + 0x18) >> 2) + 1)));
+    qemu_log_mask(LOG_UNIMP,
+                  "l6 main LPUART%u (MIDI jacks) host RX %d bytes CTRL %08x RE %u RIE %u\n",
+                  s->profile->midi_uart_number, (int)n, ctrl,
+                  !!(ctrl & (1u << 18)), !!(ctrl & (1u << 21)));
+    /* The DIN socket is the wire-facing endpoint, so disabled receivers lose
+     * these bytes just like the panel UART path above. */
+    if (!(ctrl & (1u << 18))) {
+        qemu_log_mask(LOG_UNIMP,
+                      "l6 main LPUART%u (MIDI jacks) RX discarded (RE=0) %d bytes\n",
+                      s->profile->midi_uart_number, (int)n);
+        return;
+    }
     bool was_pending = s->main_midi_rx_pending;
     g_byte_array_append(s->main_midi_rx, buf, n);
     if (!s->main_midi_rx_pending && s->main_midi_rx->len > 0) {
@@ -821,10 +1411,8 @@ static void l6_main_midi_read_host(void *opaque)
         g_byte_array_remove_index(s->main_midi_rx, 0);
     }
     if (!was_pending && s->main_midi_rx_pending) {
-        uint32_t ctrl = GPOINTER_TO_UINT(g_hash_table_lookup(s->registers,
-            GUINT_TO_POINTER((0x18c018 >> 2) + 1)));
         if (ctrl & (1u << 21)) {
-            qemu_irq_pulse(qdev_get_gpio_in(DEVICE(&s->armv7m), L6_LPUART3_IRQ));
+            qemu_irq_pulse(qdev_get_gpio_in(DEVICE(&s->armv7m), l6_midi_uart_irq(s)));
         }
     }
 }
@@ -876,10 +1464,8 @@ static void l6_uart_link_send(L6ChipState *source, uint8_t byte)
     }
 }
 
-/* Bytes the real stm32l4x5-usart device sent out over its chardev (the
- * panel's USART1 TX) arrive here on our end of the in-process socket pair,
- * and are forwarded to the main chip's still hand-rolled LPUART1 receive
- * path exactly as l6_uart_link_send used to feed it. */
+/* Bytes sent by panel USART1 arrive here on our end of the in-process socket
+ * pair and are forwarded to the model-selected main-chip panel UART. */
 static void l6_panel_usart_bridge_read(void *opaque)
 {
     L6ChipState *s = opaque;
@@ -909,7 +1495,7 @@ static void l6_panel_usart_bridge_read(void *opaque)
 static void l6_uart_accept_input(L6ChipState *destination)
 {
     /* The panel's real USART device drives its own qemu_chr_fe_accept_input
-     * internally; this path now only ever serves main's LPUART1. */
+     * internally; this path serves the model-selected main-chip panel UART. */
     if (destination->peer) {
         L6UartLink *incoming = destination->peer->uart_link;
         if (incoming->queue->len && !timer_pending(incoming->timer)) {
@@ -1046,9 +1632,10 @@ static void l6_rom_uart_tick(void *opaque)
     }
     s->rom_reply_visible++;
     uint32_t ctrl = GPOINTER_TO_UINT(g_hash_table_lookup(s->registers,
-        GUINT_TO_POINTER((0x184018 >> 2) + 1)));
+        GUINT_TO_POINTER(((l6_panel_uart_base(s) + 0x18) >> 2) + 1)));
     if (ctrl & (1u << 21)) {
-        qemu_irq_raise(qdev_get_gpio_in(DEVICE(&s->armv7m), 20));
+        qemu_irq_raise(qdev_get_gpio_in(DEVICE(&s->armv7m),
+                                        l6_panel_uart_irq(s)));
     }
     if (s->rom_reply_visible < s->rom_reply_write) {
         timer_mod(s->rom_uart_timer,
@@ -1056,24 +1643,174 @@ static void l6_rom_uart_tick(void *opaque)
     }
 }
 
-/* The audio DSP callback is not yet reached without a SAI/eDMA stream.
- * Complete its pending ramp request so firmware startup can continue.
- * This is a bring-up approximation, not an audio signal model.
- */
+/* Optional diagnostic acknowledgments remain available via environment
+ * overrides. Normal profiles use the clocked SAI/eDMA paths instead. */
+static void l6_sai_audio_clock_advance(L6ChipState *s, unsigned frames);
+
+static unsigned l6_sai_master_sample_rate(L6ChipState *s)
+{
+    if (!s->profile->audio_source_clock_hz) {
+        return 0;
+    }
+    for (unsigned i = 0; i < s->profile->sai_count; i++) {
+        L6Sai *sai = &s->sai[i];
+        uint32_t tcr2 = sai->regs[L6_SAI_TCR2 / 4];
+        uint32_t tx = sai->regs[L6_SAI_TCSR / 4];
+        uint32_t rx = sai->regs[L6_SAI_RCSR / 4];
+        if ((tcr2 & L6_SAI_BCD) && ((tx & L6_SAI_TE) || (rx & L6_SAI_RE))) {
+            return l6_sai_sample_rate(s->profile->audio_source_clock_hz,
+                                      tcr2,
+                                      sai->regs[L6_SAI_TCR4 / 4],
+                                      sai->regs[L6_SAI_TCR5 / 4]);
+        }
+    }
+    return 0;
+}
+
+static void l6_audio_output_callback(void *opaque, int available)
+{
+    /* The SAI timer pushes samples directly as its clocked frames advance. */
+    (void)opaque;
+    (void)available;
+}
+
+static void l6_audio_output_write(L6ChipState *s, const int32_t *samples,
+                                  unsigned frames)
+{
+    if (!frames) {
+        return;
+    }
+
+    if (s->audio_raw_capture) {
+        uint8_t raw[48 * 2 * sizeof(uint32_t)];
+        size_t bytes = frames * 2 * sizeof(uint32_t);
+
+        g_assert(bytes <= sizeof(raw));
+        for (unsigned frame = 0; frame < frames; frame++) {
+            stl_le_p(raw + frame * 2 * sizeof(uint32_t),
+                     (uint32_t)samples[frame * 2]);
+            stl_le_p(raw + (frame * 2 + 1) * sizeof(uint32_t),
+                     (uint32_t)samples[frame * 2 + 1]);
+        }
+        if (fwrite(raw, 1, bytes, s->audio_raw_capture) != bytes ||
+            fflush(s->audio_raw_capture)) {
+            qemu_log_mask(LOG_GUEST_ERROR,
+                          "l6 raw audio capture write failed: %s\n",
+                          strerror(errno));
+            fclose(s->audio_raw_capture);
+            s->audio_raw_capture = NULL;
+        }
+    }
+
+    if (!s->audio_voice) {
+        return;
+    }
+
+    g_byte_array_append(s->audio_pending, (const uint8_t *)samples,
+                         frames * 2 * sizeof(*samples));
+    while (s->audio_pending->len) {
+        size_t written = audio_be_write(s->audio_backend, s->audio_voice,
+                                        s->audio_pending->data,
+                                        s->audio_pending->len);
+        if (!written) {
+            break;
+        }
+        g_byte_array_remove_range(s->audio_pending, 0, written);
+    }
+
+    /* Keep the frontend close to guest real time if a backend stalls. */
+    const unsigned max_pending = 48000 * 2 * sizeof(*samples);
+    if (s->audio_pending->len > max_pending) {
+        unsigned drop = s->audio_pending->len - max_pending;
+        drop -= drop % (2 * sizeof(*samples));
+        g_byte_array_remove_range(s->audio_pending, 0, drop);
+        qemu_log_mask(LOG_UNIMP,
+                      "l6 audio backend fell behind; discarded %u queued bytes\n",
+                      drop);
+    }
+}
+
+static void l6_audio_sample_trace_tick(L6ChipState *s)
+{
+    if (!s->audio_sample_trace || ++s->audio_sample_trace_ms < 1000) {
+        return;
+    }
+    s->audio_sample_trace_ms = 0;
+    for (unsigned i = 0; i < s->profile->sai_count; i++) {
+        qemu_log_mask(LOG_UNIMP,
+                      "l6 audio TX samples sai=%08" HWADDR_PRIx " words=%" PRIu64
+                      " nonzero=%" PRIu64 " underruns=%" PRIu64
+                      " first=%08x last=%08x at=%" PRId64 "ms\n",
+                      s->profile->sai_bases[i],
+                      s->audio_tx_words[i], s->audio_tx_nonzero_words[i],
+                      s->audio_tx_underruns[i],
+                      s->audio_tx_first_nonzero[i], s->audio_tx_last_nonzero[i],
+                      qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL));
+        s->audio_tx_words[i] = 0;
+        s->audio_tx_nonzero_words[i] = 0;
+        s->audio_tx_underruns[i] = 0;
+        s->audio_tx_first_nonzero[i] = 0;
+        s->audio_tx_last_nonzero[i] = 0;
+    }
+}
+
+static void l6_audio_irq_trace_tick(L6ChipState *s)
+{
+    if (!s->audio_trace || ++s->audio_trace_irq_elapsed_ms < 1000) {
+        return;
+    }
+    s->audio_trace_irq_elapsed_ms = 0;
+    for (unsigned i = 0; i < ARRAY_SIZE(s->audio_trace_irq_count); i++) {
+        qemu_log_mask(LOG_UNIMP,
+                      "l6 audio eDMA IRQ channel=%u assertions=%" PRIu64
+                      " clears=%" PRIu64 " pending=%u at=%" PRId64 "ms\n",
+                      i + 12, s->audio_trace_irq_count[i],
+                      s->audio_trace_irq_ack_count[i],
+                      (GPOINTER_TO_UINT(g_hash_table_lookup(
+                           s->registers,
+                           GUINT_TO_POINTER((0x0e8024 >> 2) + 1))) >>
+                       (i + 12)) & 1,
+                      qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL));
+        s->audio_trace_irq_count[i] = 0;
+        s->audio_trace_irq_ack_count[i] = 0;
+    }
+}
+
 static void l6_main_audio_service_tick(void *opaque)
 {
     L6ChipState *s = opaque;
-    uint8_t *ram = memory_region_get_ram_ptr(&s->external_ram);
-    if (ldl_le_p(ram + 0xa3e8) == 1) {
-        stl_le_p(ram + 0xa3e8, 0);
+    unsigned sample_rate = l6_sai_master_sample_rate(s);
+    if (sample_rate) {
+        s->audio_frame_remainder += sample_rate;
+        unsigned frames = s->audio_frame_remainder / 1000;
+        s->audio_frame_remainder %= 1000;
+        l6_sai_audio_clock_advance(s, frames);
+    }
+    l6_audio_sample_trace_tick(s);
+    l6_audio_irq_trace_tick(s);
+    if (s->service_audio_profile_ramp_ack) {
+        uint8_t *ram = memory_region_get_ram_ptr(&s->external_ram);
+        if (ldl_le_p(ram + 0xa3e8) == 1) {
+            stl_le_p(ram + 0xa3e8, 0);
+        }
+    }
+    if (s->service_audio_dsp_ack && s->profile == &L6_PROFILE &&
+        s->profile->high_ram_size >= 0x8cd8) {
+        uint8_t *main_high_ram = memory_region_get_ram_ptr(&s->main_high_ram);
+        if (ldl_le_p(main_high_ram + 0x8cd4) == 1) {
+            /* This explicit override lets probes expose the DSP wait even
+             * though normal profiles now advance the SAI/eDMA callback. */
+            stl_le_p(main_high_ram + 0x8cd4, 0);
+        }
     }
     if (s->service_audio_queue) {
         /* Diagnostic stand-in for the absent audio transfer consumer. The
          * firmware's 15-slot staging queue otherwise fills during setup.
-         * This acknowledges its read index without processing audio data. */
+         * The index layout differs between firmware models. Acknowledge the
+         * current write index without processing audio data. */
         uint8_t *sram = memory_region_get_ram_ptr(&s->sram);
-        uint32_t write_index = ldl_le_p(sram + 0x7d08);
-        stl_le_p(sram + 0x7d0c, write_index);
+        uint32_t write_index = ldl_le_p(sram + s->profile->audio_queue_write_offset);
+        stl_le_p(sram + s->profile->audio_queue_read_offset, write_index);
     }
     timer_mod(s->main_audio_service_timer,
               qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + 1000000);
@@ -1256,7 +1993,7 @@ static void l6_rom_write_byte(L6ChipState *s, uint8_t byte)
     }
 }
 
-/* RT1052 clock/power semantics around QEMU's reusable card and ADMA model.
+/* RT USDHC clock/power semantics around QEMU's reusable card and ADMA model.
  * Unlike SDHCI, USDHC derives clock/power from the SoC; SYS_CTRL[2:0]
  * are reserved. Firmware 0x80080fc8 waits for PRES_STATE.SDSTB before
  * programming its divider and writes INITA to issue initialization clocks.
@@ -1266,6 +2003,9 @@ static uint64_t l6_sd_read(void *opaque, hwaddr offset, unsigned size)
     L6ChipState *s = opaque;
     if (offset == 0x2c && size == 4) {
         return s->sd_sysctl;
+    }
+    if (offset == 0xc8 && size == 4) {
+        return s->sd_vend_spec2;
     }
     return s->sd_ops->read(s->sdhc, offset, size);
 }
@@ -1283,6 +2023,12 @@ static void l6_sd_write(void *opaque, hwaddr offset, uint64_t value, unsigned si
         s->sdhc->clkcon |= 3u; /* SoC clock enabled and stable */
         return;
     }
+    if (offset == 0xc8 && size == 4) {
+        /* VEND_SPEC2 is RW; reserved bits retain their reset values. */
+        s->sd_vend_spec2 = (s->sd_vend_spec2 & ~L6_USDHC_VEND_SPEC2_RW_MASK) |
+                           ((uint32_t)value & L6_USDHC_VEND_SPEC2_RW_MASK);
+        return;
+    }
     s->sd_ops->write(s->sdhc, offset, value, size);
 }
 
@@ -1296,9 +2042,134 @@ static const MemoryRegionOps l6_sd_ops = {
 /* Sparse MMIO storage is intentionally crude. Peripheral models replace it. */
 static void l6_rtc_tick(L6ChipState *s);
 
+static bool l6_audio_trace_register(hwaddr offset)
+{
+    /* Clock reconstruction needs the SAI roots, PLL_AUDIO setup and the
+     * IOMUX GPR MCLK source selectors alongside SAI register writes. */
+    if (offset == 0x0fc01c || offset == 0x0fc028 || offset == 0x0fc02c ||
+        (offset >= 0x0ac004 && offset < 0x0ac008) ||
+        (offset >= 0x0d8070 && offset < 0x0d80c0) ||
+        (offset >= 0x0d8030 && offset < 0x0d8040) ||
+        offset == L6_CCM_ANALOG_PFD_480 ||
+        offset == L6_CCM_ANALOG_PFD_528 ||
+        (offset >= 0x3a0000 && offset < 0x3a0100) ||
+        (offset >= 0x2a8000 && offset < 0x2a8300)) {
+        return true;
+    }
+    if ((offset >= 0x384000 && offset < 0x384100) ||
+        (offset >= 0x388000 && offset < 0x388100) ||
+        (offset >= 0x38c000 && offset < 0x38c100) ||
+        (offset >= 0x3f0000 && offset < 0x3f0100)) {
+        return true;
+    }
+
+    /* The L6 audio paths use channels 12–15. L6max also uses eDMA 2–3 for
+     * OLED refresh; including every TCD and DMAMUX channel lets display
+     * traffic fill the audio trace and hide later SAI/eDMA activity. */
+    if (offset >= 0x0e9000 && offset < 0x0e9200) {
+        unsigned channel = (offset - 0x0e9000) / 0x20;
+        return channel >= 12 && channel <= 15;
+    }
+    return offset >= 0x0ec030 && offset < 0x0ec040;
+}
+
+/* Clock setup registers are read repeatedly while firmware polls PLL locks.
+ * Keep those records bounded independently so they cannot hide the SAI and
+ * eDMA configuration that explains audio service rates. */
+static bool l6_audio_trace_sai_register(hwaddr offset)
+{
+    return (offset >= 0x384000 && offset < 0x384100) ||
+           (offset >= 0x388000 && offset < 0x388100) ||
+           (offset >= 0x38c000 && offset < 0x38c100) ||
+           (offset >= 0x3f0000 && offset < 0x3f0100);
+}
+
+static bool l6_audio_trace_edma_register(hwaddr offset)
+{
+    return (offset >= 0x0e9000 && offset < 0x0e9200) ||
+           (offset >= 0x0ec030 && offset < 0x0ec040) ||
+           (offset >= 0x0e801a && offset <= 0x0e8024);
+}
+
+static bool l6_audio_trace_allow(L6ChipState *s, hwaddr offset)
+{
+    if (l6_audio_trace_sai_register(offset)) {
+        return s->audio_trace_sai_log_count++ < 20000;
+    }
+    if (l6_audio_trace_edma_register(offset)) {
+        return s->audio_trace_edma_log_count++ < 20000;
+    }
+    return s->audio_trace_clock_log_count++ < 2000;
+}
+
+static bool l6_audio_trace_edma_global(hwaddr offset, uint64_t value,
+                                       unsigned size, bool write)
+{
+    if (write && size == 1 &&
+        (offset == 0x0e801a || offset == 0x0e801b ||
+         offset == 0x0e801e || offset == 0x0e801f)) {
+        /* Keep channel-command writes only for the observed audio channels. */
+        return value >= 12 && value <= 15;
+    }
+    if (offset == 0x0e8024) {
+        /* INT is a per-channel pending bitmap; ignore OLED channels 2–3. */
+        return (value & 0x0000f000u) != 0;
+    }
+    return false;
+}
+
+static void l6_audio_trace_mmio(const char *operation, hwaddr offset,
+                                uint64_t value, unsigned size)
+{
+    vaddr pc = current_cpu && CPU_GET_CLASS(current_cpu)->get_pc ?
+               CPU_GET_CLASS(current_cpu)->get_pc(current_cpu) : 0;
+    CPUARMState *env = current_cpu ? (CPUARMState *)cpu_env(current_cpu) : NULL;
+
+    qemu_log_mask(LOG_UNIMP,
+                  "l6 audio MMIO %s addr=%08x size=%u value=%08x pc=%08" PRIx64
+                  " lr=%08x at=%" PRId64 "ms\n",
+                  operation, (unsigned)(0x40000000u + offset), size,
+                  (uint32_t)value, (uint64_t)pc, env ? env->regs[14] : 0,
+                  qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL));
+}
+
+static L6Sai *l6_sai_at(L6ChipState *s, hwaddr offset, hwaddr *reg_offset)
+{
+    if (s->panel) {
+        return NULL;
+    }
+    for (unsigned i = 0; i < s->profile->sai_count; i++) {
+        hwaddr base = s->profile->sai_bases[i];
+        if (offset >= base && offset < base + 0x100) {
+            *reg_offset = offset - base;
+            return &s->sai[i];
+        }
+    }
+    return NULL;
+}
+
 static uint64_t l6_mmio_read(void *opaque, hwaddr offset, unsigned size)
 {
     L6ChipState *s = opaque;
+    if (!s->panel && offset == 0x0d8010 && size == 4) {
+        uint32_t control = GPOINTER_TO_UINT(g_hash_table_lookup(s->registers,
+            GUINT_TO_POINTER((0x0d8010 >> 2) + 1)));
+        return l6_usb1_pll_status(control);
+    }
+    if (s->profile->resource_flash && offset == 0x3a005c && size == 4) {
+        /* The L6 firmware polls FSR.RXCOUNT (bits 16..20) before draining
+         * the LPSPI receive data register. */
+        return s->lpspi_rx_count << 16;
+    }
+    if (s->profile->resource_flash && offset == 0x3a0074 && size == 4) {
+        if (!s->lpspi_rx_count) {
+            return 0;
+        }
+        uint32_t value = s->lpspi_rx_fifo[s->lpspi_rx_head];
+        s->lpspi_rx_head = (s->lpspi_rx_head + 1) % ARRAY_SIZE(s->lpspi_rx_fifo);
+        s->lpspi_rx_count--;
+        return value;
+    }
     if (s->panel && offset >= 0x2800 && offset < 0x2860) {
         l6_rtc_tick(s);
         if (offset == 0x2808 && size == 4) {
@@ -1316,68 +2187,6 @@ static uint64_t l6_mmio_read(void *opaque, hwaddr offset, unsigned size)
         qemu_log_mask(LOG_UNIMP,
                       "l6 panel TIM2 handler SR read at %" PRId64 " ns\n",
                       qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL));
-    }
-    if (!s->panel && size == 4 &&
-        (offset == 0x0c0000 || offset == 0x1b8000 || offset == 0x1bc000)) {
-        /* Eight active-low buttons and the active-high Power input are wired
-         * to the main MCU, outside the panel's scanned matrix. */
-        uint32_t word = GPOINTER_TO_UINT(g_hash_table_lookup(
-            s->registers, GUINT_TO_POINTER((offset >> 2) + 1)));
-        uint64_t now_ms = qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL);
-        word |= offset == 0x0c0000 ? 0x5u : offset == 0x1bc000 ? (1u << 31) :
-            ((1u << 20) | (1u << 21) | (1u << 25) | (1u << 26) | 1u);
-        if (offset == 0x1bc000) {
-            /* Card detect is active high at GPIO2.28. Reader 0x80022a90
-             * invokes the insertion callback only when this bit is set.
-             */
-            word = (word & ~(1u << 28)) | (s->sd_present ? (1u << 28) : 0);
-            /* Power reader 0x80021d58 inverts GPIO2.25: released is low. */
-            word &= ~(1u << 25);
-            if (s->input_fd >= 0 && l6_button_down(s, 53)) {
-                word |= 1u << 25;
-            }
-        }
-        for (unsigned i = 0; i < s->main_key_count; i++) {
-            L6MainKey *key = &s->main_keys[i];
-            hwaddr port = key->id == 1 ? 0x1b8000 : 0x0c0000;
-            unsigned pin = key->id == 0 ? 2 : key->id == 1 ? 20 : 0;
-            if (offset != port || now_ms < key->start_ms ||
-                now_ms >= key->end_ms) {
-                continue;
-            }
-            if (!key->logged) {
-                qemu_log_mask(LOG_UNIMP,
-                              "l6 main key id=%u at %" PRIu64 " ms\n",
-                              key->id, now_ms);
-                key->logged = true;
-            }
-            word &= ~(1u << pin);
-        }
-        if (s->input_fd >= 0) {
-            static const struct { unsigned id; hwaddr port; unsigned pin; } buttons[] = {
-                { 0, 0x0c0000, 2 }, { 4, 0x1b8000, 20 }, { 5, 0x0c0000, 0 },
-                { 48, 0x1bc000, 31 }, { 49, 0x1b8000, 21 }, { 50, 0x1b8000, 25 },
-                { 51, 0x1b8000, 26 }, { 52, 0x1b8000, 0 },
-            };
-            for (unsigned i = 0; i < ARRAY_SIZE(buttons); i++) {
-                if (offset == buttons[i].port && l6_button_down(s, buttons[i].id)) {
-                    word &= ~(1u << buttons[i].pin);
-                }
-            }
-        }
-        if (offset == 0x1bc000) {
-            bool pressed = (word & (1u << 25)) != 0;
-            if (!s->power_seen || pressed != s->power_published) {
-                s->power_seen = true;
-                s->power_published = pressed;
-                qemu_log_mask(LOG_UNIMP, "l6 main power input=%u at %" PRIu64 " ms\n", pressed, now_ms);
-            }
-        }
-        return word;
-    }
-    if (!s->panel && offset == 0x1bc008 && size == 4) {
-        return (s->main_gpio[1] & ~(1u << 28)) |
-               (s->sd_present ? (1u << 28) : 0);
     }
     if (s->panel && size == 4 &&
         (offset == 0x10000010 || offset == 0x10000410 ||
@@ -1398,6 +2207,17 @@ static uint64_t l6_mmio_read(void *opaque, hwaddr offset, unsigned size)
         uint64_t now_ms = qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL);
         uint32_t odr = GPOINTER_TO_UINT(g_hash_table_lookup(s->registers,
             GUINT_TO_POINTER((0x10000414 >> 2) + 1)));
+        /* Target 1 is the row-5/column-4 key. Log its selected-row samples,
+         * including released samples, to distinguish a missed matrix scan
+         * from a later firmware UART/reporting failure. */
+        if (s->input_trace && now_ms < s->input_trace_until &&
+            offset == columns[4] && s->input_trace_matrix_count < 128) {
+            qemu_log_mask(LOG_UNIMP,
+                          "l6 panel matrix scan target=1 row_code=%02x down=%u idr=%08x at=%" PRIu64 " ns\n",
+                          odr & 0x70, l6_button_down(s, 1), idr,
+                          qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL));
+            s->input_trace_matrix_count++;
+        }
         for (unsigned i = 0; i < s->panel_key_count; i++) {
             L6PanelKey *key = &s->panel_keys[i];
             if (now_ms < key->start_ms || now_ms >= key->end_ms ||
@@ -1418,22 +2238,51 @@ static uint64_t l6_mmio_read(void *opaque, hwaddr offset, unsigned size)
                 if ((odr & 0x70) != rows[row]) {
                     continue;
                 }
-                for (unsigned column = 0; column < 5; column++) {
-                    unsigned key = row * 5 + column;
-                    /* Physical Up is row 5; Down is row 4. */
-                    unsigned event_id = key == 24 ? 2 : key == 29 ? 1 :
-                        key == 39 ? 3 : key == 34 ? 6 : 7 + key;
-                    bool down = l6_button_down(s, event_id);
-                    if (down && offset == columns[column]) {
-                        idr &= ~(1u << pins[column]);
+                if (s->profile == &L6_PROFILE) {
+                    for (unsigned column = 0; column < s->profile->panel_matrix_columns; column++) {
+                        unsigned event_id = 7 + row * 3 + column;
+                        if (l6_button_down(s, event_id) &&
+                            offset == columns[column]) {
+                            idr &= ~(1u << pins[column]);
+                            if (s->input_trace && now_ms < s->input_trace_until) {
+                                qemu_log_mask(LOG_UNIMP,
+                                              "l6 panel matrix key target=%u row=%u column=%u idr=%08x at %" PRId64 " ns\n",
+                                              event_id, row, column, idr,
+                                              qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL));
+                            }
+                        }
+                    }
+                } else {
+                    for (unsigned column = 0; column < 5; column++) {
+                        unsigned key = row * 5 + column;
+                        /* Physical Up is row 5; Down is row 4. */
+                        unsigned event_id = key == 24 ? 2 : key == 29 ? 1 :
+                            key == 39 ? 3 : key == 34 ? 6 : 7 + key;
+                        bool down = l6_button_down(s, event_id);
+                        if (down && offset == columns[column]) {
+                            idr &= ~(1u << pins[column]);
+                        }
                     }
                 }
             }
         }
         if (s->input_fd >= 0) {
-            /* Static switch reader 0x08000aa0 samples PA3 outside the matrix. */
-            if (offset == 0x10000010 && l6_button_down(s, 47)) {
-                idr &= ~(1u << 3);
+            if (s->profile == &L6_PROFILE) {
+                static const struct { unsigned id; hwaddr port; unsigned pin; } direct[] = {
+                    { 1, 0x10000810, 13 }, { 2, 0x10000410, 15 },
+                    { 3, 0x10000010, 8 }, { 6, 0x10000810, 6 },
+                    { 47, 0x10000810, 7 },
+                };
+                for (unsigned i = 0; i < ARRAY_SIZE(direct); i++) {
+                    if (offset == direct[i].port && l6_button_down(s, direct[i].id)) {
+                        idr &= ~(1u << direct[i].pin);
+                    }
+                }
+            } else {
+                /* Static switch reader 0x08000aa0 samples PA3 outside the matrix. */
+                if (offset == 0x10000010 && l6_button_down(s, 47)) {
+                    idr &= ~(1u << 3);
+                }
             }
             static const struct { hwaddr port; unsigned pin; } phase_a[] = {
                 { 0x10000010, 0 }, { 0x10000010, 2 },
@@ -1447,7 +2296,7 @@ static uint64_t l6_mmio_read(void *opaque, hwaddr offset, unsigned size)
                 { 0x10000c10, 2 }, { 0x10000410, 3 },
                 { 0x10000010, 8 }, { 0x10000810, 7 },
             };
-            for (unsigned encoder = 0; encoder < L6_ENCODER_COUNT; encoder++) {
+            for (unsigned encoder = 0; encoder < l6_encoder_count(s); encoder++) {
                 uint8_t phase = s->encoder_phase[encoder];
                 if (offset == phase_a[encoder].port && !(phase & 2)) {
                     idr &= ~(1u << phase_a[encoder].pin);
@@ -1456,14 +2305,6 @@ static uint64_t l6_mmio_read(void *opaque, hwaddr offset, unsigned size)
                     idr &= ~(1u << phase_b[encoder].pin);
                 }
             }
-        }
-        if (offset == 0x10001410 && s->input_trace &&
-            now_ms < s->input_trace_until) {
-            qemu_log_mask(LOG_UNIMP,
-                          "l6 panel matrix sample row=%02x up=%u down=%u idr=%08x at %" PRId64 " ns\n",
-                          odr & 0x70, l6_button_down(s, 1),
-                          l6_button_down(s, 2), idr,
-                          qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL));
         }
         return idr;
     }
@@ -1492,7 +2333,7 @@ static uint64_t l6_mmio_read(void *opaque, hwaddr offset, unsigned size)
         return 3;
     }
     if (offset == 0x3a0014 && size == 4) {
-        /* With no queued TX word, LPSPI4 requests data. */
+        /* With no queued TX word, LPSPI3 requests data. */
         uint32_t sr = GPOINTER_TO_UINT(g_hash_table_lookup(s->registers,
             GUINT_TO_POINTER((offset >> 2) + 1)));
         return sr | 1u;
@@ -1545,19 +2386,22 @@ static uint64_t l6_mmio_read(void *opaque, hwaddr offset, unsigned size)
             GUINT_TO_POINTER((offset >> 2) + 1)));
         return (bdcr & 1) ? bdcr | 2 : bdcr & ~2u;
     }
-    if (!s->panel && offset == 0x184014 && size == 4) {
+    if (!s->panel && offset == l6_panel_uart_base(s) + 0x14 && size == 4) {
         return (1u << 23) | (1u << 22) |
                ((s->main_rom_mode ? s->rom_reply_read < s->rom_reply_visible :
                   s->main_rx_pending) ? (1u << 21) : 0);
     }
-    if (!s->panel && offset == 0x18c014 && size == 4) {
-        /* LPUART3, the MIDI IN/OUT (DIN/TRS) jacks: RDRF follows a byte
+    if (!s->panel && offset == l6_midi_uart_base(s) + 0x14 && size == 4) {
+        /* The selected MIDI UART: RDRF follows a byte
          * queued from the inherited socket. */
         return (1u << 23) | (1u << 22) |
                (s->main_midi_rx_pending ? (1u << 21) : 0);
     }
-    if (!s->panel && offset == 0x18c01c && size == 4) {
+    if (!s->panel && offset == l6_midi_uart_base(s) + 0x1c && size == 4) {
         uint8_t byte = s->main_midi_rx_byte;
+        qemu_log_mask(LOG_UNIMP,
+                      "l6 main LPUART%u (MIDI jacks) DATA read %02x\n",
+                      s->profile->midi_uart_number, byte);
         s->main_midi_rx_pending = false;
         if (s->main_midi_rx->len > 0) {
             s->main_midi_rx_pending = true;
@@ -1566,27 +2410,40 @@ static uint64_t l6_mmio_read(void *opaque, hwaddr offset, unsigned size)
             /* Each byte refilled from the queue is its own RDRF edge, the
              * same as a byte arriving fresh from the socket. */
             uint32_t ctrl = GPOINTER_TO_UINT(g_hash_table_lookup(s->registers,
-                GUINT_TO_POINTER((0x18c018 >> 2) + 1)));
+                GUINT_TO_POINTER(((l6_midi_uart_base(s) + 0x18) >> 2) + 1)));
             if (ctrl & (1u << 21)) {
-                qemu_irq_pulse(qdev_get_gpio_in(DEVICE(&s->armv7m), L6_LPUART3_IRQ));
+                qemu_irq_pulse(qdev_get_gpio_in(DEVICE(&s->armv7m), l6_midi_uart_irq(s)));
             }
         }
         return byte;
     }
     if (!s->panel && size == 4 && offset >= 0x188014 &&
         offset <= 0x1a0014 && (offset - 0x188014) % 0x4000 == 0) {
-        /* Unconnected LPUART2, 4-8 discard TX synchronously and are idle.
+        /* Unconnected LPUART instances discard TX synchronously and are idle.
          * Serial close loop at 0x800325b8 waits for STAT.TC (bit 22).
          * Reporting zero leaves preparation blocked before Power dispatch.
          */
         return (1u << 23) | (1u << 22);
     }
-    if (!s->panel && offset == 0x18401c && size == 4) {
+    if (!s->panel && size == 4 && offset >= 0x18801c &&
+        offset <= 0x1a001c && (offset - 0x18801c) % 0x4000 == 0 &&
+        offset != l6_midi_uart_base(s) + 0x1c &&
+        offset != l6_panel_uart_base(s) + 0x1c) {
+        uint32_t value = GPOINTER_TO_UINT(g_hash_table_lookup(
+            s->registers, GUINT_TO_POINTER((offset >> 2) + 1)));
+        qemu_log_mask(LOG_UNIMP,
+                      "l6 main LPUART (other) DATA read +%05lx = %08x\n",
+                      (unsigned long)offset, value);
+        return value;
+    }
+    if (!s->panel && offset == l6_panel_uart_base(s) + 0x1c && size == 4) {
         if (s->main_rom_mode) {
             if (s->rom_reply_read < s->rom_reply_visible) {
                 uint8_t byte = s->rom_reply[s->rom_reply_read++];
-                qemu_log_mask(LOG_UNIMP, "l6 main LPUART1 ROM RX %02x\n", byte);
-                qemu_irq_lower(qdev_get_gpio_in(DEVICE(&s->armv7m), 20));
+                qemu_log_mask(LOG_UNIMP, "l6 main LPUART%u ROM RX %02x\n",
+                              l6_panel_uart_number(s), byte);
+                qemu_irq_lower(qdev_get_gpio_in(DEVICE(&s->armv7m),
+                                                l6_panel_uart_irq(s)));
                 if (s->rom_reply_read == s->rom_reply_write) {
                     s->rom_reply_read = s->rom_reply_visible =
                         s->rom_reply_write = 0;
@@ -1596,13 +2453,433 @@ static uint64_t l6_mmio_read(void *opaque, hwaddr offset, unsigned size)
             return 0;
         }
         s->main_rx_pending = false;
+        qemu_log_mask(LOG_UNIMP,
+                      "l6 main LPUART%u (panel link) DATA read %02x\n",
+                      l6_panel_uart_number(s), s->main_rx_byte);
         l6_uart_accept_input(s);
         return s->main_rx_byte;
+    }
+    hwaddr sai_offset;
+    L6Sai *sai = l6_sai_at(s, offset, &sai_offset);
+    if (sai) {
+        uint32_t value = l6_sai_read(sai, sai_offset, size);
+        if (s->audio_trace && l6_audio_trace_register(offset) &&
+            l6_audio_trace_allow(s, offset)) {
+            l6_audio_trace_mmio("read", offset, value, size);
+        }
+        return value;
+    }
+    if (!s->panel && offset == 0x0e800c && size == 4) {
+        return s->edma_erq;
+    }
+    if (!s->panel && offset == 0x0e801f && size == 1) {
+        return 0; /* CINT is write-only. */
     }
     uint32_t word = GPOINTER_TO_UINT(g_hash_table_lookup(
         s->registers, GUINT_TO_POINTER((offset >> 2) + 1)));
     unsigned shift = (offset & 3) * 8;
-    return size == 4 ? word : (word >> shift) & ((1u << (size * 8)) - 1);
+    uint32_t value = size == 4 ? word :
+                     (word >> shift) & ((1u << (size * 8)) - 1);
+    if (s->audio_trace && !s->panel &&
+        (l6_audio_trace_register(offset) ||
+         l6_audio_trace_edma_global(offset, value, size, false)) &&
+        l6_audio_trace_allow(s, offset)) {
+        l6_audio_trace_mmio("read", offset, value, size);
+    }
+    return value;
+}
+
+/* eDMA assigns one NVIC input per channel. The L6 firmware's IRQ table maps
+ * channels 12–15 to IRQs 12–15, and L6max's OLED channel 3 uses IRQ 3. */
+static void l6_edma_raise_interrupt(L6ChipState *s, unsigned channel)
+{
+    gpointer key = GUINT_TO_POINTER((0x0e8024 >> 2) + 1);
+    uint32_t pending = GPOINTER_TO_UINT(g_hash_table_lookup(s->registers, key));
+
+    g_hash_table_insert(s->registers, key,
+                        GUINT_TO_POINTER(pending | (1u << channel)));
+    if (s->audio_trace && channel >= 12 && channel <= 15) {
+        s->audio_trace_irq_count[channel - 12]++;
+    }
+    /* RT eDMA INT bits directly drive the interrupt controller. Hold each
+     * channel high until firmware clears its pending bit through CINT/INT. */
+    qemu_set_irq(qdev_get_gpio_in(DEVICE(&s->armv7m), channel), 1);
+}
+
+static void l6_edma_update_irq_level(L6ChipState *s, unsigned channel,
+                                     uint32_t pending)
+{
+    qemu_set_irq(qdev_get_gpio_in(DEVICE(&s->armv7m), channel),
+                 (pending >> channel) & 1);
+}
+
+static bool l6_edma_as_read(void *opaque, uint32_t address, void *buffer,
+                            size_t size)
+{
+    AddressSpace *as = opaque;
+    return address_space_read(as, address, MEMTXATTRS_UNSPECIFIED,
+                              buffer, size) == MEMTX_OK;
+}
+
+static bool l6_edma_as_write(void *opaque, uint32_t address,
+                             const void *buffer, size_t size)
+{
+    AddressSpace *as = opaque;
+    return address_space_write(as, address, MEMTXATTRS_UNSPECIFIED,
+                               buffer, size) == MEMTX_OK;
+}
+
+static uint32_t l6_edma_register(L6ChipState *s, hwaddr offset)
+{
+    return GPOINTER_TO_UINT(g_hash_table_lookup(s->registers,
+        GUINT_TO_POINTER((offset >> 2) + 1)));
+}
+
+static bool l6_sai_edma_request_active(L6ChipState *s, uint8_t request)
+{
+    for (unsigned i = 0; i < s->profile->sai_count; i++) {
+        hwaddr base = s->profile->sai_bases[i];
+        bool tx = request == (base == 0x384000 ? 20 : 84);
+        bool rx = request == (base == 0x384000 ? 19 : 83);
+        if (tx) {
+            uint32_t control = l6_sai_read(&s->sai[i], L6_SAI_TCSR, 4);
+            if ((control & (L6_SAI_TE | L6_SAI_FRDE | L6_SAI_FRF)) ==
+                (L6_SAI_TE | L6_SAI_FRDE | L6_SAI_FRF)) {
+                return true;
+            }
+        } else if (rx) {
+            uint32_t control = l6_sai_read(&s->sai[i], L6_SAI_RCSR, 4);
+            if ((control & (L6_SAI_RE | L6_SAI_FRDE | L6_SAI_FRF)) ==
+                (L6_SAI_RE | L6_SAI_FRDE | L6_SAI_FRF)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+/* A DMAMUX request services exactly one RT1041 32-bit-TCD minor loop. The
+ * peripheral request is the pacing edge; this routine never drains an entire
+ * cyclic audio ring just because ERQ was set. */
+static bool l6_edma_service_request(L6ChipState *s, uint8_t request)
+{
+    AddressSpace *as = CPU(s->armv7m.cpu)->as;
+    bool serviced = false;
+
+    if (!l6_sai_edma_request_active(s, request)) {
+        return false;
+    }
+
+    for (unsigned channel = 0; channel < 32; channel++) {
+        hwaddr mux_offset = 0x0ec000 + channel * 4;
+        uint32_t mux = l6_edma_register(s, mux_offset);
+        if (!(mux & (1u << 31)) || (mux & 0x7f) != request ||
+            !(s->edma_erq & (1u << channel))) {
+            continue;
+        }
+
+        uint32_t peripheral = request == 20 ? 0x40384020 :
+                              request == 84 ? 0x4038c020 :
+                              request == 19 ? 0x403840a0 : 0x4038c0a0;
+        uint8_t raw[L6_EDMA_TCD_BYTES];
+        uint32_t live_tcd = 0x400e9000 + channel * L6_EDMA_TCD_BYTES;
+        if (!l6_edma_as_read(as, live_tcd, raw, sizeof(raw))) {
+            return false;
+        }
+        L6EdmaTcd tcd;
+        l6_edma_tcd_decode(raw, &tcd);
+        /* Hardware clears DONE and START when it accepts a channel request. */
+        tcd.csr &= ~(L6_EDMA_TCD_DONE | 1u);
+        if ((request == 19 || request == 83) ? tcd.saddr != peripheral :
+                                                tcd.daddr != peripheral) {
+            continue;
+        }
+
+        /* A request remains asserted while its FIFO threshold remains true.
+         * Bound one service turn to the modeled FIFO depth. */
+        for (unsigned minor = 0; minor < L6_SAI_FIFO_DEPTH &&
+             l6_sai_edma_request_active(s, request); minor++) {
+            if (s->audio_dma_source_capture && channel == 14 && request == 20) {
+                uint8_t source[L6_EDMA_TCD_BYTES * 128];
+                uint8_t record[8];
+                uint32_t size = tcd.nbytes;
+                if (size <= sizeof(source) &&
+                    l6_edma_as_read(as, tcd.saddr, source, size)) {
+                    if (!s->audio_dma_source_capture_header_written) {
+                        static const uint8_t header[4] = { 'L', '6', 'D', 'M' };
+                        uint8_t metadata[12];
+                        stl_le_p(metadata, s->profile->audio_sample_rate_hz);
+                        stl_le_p(metadata + 4, s->profile->sai_bases[0]);
+                        stl_le_p(metadata + 8, 1); /* address/length records */
+                        if (fwrite(header, 1, sizeof(header),
+                                   s->audio_dma_source_capture) != sizeof(header) ||
+                            fwrite(metadata, 1, sizeof(metadata),
+                                   s->audio_dma_source_capture) != sizeof(metadata)) {
+                            qemu_log_mask(LOG_GUEST_ERROR,
+                                          "l6 SAI DMA source capture header write failed: %s\n",
+                                          strerror(errno));
+                            fclose(s->audio_dma_source_capture);
+                            s->audio_dma_source_capture = NULL;
+                        } else {
+                            s->audio_dma_source_capture_header_written = true;
+                        }
+                    }
+                    if (s->audio_dma_source_capture) {
+                        stl_le_p(record, tcd.saddr);
+                        stl_le_p(record + 4, size);
+                        if (fwrite(record, 1, sizeof(record),
+                                   s->audio_dma_source_capture) != sizeof(record) ||
+                            fwrite(source, 1, size,
+                                   s->audio_dma_source_capture) != size) {
+                            qemu_log_mask(LOG_GUEST_ERROR,
+                                          "l6 SAI DMA source capture write failed: %s\n",
+                                          strerror(errno));
+                            fclose(s->audio_dma_source_capture);
+                            s->audio_dma_source_capture = NULL;
+                        }
+                    }
+                }
+            }
+            L6EdmaMinorResult result = l6_edma_transfer_minor(
+                &tcd, l6_edma_as_read, l6_edma_as_write, as);
+            if (result == L6_EDMA_MINOR_ERROR) {
+                qemu_log_mask(LOG_UNIMP,
+                              "l6 eDMA unsupported request source=%u channel=%u TCD=%08x/%08x nbytes=%u citer=%04x attr=%04x\n",
+                              request, channel, tcd.saddr, tcd.daddr,
+                              tcd.nbytes, tcd.citer, tcd.attr);
+                return false;
+            }
+
+            if (result == L6_EDMA_MINOR_MAJOR &&
+                (tcd.csr & L6_EDMA_TCD_ESG)) {
+                uint32_t next = (uint32_t)tcd.dlast_sga;
+                if ((next & (L6_EDMA_TCD_BYTES - 1)) ||
+                    !l6_edma_as_read(as, next, raw, sizeof(raw))) {
+                    return false;
+                }
+            } else {
+                if (result == L6_EDMA_MINOR_MAJOR) {
+                    if (l6_edma_complete_major(&tcd)) {
+                        s->edma_erq &= ~(1u << channel);
+                    }
+                }
+                l6_edma_tcd_encode(raw, &tcd);
+            }
+            if (!l6_edma_as_write(as, live_tcd, raw, sizeof(raw))) {
+                return false;
+            }
+            if ((result == L6_EDMA_MINOR_HALF &&
+                 (tcd.csr & L6_EDMA_TCD_INTHALF)) ||
+                (result == L6_EDMA_MINOR_MAJOR &&
+                 (tcd.csr & L6_EDMA_TCD_INTMAJOR))) {
+                l6_edma_raise_interrupt(s, channel);
+            }
+            serviced = true;
+            if (result == L6_EDMA_MINOR_MAJOR &&
+                !(tcd.csr & L6_EDMA_TCD_ESG)) {
+                break;
+            }
+            if (result == L6_EDMA_MINOR_MAJOR &&
+                !l6_edma_as_read(as, live_tcd, raw, sizeof(raw))) {
+                return false;
+            }
+            if (result == L6_EDMA_MINOR_MAJOR) {
+                l6_edma_tcd_decode(raw, &tcd);
+            }
+        }
+    }
+    return serviced;
+}
+
+/* The stock firmware configures these SAI streams for 48 kHz. Its RT1041
+ * SAI3 (L6) or SAI1 (L6max) master supplies the frame clock; synchronous
+ * slave instances on L6 share that clock. Each frame advances the configured
+ * TDM word count, then lets the active FIFO watermark pace eDMA. */
+static void l6_sai_audio_clock_advance(L6ChipState *s, unsigned frames)
+{
+    bool master_clock = false;
+    for (unsigned i = 0; i < s->profile->sai_count; i++) {
+        L6Sai *sai = &s->sai[i];
+        uint32_t tcr2 = sai->regs[L6_SAI_TCR2 / 4];
+        uint32_t tx = sai->regs[L6_SAI_TCSR / 4];
+        uint32_t rx = sai->regs[L6_SAI_RCSR / 4];
+        if ((tcr2 & L6_SAI_BCD) &&
+            ((tx & L6_SAI_TE) || (rx & L6_SAI_RE))) {
+            master_clock = true;
+            break;
+        }
+    }
+    if (!master_clock) {
+        return;
+    }
+
+    uint32_t silence[L6_SAI_CHANNELS * L6_SAI_FIFO_DEPTH] = { 0 };
+    uint32_t tx_samples[L6_SAI_FIFO_DEPTH];
+    int32_t audio_frames[48 * 2];
+    uint32_t tdm_frames[48][L6_SAI_FIFO_DEPTH] = { 0 };
+    unsigned audio_frame_count = 0;
+    for (unsigned frame = 0; frame < frames; frame++) {
+        for (unsigned i = 0; i < s->profile->sai_count; i++) {
+            L6Sai *sai = &s->sai[i];
+            unsigned words = l6_sai_frame_words(sai, true);
+            if (words > L6_SAI_FIFO_DEPTH) {
+                words = L6_SAI_FIFO_DEPTH;
+            }
+            unsigned rx_words = l6_sai_frame_words(sai, false);
+            if (rx_words > L6_SAI_FIFO_DEPTH) {
+                rx_words = L6_SAI_FIFO_DEPTH;
+            }
+            uint32_t tx = l6_sai_read(sai, L6_SAI_TCSR, 4);
+            uint32_t rx = l6_sai_read(sai, L6_SAI_RCSR, 4);
+            uint8_t tx_request = s->profile->sai_bases[i] == 0x384000 ? 20 : 84;
+            uint8_t rx_request = s->profile->sai_bases[i] == 0x384000 ? 19 : 83;
+
+            if (tx & L6_SAI_TE) {
+                if (s->audio_sample_trace) {
+                    uint32_t enabled = l6_sai_channel_mask(sai, true);
+                    uint32_t masked = sai->regs[L6_SAI_TMR / 4];
+                    for (unsigned channel = 0; channel < L6_SAI_CHANNELS;
+                         channel++) {
+                        if (!(enabled & (1u << channel))) {
+                            continue;
+                        }
+                        unsigned required = 0;
+                        for (unsigned slot = 0; slot < words; slot++) {
+                            required += !(masked & (1u << slot));
+                        }
+                        if (required > sai->tx_count[channel]) {
+                            s->audio_tx_underruns[i] +=
+                                required - sai->tx_count[channel];
+                        }
+                    }
+                }
+                words = l6_sai_tx_frame(sai, tx_samples, words);
+                if (i == 0 && s->audio_tdm_capture) {
+                    if (!s->audio_tdm_capture_slots) {
+                        s->audio_tdm_capture_slots = words;
+                    }
+                    for (unsigned slot = 0;
+                         slot < MIN(words, s->audio_tdm_capture_slots); slot++) {
+                        tdm_frames[frame][slot] = tx_samples[slot];
+                    }
+                }
+                /* Firmware may leave leading TDM slots silent before the
+                 * stereo pair routed to the product's output. */
+                unsigned output_slot = s->profile->audio_output_slot;
+                if (i == 0 && (s->audio_voice || s->audio_raw_capture) &&
+                    words >= output_slot + 2 &&
+                    audio_frame_count < ARRAY_SIZE(audio_frames) / 2) {
+                    /* These are already signed S32 samples at the firmware's
+                     * playback gain. Rescaling here clips the source waveform. */
+                    audio_frames[audio_frame_count * 2] =
+                        (int32_t)tx_samples[output_slot];
+                    audio_frames[audio_frame_count * 2 + 1] =
+                        (int32_t)tx_samples[output_slot + 1];
+                    audio_frame_count++;
+                }
+                if (s->audio_sample_trace) {
+                    for (unsigned word = 0; word < words; word++) {
+                        uint32_t sample = tx_samples[word];
+                        s->audio_tx_words[i]++;
+                        if (sample) {
+                            if (!s->audio_tx_nonzero_words[i]) {
+                                s->audio_tx_first_nonzero[i] = sample;
+                            }
+                            s->audio_tx_nonzero_words[i]++;
+                            s->audio_tx_last_nonzero[i] = sample;
+                            if (!s->audio_tx_probe_logged[i] &&
+                                sample != UINT32_MAX) {
+                                s->audio_tx_probe[i][s->audio_tx_probe_count[i]++] =
+                                    sample;
+                                if (s->audio_tx_probe_count[i] ==
+                                    ARRAY_SIZE(s->audio_tx_probe[i])) {
+                                    qemu_log_mask(LOG_UNIMP,
+                                                  "l6 audio TX probe sai=%08" HWADDR_PRIx
+                                                  " words=%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x\n",
+                                                  s->profile->sai_bases[i],
+                                                  s->audio_tx_probe[i][0],
+                                                  s->audio_tx_probe[i][1],
+                                                  s->audio_tx_probe[i][2],
+                                                  s->audio_tx_probe[i][3],
+                                                  s->audio_tx_probe[i][4],
+                                                  s->audio_tx_probe[i][5],
+                                                  s->audio_tx_probe[i][6],
+                                                  s->audio_tx_probe[i][7]);
+                                    s->audio_tx_probe_logged[i] = true;
+                                }
+                            }
+                        }
+                    }
+                }
+                /* TX FIFO requests are level-triggered from the post-shift
+                 * FIFO count. Re-read status after consuming this frame so
+                 * eDMA refills an empty FIFO before the next frame starts. */
+                if (l6_sai_read(sai, L6_SAI_TCSR, 4) & L6_SAI_FRDE) {
+                    l6_edma_service_request(s, tx_request);
+                }
+            }
+            if (rx & L6_SAI_RE) {
+                l6_sai_rx_frame(sai, silence, rx_words);
+                /* RX requests assert after the frame has been written into
+                 * the FIFO, so evaluate the updated count for this edge. */
+                if (l6_sai_read(sai, L6_SAI_RCSR, 4) & L6_SAI_FRDE) {
+                    l6_edma_service_request(s, rx_request);
+                }
+            }
+        }
+    }
+    l6_audio_output_write(s, audio_frames, audio_frame_count);
+    if (s->audio_tdm_capture && s->audio_tdm_capture_slots) {
+        uint8_t raw_tdm[48 * L6_SAI_FIFO_DEPTH * sizeof(uint32_t)];
+        if (ftell(s->audio_tdm_capture) == 0) {
+            static const uint8_t header[4] = { 'L', '6', 'T', 'D' };
+            uint8_t metadata[12];
+            stl_le_p(metadata, s->profile->audio_sample_rate_hz);
+            stl_le_p(metadata + 4, s->audio_tdm_capture_slots);
+            stl_le_p(metadata + 8, 1); /* signed 32-bit little-endian samples */
+            if (fwrite(header, 1, sizeof(header), s->audio_tdm_capture) !=
+                    sizeof(header) ||
+                fwrite(metadata, 1, sizeof(metadata), s->audio_tdm_capture) !=
+                    sizeof(metadata)) {
+                qemu_log_mask(LOG_GUEST_ERROR,
+                              "l6 TDM capture header write failed: %s\n",
+                              strerror(errno));
+                fclose(s->audio_tdm_capture);
+                s->audio_tdm_capture = NULL;
+                return;
+            }
+        }
+        unsigned captured_frames = MIN(frames, ARRAY_SIZE(tdm_frames));
+        for (unsigned frame = 0; frame < captured_frames; frame++) {
+            for (unsigned slot = 0; slot < s->audio_tdm_capture_slots; slot++) {
+                stl_le_p(raw_tdm +
+                             (frame * s->audio_tdm_capture_slots + slot) *
+                                 sizeof(uint32_t),
+                         tdm_frames[frame][slot]);
+            }
+        }
+        size_t bytes = captured_frames * s->audio_tdm_capture_slots *
+                       sizeof(uint32_t);
+        if (fwrite(raw_tdm, 1, bytes, s->audio_tdm_capture) != bytes) {
+            qemu_log_mask(LOG_GUEST_ERROR,
+                          "l6 TDM capture write failed: %s\n",
+                          strerror(errno));
+            fclose(s->audio_tdm_capture);
+            s->audio_tdm_capture = NULL;
+        }
+    }
+}
+
+/* DMAMUX routing and ERQ may be enabled after SAI has already asserted its
+ * FIFO request. Recheck each profile route after either side is programmed. */
+static void l6_edma_service_active_sai(L6ChipState *s)
+{
+    for (unsigned i = 0; i < s->profile->sai_count; i++) {
+        uint8_t tx = s->profile->sai_bases[i] == 0x384000 ? 20 : 84;
+        uint8_t rx = s->profile->sai_bases[i] == 0x384000 ? 19 : 83;
+        l6_edma_service_request(s, tx);
+        l6_edma_service_request(s, rx);
+    }
 }
 
 static bool l6_display_dma_transfer(L6ChipState *s)
@@ -1705,17 +2982,70 @@ static bool l6_display_dma_transfer(L6ChipState *s)
     /* Consume the bus bytes, not a guessed framebuffer address. Transfers
      * are presently instantaneous on the virtual clock; serial baud timing
      * can be introduced without changing this publication boundary. */
-    l6_display_bytes(&s->display, s->display_dc, wire, wire_size);
-    l6_display_flush(&s->display);
+    if (s->profile->oled) {
+        static unsigned display_trace_count;
+        if (g_getenv("L6_DISPLAY_TRACE") && display_trace_count++ < 256) {
+            GString *hex = g_string_sized_new(wire_size * 3);
+            for (unsigned i = 0; i < wire_size && i < 64; i++) {
+                g_string_append_printf(hex, "%s%02x", i ? " " : "", wire[i]);
+            }
+            qemu_log_mask(LOG_UNIMP,
+                          "l6 OLED SPI dc=%u bytes=%u rx=%02x data=%s%s\n",
+                          s->display_dc, wire_size, rx_byte, hex->str,
+                          wire_size > 64 ? " ..." : "");
+            g_string_free(hex, TRUE);
+        }
+        l6_display_bytes(&s->display, s->display_dc, wire, wire_size);
+        l6_display_flush(&s->display);
+    }
     s->edma_erq &= ~0xc;
     if (rx_csr & 2) {
-        gpointer key = GUINT_TO_POINTER((0x0e8024 >> 2) + 1);
-        uint32_t pending = GPOINTER_TO_UINT(g_hash_table_lookup(s->registers, key));
-        g_hash_table_insert(s->registers, key,
-                            GUINT_TO_POINTER(pending | (1u << 3)));
-        qemu_irq_pulse(qdev_get_gpio_in(DEVICE(&s->armv7m), 3));
+        l6_edma_raise_interrupt(s, 3);
     }
     return true;
+}
+
+static void l6_lpspi_flash_tx_byte(L6ChipState *s, uint8_t byte)
+{
+    if (!s->lpspi_flash_header_bytes ||
+        (s->lpspi_flash_header_bytes >= 5 &&
+         (byte == 0x05 || byte == 0x0b))) {
+        s->lpspi_flash_opcode = byte;
+        s->lpspi_flash_header_bytes = byte == 0x0b ? 1 : 5;
+        s->lpspi_flash_address = 0;
+        return;
+    }
+    if (s->lpspi_flash_opcode == 0x0b && s->lpspi_flash_header_bytes < 5) {
+        if (s->lpspi_flash_header_bytes <= 3) {
+            s->lpspi_flash_address = (s->lpspi_flash_address << 8) | byte;
+        }
+        s->lpspi_flash_header_bytes++;
+    }
+}
+
+static uint8_t l6_lpspi_flash_rx_byte(L6ChipState *s)
+{
+    if (s->lpspi_flash_opcode == 0x05) {
+        return 0; /* WIP/WEL are clear for the read-only resource image. */
+    }
+    if (s->lpspi_flash_opcode == 0x0b &&
+        s->lpspi_flash_header_bytes >= 5) {
+        uint32_t address = s->lpspi_flash_address++;
+        uint8_t value = address < s->resource_flash_size ?
+                        s->resource_flash[address] : 0xff;
+        if (s->resource_flash_log_count++ < 16) {
+            qemu_log_mask(LOG_UNIMP,
+                          "l6 resource NOR read %06x = %02x\n",
+                          address, value);
+        }
+        return value;
+    }
+    return 0xff;
+}
+
+static unsigned l6_lpspi_frame_bytes(uint32_t tcr)
+{
+    return ((tcr & 0xfffu) + 8u) / 8u;
 }
 
 static void l6_rtc_store(L6ChipState *s);
@@ -1724,12 +3054,58 @@ static void l6_mmio_write(void *opaque, hwaddr offset,
                           uint64_t value, unsigned size)
 {
     L6ChipState *s = opaque;
+    bool store_word = true;
+    if (s->audio_trace && !s->panel &&
+        (l6_audio_trace_register(offset) ||
+         l6_audio_trace_edma_global(offset, value, size, true)) &&
+        l6_audio_trace_allow(s, offset)) {
+        l6_audio_trace_mmio("write", offset, value, size);
+    }
     gpointer key = GUINT_TO_POINTER((offset >> 2) + 1);
     uint32_t word = GPOINTER_TO_UINT(g_hash_table_lookup(s->registers, key));
     uint32_t previous_word = word;
     unsigned shift = (offset & 3) * 8;
     uint32_t mask = size == 4 ? UINT32_MAX : ((1u << (size * 8)) - 1) << shift;
     word = (word & ~mask) | (((uint32_t)value << shift) & mask);
+    if (!s->panel && size == 4 && offset >= 0x0d8010 &&
+        offset <= 0x0d801c && !(offset & 3)) {
+        gpointer control_key = GUINT_TO_POINTER((0x0d8010 >> 2) + 1);
+        uint32_t control = GPOINTER_TO_UINT(g_hash_table_lookup(
+            s->registers, control_key));
+        L6Usb1PllAlias alias = offset == 0x0d8014 ? L6_USB1_PLL_SET :
+                               offset == 0x0d8018 ? L6_USB1_PLL_CLEAR :
+                               offset == 0x0d801c ? L6_USB1_PLL_TOGGLE :
+                               L6_USB1_PLL_DIRECT;
+        control = l6_usb1_pll_apply(control, value, alias);
+        g_hash_table_insert(s->registers, control_key,
+                            GUINT_TO_POINTER(control));
+        if (alias == L6_USB1_PLL_DIRECT) {
+            word = control;
+        } else {
+            store_word = false; /* SET/CLR/TOG addresses are write-only. */
+        }
+    }
+    hwaddr sai_offset;
+    L6Sai *sai = l6_sai_at(s, offset, &sai_offset);
+    if (sai) {
+        l6_sai_write(sai, sai_offset, value, size);
+        hwaddr sai_base = offset - sai_offset;
+        if (sai_offset == L6_SAI_TCSR) {
+            uint32_t control = l6_sai_read(sai, sai_offset, 4);
+            if ((control & (L6_SAI_TE | L6_SAI_FRDE | L6_SAI_FRF)) ==
+                (L6_SAI_TE | L6_SAI_FRDE | L6_SAI_FRF)) {
+                uint8_t source = sai_base == 0x384000 ? 20 : 84;
+                l6_edma_service_request(s, source);
+            }
+        } else if (sai_offset == L6_SAI_RCSR) {
+            uint32_t control = l6_sai_read(sai, sai_offset, 4);
+            if ((control & (L6_SAI_RE | L6_SAI_FRDE | L6_SAI_FRF)) ==
+                (L6_SAI_RE | L6_SAI_FRDE | L6_SAI_FRF)) {
+                uint8_t source = sai_base == 0x384000 ? 19 : 83;
+                l6_edma_service_request(s, source);
+            }
+        }
+    }
     if (!s->panel && offset == 0x1bc018 && size == 4) {
         word = previous_word & ~(uint32_t)value; /* GPIO ISR is W1C */
     }
@@ -1875,9 +3251,8 @@ static void l6_mmio_write(void *opaque, hwaddr offset,
         l6_flexspi_rx_window(s);
         word &= ~1u;
     }
-    /* RT105x FlexSPI MCR0.SWRESET completes in hardware. The firmware polls
-     * for bit 0 to clear before configuring the rest of the controller.
-     */
+    /* The L6 firmware polls MCR0.SWRESET for bit 0 to clear before it
+     * configures the rest of the FlexSPI controller. */
     if (offset == 0x2a8000 && size == 4) {
         word &= ~1u;
     }
@@ -1908,6 +3283,31 @@ static void l6_mmio_write(void *opaque, hwaddr offset,
         uint32_t old = GPOINTER_TO_UINT(g_hash_table_lookup(s->registers, key));
         word = old & ~(uint32_t)value;
     }
+    if (s->profile->resource_flash && offset == 0x3a0064 && size == 4) {
+        /* CPU-driven L6 SPI-window transfers read the external resource NOR.
+         * Decode the observed 0x0b fast-read and 0x05 status commands; the
+         * display is handled separately by the eDMA path below. */
+        gpointer sr_key = GUINT_TO_POINTER((0x3a0014 >> 2) + 1);
+        uint32_t sr = GPOINTER_TO_UINT(g_hash_table_lookup(s->registers,
+                                                            sr_key));
+        g_hash_table_insert(s->registers, sr_key,
+                            GUINT_TO_POINTER(sr | 1u | (1u << 10)));
+        uint32_t tcr = GPOINTER_TO_UINT(g_hash_table_lookup(s->registers,
+            GUINT_TO_POINTER((0x3a0060 >> 2) + 1)));
+        unsigned bytes = l6_lpspi_frame_bytes(tcr);
+        for (unsigned i = 0; i < bytes; i++) {
+            uint8_t tx = value >> (i * 8);
+            l6_lpspi_flash_tx_byte(s, tx);
+            /* TCR.RXMSK is bit 19. Bit 20 is CONT and must not mask RX. */
+            if (!(tcr & (1u << 19)) &&
+                s->lpspi_rx_count < ARRAY_SIZE(s->lpspi_rx_fifo)) {
+                unsigned tail = (s->lpspi_rx_head + s->lpspi_rx_count) %
+                                ARRAY_SIZE(s->lpspi_rx_fifo);
+                s->lpspi_rx_fifo[tail] = l6_lpspi_flash_rx_byte(s);
+                s->lpspi_rx_count++;
+            }
+        }
+    }
     if (!s->panel && offset == 0x3f0014 && size == 4) {
         /* LPI2C1 MSR event/error flags are write-one-to-clear. Treating the
          * firmware's 0x7f00 clear as stored data invents PLTF (bit 13) and
@@ -1916,32 +3316,48 @@ static void l6_mmio_write(void *opaque, hwaddr offset,
         word = previous_word & ~((uint32_t)value & 0x7f00u);
     }
     if (!s->panel && offset == 0x3f0060 && (size == 2 || size == 4)) {
-        /* MTDR command 2 emits STOP. With an empty TX FIFO, hardware then
-         * reports both SDF and TDF in MSR; the synchronous SDK transfer
-         * waits for precisely that pair before returning.
-         */
-        if ((((uint32_t)value >> 8) & 7u) == 2u) {
-            gpointer msr_key = GUINT_TO_POINTER((0x3f0014 >> 2) + 1);
-            uint32_t msr = GPOINTER_TO_UINT(g_hash_table_lookup(s->registers,
-                                                                 msr_key));
-            g_hash_table_insert(s->registers, msr_key,
-                                GUINT_TO_POINTER(msr | (1u << 9)));
-        }
-    }
-    if (!s->panel && offset == 0x0d8014 && size == 4 &&
-        (value & 0x3000u)) {
-        /* The post-setup power-control sequence waits for status bit 31
-         * after requesting the transition through this control register. */
-        gpointer status_key = GUINT_TO_POINTER((0x0d8010 >> 2) + 1);
-        uint32_t status = GPOINTER_TO_UINT(g_hash_table_lookup(s->registers,
-                                                                status_key));
-        g_hash_table_insert(s->registers, status_key,
-                            GUINT_TO_POINTER(status | (1u << 31)));
+        /* Execute the observed START/address, data, and STOP command stream
+         * against QEMU's I2C bus and the L6max-compatible codec slaves. */
+        l6_lpi2c_mtdr_write(s, value);
     }
     if (offset == 0x0e8024 && size == 4) {
         /* eDMA INT is write-one-to-clear. */
         uint32_t old = GPOINTER_TO_UINT(g_hash_table_lookup(s->registers, key));
         word = old & ~(uint32_t)value;
+        for (unsigned channel = 0; channel < 32; channel++) {
+            if ((uint32_t)value & (1u << channel)) {
+                if (s->audio_trace && channel >= 12 && channel <= 15 &&
+                    (old & (1u << channel))) {
+                    s->audio_trace_irq_ack_count[channel - 12]++;
+                }
+                l6_edma_update_irq_level(s, channel, word);
+            }
+        }
+    }
+    if (!s->panel && offset == 0x0e801f && size == 1) {
+        /* CINT bit 7 is NOP, bit 6 clears every channel, otherwise bits 4:0
+         * select the single channel whose request is being acknowledged. */
+        word = previous_word; /* CINT is write-only, not stored state. */
+        if (!(value & 0x80)) {
+            gpointer int_key = GUINT_TO_POINTER((0x0e8024 >> 2) + 1);
+            uint32_t pending = GPOINTER_TO_UINT(g_hash_table_lookup(
+                s->registers, int_key));
+            uint32_t clear_mask = (value & 0x40) ? UINT32_MAX :
+                                  1u << (value & 0x1f);
+            for (unsigned channel = 12; channel <= 15; channel++) {
+                if (s->audio_trace && (clear_mask & pending & (1u << channel))) {
+                    s->audio_trace_irq_ack_count[channel - 12]++;
+                }
+            }
+            pending &= ~clear_mask;
+            g_hash_table_insert(s->registers, int_key,
+                                GUINT_TO_POINTER(pending));
+            for (unsigned channel = 0; channel < 32; channel++) {
+                if (clear_mask & (1u << channel)) {
+                    l6_edma_update_irq_level(s, channel, pending);
+                }
+            }
+        }
     }
     if (s->panel && offset == 0 && size == 4) {
         if ((word & 1) && !(GPOINTER_TO_UINT(g_hash_table_lookup(
@@ -1952,7 +3368,9 @@ static void l6_mmio_write(void *opaque, hwaddr offset,
             timer_del(s->panel_tim2);
         }
     }
-    g_hash_table_insert(s->registers, key, GUINT_TO_POINTER(word));
+    if (!sai && store_word) {
+        g_hash_table_insert(s->registers, key, GUINT_TO_POINTER(word));
+    }
     if (s->panel && ((offset >= 0x2800 && offset < 0x2860) || offset == 0x2105c)) {
         if (offset == 0x2800 || offset == 0x2804 || offset == 0x280c) {
             s->rtc_anchor_ms = qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL);
@@ -1987,13 +3405,6 @@ static void l6_mmio_write(void *opaque, hwaddr offset,
             timer_del(s->panel_tim14);
         }
     }
-    if (!s->panel && (offset == 0x1bc084 || offset == 0x1bc088) &&
-        (value & (1u << 27))) {
-        s->display_dc = offset == 0x1bc084;
-    }
-    if (!s->panel && offset == 0x1bc000 && size == 4) {
-        s->display_dc = word & (1u << 27);
-    }
     if (s->panel && (offset == 0x28 || offset == 0x2c)) {
         uint32_t cr1 = GPOINTER_TO_UINT(g_hash_table_lookup(s->registers,
                                                          GUINT_TO_POINTER(1)));
@@ -2002,92 +3413,36 @@ static void l6_mmio_write(void *opaque, hwaddr offset,
                       qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + l6_panel_tim2_period(s));
         }
     }
-    if (!s->panel) {
-        static const hwaddr ports[5] = { 0x1b8000, 0x1bc000, 0x1c0000, 0x1c4000, 0x0c0000 };
-        for (unsigned bank = 0; bank < ARRAY_SIZE(ports); bank++) {
-            hwaddr reg = offset - ports[bank];
-            if (size != 4 || (reg != 0 && reg != 0x84 && reg != 0x88 && reg != 0x8c)) {
-                continue;
-            }
-            uint32_t before = s->main_gpio[bank];
-            uint32_t after = reg == 0 ? word : reg == 0x84 ? before | word :
-                reg == 0x88 ? before & ~word : before ^ word;
-            s->main_gpio[bank] = after;
-            g_hash_table_insert(s->registers, GUINT_TO_POINTER((ports[bank] >> 2) + 1), GUINT_TO_POINTER(after));
-            if (after != before) {
-                if (!++s->main_gpio_generation) { ++s->main_gpio_generation; }
-                l6_input_reply(s, 0x80000006u, s->main_gpio_generation, bank, after);
-                /* System power event routine 0x80037328 finishes by clearing
-                 * output 1: callback 0x80021ea8 drives GPIO3.3 (power hold).
-                 * This falling edge occurs after storage and panel teardown.
-                 */
-                if (bank == 2 && (before & 8u) && !(after & 8u)) {
-                    qemu_log_mask(LOG_UNIMP, "l6 board power hold released at %" PRId64 " ms\n",
-                                  qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL));
-                    l6_input_reply(s, 0x80000009u, s->main_gpio_generation, 0, 0);
-                    qemu_system_shutdown_request(SHUTDOWN_CAUSE_GUEST_SHUTDOWN);
-                }
-            }
-            break;
-        }
-    }
-    if (!s->panel && offset >= 0x1b4000 && offset < 0x1c4000 &&
-        s->main_gpio_log_count++ < 180) {
-        qemu_log_mask(LOG_UNIMP, "l6 main GPIO %08x = %08x\n",
-                      (unsigned)(0x40000000 + offset), (uint32_t)value);
-    }
-    if (!s->panel && (offset == 0x1b8084 || offset == 0x1b8088 ||
-                      offset == 0x0c0084 || offset == 0x0c0088)) {
-        qemu_log_mask(LOG_UNIMP, "l6 sub-MCU pin %08x = %08x\n",
-                      (unsigned)(0x40000000 + offset), (uint32_t)value);
-    }
-    if (!s->panel && offset == 0x1b8084 && (value & (1u << 29))) {
-        s->main_boot_select = true;
-    }
-    if (!s->panel && offset == 0x1b8088 && (value & (1u << 29))) {
-        s->main_boot_select = false;
-    }
-    if (!s->panel && offset == 0x0c0084 && (value & 2)) {
-        /* Recovered updater pulses this GPIO high, then low, and starts the
-         * ROM exchange after the low edge. Model the high phase as reset;
-         * the wiring's physical RESET polarity is not yet established. */
-        s->panel_reset_asserted = true;
-        s->main_rom_mode = false;
-        l6_update_panel_boot(s);
-    }
-    if (!s->panel && offset == 0x0c0088 && (value & 2)) {
-        s->panel_reset_asserted = false;
-        s->main_rom_mode = s->main_boot_select;
-        s->main_rx_pending = false;
-        s->rom_phase = 0;
-        s->rom_reply_read = s->rom_reply_visible = s->rom_reply_write = 0;
-        timer_del(s->rom_uart_timer);
-        qemu_irq_lower(qdev_get_gpio_in(DEVICE(&s->armv7m), 20));
-        if (s->main_rom_mode) {
-            qemu_log_mask(LOG_UNIMP, "l6 main panel reset into ROM mode\n");
-        }
-        l6_update_panel_boot(s);
-    }
-    if (!s->panel && offset == 0x184018 && size == 4) {
+    if (!s->panel && offset == l6_panel_uart_base(s) + 0x18 && size == 4) {
         if (s->main_ctrl_log_count++ < 40) {
-            qemu_log_mask(LOG_UNIMP, "l6 main LPUART1 CTRL %08x\n", word);
+            qemu_log_mask(LOG_UNIMP, "l6 main LPUART%u (panel link) CTRL %08x\n",
+                          l6_panel_uart_number(s), word);
         }
         if ((word & (1u << 23)) && !(previous_word & (1u << 23))) {
-            qemu_irq_pulse(qdev_get_gpio_in(DEVICE(&s->armv7m), 20));
+            qemu_irq_pulse(qdev_get_gpio_in(DEVICE(&s->armv7m),
+                                            l6_panel_uart_irq(s)));
         }
         if (s->main_rx_pending && (word & (1u << 21)) &&
             !(previous_word & (1u << 21))) {
-            qemu_irq_pulse(qdev_get_gpio_in(DEVICE(&s->armv7m), 20));
+            qemu_irq_pulse(qdev_get_gpio_in(DEVICE(&s->armv7m),
+                                            l6_panel_uart_irq(s)));
         }
         if (s->main_rom_mode && s->rom_reply_read < s->rom_reply_visible) {
-            qemu_set_irq(qdev_get_gpio_in(DEVICE(&s->armv7m), 20),
+            qemu_set_irq(qdev_get_gpio_in(DEVICE(&s->armv7m),
+                                          l6_panel_uart_irq(s)),
                          !!(word & (1u << 21)));
         }
     }
-    if (!s->panel && offset == 0x18401c && size == 4) {
+    if (!s->panel && offset == l6_panel_uart_base(s) + 0x1c && size == 4) {
         uint8_t byte = value;
         s->main_tx_count++;
-        qemu_log_mask(LOG_UNIMP, "l6 main LPUART1 TX %02x\n", byte);
+        vaddr pc = current_cpu && CPU_GET_CLASS(current_cpu)->get_pc ?
+                   CPU_GET_CLASS(current_cpu)->get_pc(current_cpu) : 0;
+        qemu_log_mask(LOG_UNIMP,
+                      "l6 main LPUART%u (panel link) TX %02x at=%" PRId64
+                      "ms pc=%08" PRIx64 "\n",
+                      l6_panel_uart_number(s), byte,
+                      qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL), (uint64_t)pc);
         if (byte == 0xb1) {
             qemu_log_mask(LOG_UNIMP, "l6 main RTC request at %" PRId64 " ms\n",
                           qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL));
@@ -2100,24 +3455,29 @@ static void l6_mmio_write(void *opaque, hwaddr offset,
             qemu_chr_fe_write(&s->main_uart, &byte, 1);
         }
         uint32_t ctrl = GPOINTER_TO_UINT(g_hash_table_lookup(s->registers,
-            GUINT_TO_POINTER((0x184018 >> 2) + 1)));
+            GUINT_TO_POINTER(((l6_panel_uart_base(s) + 0x18) >> 2) + 1)));
         if (ctrl & (1u << 23)) {
-            qemu_irq_pulse(qdev_get_gpio_in(DEVICE(&s->armv7m), 20));
+            qemu_irq_pulse(qdev_get_gpio_in(DEVICE(&s->armv7m),
+                                            l6_panel_uart_irq(s)));
         }
     }
-    if (!s->panel && offset == 0x18c018 && size == 4 && word != previous_word) {
-        qemu_log_mask(LOG_UNIMP, "l6 main LPUART3 (MIDI jacks) CTRL %08x\n", word);
+    if (!s->panel && offset == l6_midi_uart_base(s) + 0x18 && size == 4 &&
+        word != previous_word) {
+        qemu_log_mask(LOG_UNIMP, "l6 main LPUART%u (MIDI jacks) CTRL %08x\n",
+                      s->profile->midi_uart_number, word);
         if ((word & (1u << 23)) && !(previous_word & (1u << 23))) {
             /* TIE newly enabled: real hardware's TDRE is always set while
-             * idle, so this interrupts immediately, the same way LPUART1's
+             * idle, so this interrupts immediately, the same way the panel UART's
              * CTRL handler above already does. Without this, firmware's
              * enable-TIE-then-wait-for-interrupt driver pattern never gets
              * its first interrupt, so it never transmits the MIDI OUT jack
              * at all. */
-            qemu_irq_pulse(qdev_get_gpio_in(DEVICE(&s->armv7m), L6_LPUART3_IRQ));
+            qemu_irq_pulse(qdev_get_gpio_in(DEVICE(&s->armv7m), l6_midi_uart_irq(s)));
         }
     }
-    if (!s->panel && size == 4 && offset >= 0x188018 && offset != 0x18c018 &&
+    if (!s->panel && size == 4 && offset >= 0x188018 &&
+        offset != l6_midi_uart_base(s) + 0x18 &&
+        offset != l6_panel_uart_base(s) + 0x18 &&
         offset <= 0x1a0018 && (offset - 0x188018) % 0x4000 == 0 &&
         word != previous_word) {
         /* A boot-time check found none of these touched despite each
@@ -2126,11 +3486,20 @@ static void l6_mmio_write(void *opaque, hwaddr offset,
         qemu_log_mask(LOG_UNIMP, "l6 main LPUART (other) CTRL +%05lx = %08x\n",
                       (unsigned long)offset, word);
     }
-    if (!s->panel && offset == 0x18c01c && size == 4) {
-        /* LPUART3 TX: the MIDI OUT (DIN/TRS) jack, forwarded to the
+    if (!s->panel && size == 4 && offset >= 0x18801c &&
+        offset <= 0x1a001c && (offset - 0x18801c) % 0x4000 == 0 &&
+        offset != l6_midi_uart_base(s) + 0x1c &&
+        offset != l6_panel_uart_base(s) + 0x1c) {
+        qemu_log_mask(LOG_UNIMP,
+                      "l6 main LPUART (other) DATA write +%05lx = %02x\n",
+                      (unsigned long)offset, (uint8_t)value);
+    }
+    if (!s->panel && offset == l6_midi_uart_base(s) + 0x1c && size == 4) {
+        /* The selected MIDI UART's TX: forward bytes to the MIDI OUT jack
          * inherited socket like L6_USB_FD, one byte at a time. */
         uint8_t byte = value;
-        qemu_log_mask(LOG_UNIMP, "l6 main LPUART3 (MIDI jacks) TX %02x\n", byte);
+        qemu_log_mask(LOG_UNIMP, "l6 main LPUART%u (MIDI jacks) TX %02x\n",
+                      s->profile->midi_uart_number, byte);
         if (s->main_midi_fd >= 0) {
             ssize_t n;
             do {
@@ -2138,14 +3507,14 @@ static void l6_mmio_write(void *opaque, hwaddr offset,
             } while (n < 0 && errno == EINTR);
         }
         uint32_t ctrl = GPOINTER_TO_UINT(g_hash_table_lookup(s->registers,
-            GUINT_TO_POINTER((0x18c018 >> 2) + 1)));
+            GUINT_TO_POINTER(((l6_midi_uart_base(s) + 0x18) >> 2) + 1)));
         if (ctrl & (1u << 23)) {
-            qemu_irq_pulse(qdev_get_gpio_in(DEVICE(&s->armv7m), L6_LPUART3_IRQ));
+            qemu_irq_pulse(qdev_get_gpio_in(DEVICE(&s->armv7m), l6_midi_uart_irq(s)));
         }
     }
     if (offset >= 0x3a0000 && offset < 0x3a0100 &&
         s->lpspi_log_count++ < 128) {
-        qemu_log_mask(LOG_UNIMP, "l6 LPSPI4 MMIO +%02x = %08x\n",
+        qemu_log_mask(LOG_UNIMP, "l6 LPSPI3 MMIO +%02x = %08x\n",
                       (unsigned)(offset - 0x3a0000), (uint32_t)value);
     }
     if (offset >= 0x0e8000 && offset < 0x0f0000 &&
@@ -2155,19 +3524,24 @@ static void l6_mmio_write(void *opaque, hwaddr offset,
     }
     if (offset == 0x0e801b && size == 1 && value < 32) {
         s->edma_erq |= 1u << value;
+        l6_edma_service_active_sai(s);
     }
-    if (offset == 0x0e801f && size == 1 && value < 32) {
-        gpointer int_key = GUINT_TO_POINTER((0x0e8024 >> 2) + 1);
-        uint32_t pending = GPOINTER_TO_UINT(g_hash_table_lookup(
-            s->registers, int_key));
-        g_hash_table_insert(s->registers, int_key,
-                            GUINT_TO_POINTER(pending & ~(1u << value)));
+    if (offset == 0x0e801a && size == 1 && value < 32) {
+        s->edma_erq &= ~(1u << value);
     }
-    if (!s->panel && offset == 0x3a001c && size == 4 && (word & 3) == 3 &&
+    if (offset == 0x0e800c && size == 4) {
+        s->edma_erq = value;
+        l6_edma_service_active_sai(s);
+    }
+    if (offset >= 0x0ec000 && offset < 0x0ec080) {
+        l6_edma_service_active_sai(s);
+    }
+    if (!s->panel && s->profile->oled && offset == 0x3a001c &&
+        size == 4 && (word & 3) == 3 &&
         (s->edma_erq & 0xc) == 0xc) {
         if (!l6_display_dma_transfer(s)) {
             qemu_log_mask(LOG_UNIMP,
-                          "l6 unsupported LPSPI4/eDMA transfer, completion withheld\n");
+                          "l6 unsupported SPI-window/eDMA transfer, completion withheld\n");
         }
     }
     if (offset == 0x3a0018 && size == 4 && (word & 1)) {
@@ -2181,10 +3555,12 @@ static void l6_mmio_write(void *opaque, hwaddr offset,
         }
     }
     if (offset == 0x0c4000 && size == 4 &&
-        (value & 0x80) && ((value & 0x1f) != 0x1f)) {
+        (value & 0x1f) != 0x1f) {
         /* ADC1 HC0 starts a conversion. Physical channels 8 and 13 are the
          * board-ID ladder inputs; low samples select the firmware's ID 6.
-         * Five physical potentiometers use channels 3..7, with 10-bit results.
+         * Five physical potentiometers use channels 3..7, with 10-bit
+         * results. AIEN enables the completion interrupt; it does not gate
+         * the software-triggered conversion.
          */
         uint32_t channel = value & 0x1f;
         s->adc_channel = channel;
@@ -2194,8 +3570,312 @@ static void l6_mmio_write(void *opaque, hwaddr offset,
             GUINT_TO_POINTER((0x0c4024 >> 2) + 1),
             GUINT_TO_POINTER(channel >= 3 && channel <= 7 ? s->analog_inputs[channel - 3] :
                 channel == 8 || channel == 13 ? 0 : 0x800));
-        qemu_irq_pulse(qdev_get_gpio_in(DEVICE(&s->armv7m), 67));
+        if (value & 0x80) {
+            qemu_irq_pulse(qdev_get_gpio_in(DEVICE(&s->armv7m), 67));
+        }
     }
+}
+
+static uint64_t l6_main_gpio_read(void *opaque, hwaddr offset, unsigned size)
+{
+    L6MainGPIOAdapter *adapter = opaque;
+    L6ChipState *s = adapter->chip;
+    hwaddr aligned = offset & ~3ULL;
+    uint64_t value = 0;
+    if (aligned >= IMX_GPIO_MEM_SIZE || size == 0 || size > 4) {
+        return 0;
+    }
+    MemTxResult result = memory_region_dispatch_read(
+        adapter->model_mmio, aligned, &value, size_memop(4) | MO_LE,
+        MEMTXATTRS_UNSPECIFIED);
+    if (result != MEMTX_OK) {
+        return 0;
+    }
+    unsigned shift = (offset & 3) * 8;
+    uint64_t mask = size == 4 ? UINT32_MAX : (1ULL << (size * 8)) - 1;
+    uint64_t result_value = (value >> shift) & mask;
+    /* GPIOx_DR (0x00) and GPIOx_PSR (0x08) expose input pin levels. Report
+     * candidate pins that are low during an actual guest port read, together
+     * with the generic GPIO reader's selected bit. The latter is needed to
+     * distinguish a whole-port read from the firmware testing that pin. */
+    if (s->main_gpio_trace && (aligned == 0x00 || aligned == 0x08)) {
+        for (unsigned id = 0; id <= 52; id++) {
+            hwaddr candidate_port;
+            unsigned pin;
+            if (id == 0 || id == 5) {
+                candidate_port = l6_main_gpio_ports[4];
+                pin = id == 0 ? 2 : 0;
+            } else if (s->profile == &L6MAX_PROFILE && id == 4) {
+                /* Host target 4 is the L6max Play candidate in the live
+                 * input API; trace it independently from L6's target 4. */
+                candidate_port = 0x1b8000;
+                pin = 20;
+            } else if (!l6_main_key_gpio(s, id, &candidate_port, &pin)) {
+                continue;
+            }
+            if (candidate_port != l6_main_gpio_ports[adapter->bank] ||
+                !l6_button_down(s, id) ||
+                ((value >> pin) & 1) != 0) {
+                continue;
+            }
+            vaddr pc = current_cpu && CPU_GET_CLASS(current_cpu)->get_pc ?
+                       CPU_GET_CLASS(current_cpu)->get_pc(current_cpu) : 0;
+            CPUARMState *env = current_cpu ? (CPUARMState *)cpu_env(current_cpu) : NULL;
+            unsigned tested_port = env ? env->regs[0] : 0;
+            unsigned tested_bit = env ? env->regs[1] : 32;
+            unsigned reader_index = env ? env->regs[4] : ~0u;
+            unsigned expected_port = 0x40000000 + l6_main_gpio_ports[adapter->bank];
+            if (tested_port != expected_port || tested_bit >= 32) {
+                continue;
+            }
+            uint32_t tested_mask = 1u << tested_bit;
+            if (s->main_button_tested_bits[id][adapter->bank] & tested_mask) {
+                continue;
+            }
+            s->main_button_tested_bits[id][adapter->bank] |= tested_mask;
+            qemu_log_mask(LOG_UNIMP,
+                          "l6 MAIN GPIO port-read candidate=%u reader=%u port=%08x reg=%s value=%08x pin=%u pc=%08" PRIx64 " lr=%08x tested_port=%08x tested_bit=%u matches_candidate=%u at %" PRId64 " ms\n",
+                          id, reader_index, (unsigned)l6_main_gpio_ports[adapter->bank],
+                          aligned == 0x00 ? "DR" : "PSR", (uint32_t)value, pin,
+                          (uint64_t)pc, env ? env->regs[14] : 0,
+                          tested_port, tested_bit, tested_bit == pin,
+                          qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL));
+        }
+    }
+    return result_value;
+}
+
+static void l6_main_gpio_publish(L6ChipState *s, unsigned bank,
+                                 uint32_t before, uint32_t after)
+{
+    if (before == after) {
+        return;
+    }
+    s->main_gpio[bank] = after;
+    g_hash_table_insert(s->registers,
+        GUINT_TO_POINTER((l6_main_gpio_ports[bank] >> 2) + 1),
+        GUINT_TO_POINTER(after));
+    if ((s->main_gpio_output_trace || s->main_gpio_pad_led_trace) &&
+        s->main_gpio_output_log_count++ < 50000) {
+        int64_t now_ms = qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL);
+        if (s->main_gpio_output_trace) {
+            qemu_log_mask(LOG_UNIMP,
+                          "l6 MAIN GPIO output bank=%u before=%08x after=%08x at %" PRId64 " ms\n",
+                          bank, before, after, now_ms);
+        }
+        if (s->main_gpio_pad_led_trace && bank == 1) {
+            uint8_t pad_leds[8];
+            AddressSpace *as = CPU(s->armv7m.cpu)->as;
+            if (address_space_read(as, 0x806293f4, MEMTXATTRS_UNSPECIFIED,
+                                   pad_leds, sizeof(pad_leds)) == MEMTX_OK) {
+                qemu_log_mask(LOG_UNIMP,
+                              "l6 MAIN GPIO pad-led sample bank=%u output=%08x records=%02x%02x%02x%02x%02x%02x%02x%02x at=%" PRId64 " ms\n",
+                              bank, after, pad_leds[0], pad_leds[1],
+                              pad_leds[2], pad_leds[3], pad_leds[4],
+                              pad_leds[5], pad_leds[6], pad_leds[7], now_ms);
+            }
+        }
+    }
+    if (!++s->main_gpio_generation) {
+        ++s->main_gpio_generation;
+    }
+    l6_input_reply(s, 0x80000006u, s->main_gpio_generation, bank, after);
+    if (bank == 2 && (before & 8u) && !(after & 8u)) {
+        qemu_log_mask(LOG_UNIMP,
+                      "l6 board power hold released at %" PRId64 " ms\n",
+                      qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL));
+        l6_input_reply(s, 0x80000009u, s->main_gpio_generation, 0, 0);
+        qemu_system_shutdown_request(SHUTDOWN_CAUSE_GUEST_SHUTDOWN);
+    }
+}
+
+static uint32_t l6_main_gpio_read_latch(L6MainGPIOAdapter *adapter)
+{
+    return IMX_GPIO(adapter->device)->dr;
+}
+
+static void l6_main_gpio_write_latch(L6MainGPIOAdapter *adapter,
+                                     uint32_t value)
+{
+    L6ChipState *s = adapter->chip;
+    IMXGPIOState *gpio = IMX_GPIO(adapter->device);
+    uint32_t before = gpio->dr;
+    memory_region_dispatch_write(adapter->model_mmio, DR_ADDR, value,
+                                 size_memop(4) | MO_LE,
+                                 MEMTXATTRS_UNSPECIFIED);
+    l6_main_gpio_publish(s, adapter->bank, before, gpio->dr);
+    if (adapter->bank == 1) {
+        s->display_dc = !!(gpio->dr & (1u << 27));
+    }
+}
+
+static void l6_main_gpio_write(void *opaque, hwaddr offset,
+                               uint64_t value, unsigned size)
+{
+    L6MainGPIOAdapter *adapter = opaque;
+    IMXGPIOState *gpio = IMX_GPIO(adapter->device);
+    hwaddr aligned = offset & ~3ULL;
+    if (aligned >= IMX_GPIO_MEM_SIZE || size == 0 || size > 4) {
+        return;
+    }
+    uint32_t write_value = value;
+    if (size < 4) {
+        uint32_t old = aligned == DR_ADDR ? gpio->dr :
+            (uint32_t)l6_main_gpio_read(adapter, aligned, 4);
+        uint32_t lane_mask = ((1u << (size * 8)) - 1) << ((offset & 3) * 8);
+        write_value = (old & ~lane_mask) |
+                      (((uint32_t)value << ((offset & 3) * 8)) & lane_mask);
+        if (aligned == ISR_ADDR) {
+            write_value = ((uint32_t)value << ((offset & 3) * 8)) & lane_mask;
+        }
+    }
+    uint32_t before = gpio->dr;
+    MemTxResult result = memory_region_dispatch_write(
+        adapter->model_mmio, aligned, write_value,
+        size_memop(4) | MO_LE, MEMTXATTRS_UNSPECIFIED);
+    if (result == MEMTX_OK && aligned == DR_ADDR) {
+        l6_main_gpio_publish(adapter->chip, adapter->bank, before, gpio->dr);
+        if (adapter->bank == 1) {
+            adapter->chip->display_dc = !!(gpio->dr & (1u << 27));
+        }
+    }
+}
+
+static void l6_main_gpio_alias_write(void *opaque, hwaddr offset,
+                                     uint64_t value, unsigned size)
+{
+    L6MainGPIOAdapter *adapter = opaque;
+    L6ChipState *s = adapter->chip;
+    uint32_t mask = value;
+    uint32_t before = l6_main_gpio_read_latch(adapter);
+    uint32_t after = before;
+    /* This window starts at GPIO + 0x80. That first word is reserved;
+     * DR_SET/CLEAR/TOGGLE therefore arrive at local offsets 4/8/12. */
+    hwaddr reg = offset & ~3ULL;
+    if (reg == 0x04) {
+        after |= mask;
+    } else if (reg == 0x08) {
+        after &= ~mask;
+    } else if (reg == 0x0c) {
+        after ^= mask;
+    } else {
+        return;
+    }
+    if (size < 4) {
+        after = before;
+        uint32_t shifted_mask = mask << ((offset & 3) * 8);
+        if (reg == 0x04) {
+            after |= shifted_mask;
+        } else if (reg == 0x08) {
+            after &= ~shifted_mask;
+        } else {
+            after ^= shifted_mask;
+        }
+    }
+    l6_main_gpio_write_latch(adapter, after);
+    hwaddr port_address = 0x40000000 + l6_main_gpio_ports[adapter->bank];
+    uint32_t pin_mask = mask;
+    if (port_address == s->profile->panel_boot_gpio_base && pin_mask) {
+        if (reg == 0x04 && (pin_mask & s->profile->panel_boot_gpio_mask)) {
+            s->main_boot_select = true;
+        } else if (reg == 0x08 &&
+                   (pin_mask & s->profile->panel_boot_gpio_mask)) {
+            s->main_boot_select = false;
+        }
+    }
+    if (port_address == s->profile->panel_reset_gpio_base &&
+        (pin_mask & s->profile->panel_reset_gpio_mask)) {
+        if (reg == 0x04) {
+            s->panel_reset_asserted = true;
+            s->main_rom_mode = false;
+            l6_update_panel_boot(s);
+        } else if (reg == 0x08) {
+            s->panel_reset_asserted = false;
+            s->main_rom_mode = s->main_boot_select;
+            s->main_rx_pending = false;
+            s->rom_phase = 0;
+            s->rom_reply_read = s->rom_reply_visible = s->rom_reply_write = 0;
+            timer_del(s->rom_uart_timer);
+            qemu_irq_lower(qdev_get_gpio_in(DEVICE(&s->armv7m),
+                                            l6_panel_uart_irq(s)));
+            if (s->main_rom_mode) {
+                qemu_log_mask(LOG_UNIMP, "l6 main panel reset into ROM mode\n");
+            }
+            l6_update_panel_boot(s);
+        }
+    }
+    if (adapter->bank == 1 && (mask & (1u << 27)) &&
+        (reg == 0x04 || reg == 0x08)) {
+        s->display_dc = reg == 0x04;
+    }
+}
+
+static const MemoryRegionOps l6_main_gpio_register_ops = {
+    .read = l6_main_gpio_read,
+    .write = l6_main_gpio_write,
+    .endianness = DEVICE_NATIVE_ENDIAN,
+    .valid = { .min_access_size = 1, .max_access_size = 4 },
+};
+
+static const MemoryRegionOps l6_main_gpio_alias_ops = {
+    .write = l6_main_gpio_alias_write,
+    .endianness = DEVICE_NATIVE_ENDIAN,
+    .valid = { .min_access_size = 1, .max_access_size = 4 },
+};
+
+static void l6_main_gpio_refresh_inputs(L6ChipState *s)
+{
+    if (s->panel) {
+        return;
+    }
+    for (unsigned bank = 0; bank < ARRAY_SIZE(s->main_gpio_adapters); bank++) {
+        L6MainGPIOAdapter *adapter = &s->main_gpio_adapters[bank];
+        if (!adapter->device) {
+            return;
+        }
+        uint32_t value = l6_main_gpio_input_value(s, bank);
+        for (unsigned pin = 0; pin < IMX_GPIO_PIN_COUNT; pin++) {
+            qemu_set_irq(qdev_get_gpio_in(adapter->device, pin),
+                         (value >> pin) & 1);
+        }
+    }
+}
+
+static void l6_main_gpio_setup(L6ChipState *s, MemoryRegion *system_memory)
+{
+    static const unsigned gpio_irqs[5][2] = {
+        { 80, 81 }, { 82, 83 }, { 84, 85 }, { 86, 87 }, { 88, 89 },
+    };
+    for (unsigned bank = 0; bank < ARRAY_SIZE(s->main_gpio_adapters); bank++) {
+        L6MainGPIOAdapter *adapter = &s->main_gpio_adapters[bank];
+        adapter->chip = s;
+        adapter->bank = bank;
+        adapter->device = qdev_new(TYPE_IMX_GPIO);
+        qdev_prop_set_bit(adapter->device, "has-upper-pin-irq", true);
+        sysbus_realize_and_unref(SYS_BUS_DEVICE(adapter->device), &error_fatal);
+        adapter->model_mmio = sysbus_mmio_get_region(
+            SYS_BUS_DEVICE(adapter->device), 0);
+        g_autofree char *region_name = g_strdup_printf("l6-main-gpio%u", bank + 1);
+        g_autofree char *alias_name = g_strdup_printf("l6-main-gpio%u-aliases", bank + 1);
+        memory_region_init_io(&adapter->registers, NULL,
+                              &l6_main_gpio_register_ops, adapter,
+                              region_name, IMX_GPIO_MEM_SIZE);
+        memory_region_init_io(&adapter->aliases, NULL,
+                              &l6_main_gpio_alias_ops, adapter,
+                              alias_name, 0x10);
+        hwaddr base = 0x40000000 + l6_main_gpio_ports[bank];
+        memory_region_add_subregion_overlap(system_memory, base,
+                                            &adapter->registers, 2);
+        memory_region_add_subregion_overlap(system_memory, base + 0x80,
+                                            &adapter->aliases, 2);
+        if (bank == 1) {
+            /* GPIO2 upper-bank IRQ 83 is the card-detect interrupt used by
+             * the existing L6/L6max SD hotplug path. */
+            sysbus_connect_irq(SYS_BUS_DEVICE(adapter->device), 1,
+                qdev_get_gpio_in(DEVICE(&s->armv7m), gpio_irqs[bank][1]));
+        }
+    }
+    l6_main_gpio_refresh_inputs(s);
 }
 
 static const MemoryRegionOps l6_mmio_ops = {
@@ -2309,6 +3989,88 @@ static void l6_load_nor_segment(L6ChipState *s, const char *directory,
     memcpy(s->nor_flash + offset, contents, size);
 }
 
+/* The raw MAIN image is the authority for board selection. Both observed
+ * models use the same CPU/peripheral family, but the L6 vector table starts
+ * at 0x80001000 while the L6max vector table starts at 0x80000000. */
+static hwaddr l6_main_flash_base(const char *kernel)
+{
+    g_autofree char *contents = NULL;
+    gsize size = 0;
+    if (!kernel || !g_file_get_contents(kernel, &contents, &size, NULL) ||
+        size < 8) {
+        error_setg(&error_fatal, "cannot identify L6 MAIN firmware image");
+        return 0;
+    }
+    uint32_t stack = ldl_le_p((uint8_t *)contents);
+    uint32_t reset = ldl_le_p((uint8_t *)contents + 4);
+    L6BoardModel model = l6_board_model_from_vectors(stack, reset);
+
+    if (stack < 0x20000000 || stack >= 0x40000000 || !(reset & 1)) {
+        error_setg(&error_fatal,
+                   "invalid MAIN vector table (%08x, %08x)", stack, reset);
+        return 0;
+    }
+    if (model != L6_BOARD_MODEL_INVALID) {
+        return l6_board_model_flash_base(model);
+    }
+    error_setg(&error_fatal,
+               "unsupported MAIN reset vector %08x (expected L6 or L6max)",
+               reset);
+    return 0;
+}
+
+/* Persistent MAIN NOR replaces the package image at reset. When it contains
+ * an installed image, that image is the authority for the board wiring too. */
+static L6BoardModel l6_persistent_main_model(void)
+{
+    const char *directory = g_getenv("L6_STATE_DIR");
+    if (!directory) {
+        return L6_BOARD_MODEL_INVALID;
+    }
+    g_autofree char *path = g_build_filename(directory, "main-nor.bin", NULL);
+    if (!g_file_test(path, G_FILE_TEST_EXISTS)) {
+        return L6_BOARD_MODEL_INVALID;
+    }
+    g_autofree char *contents = NULL;
+    gsize size = 0;
+    if (!g_file_get_contents(path, &contents, &size, NULL)) {
+        error_setg(&error_fatal, "cannot read persistent MAIN NOR %s", path);
+        return L6_BOARD_MODEL_INVALID;
+    }
+    /* A zero-length file is initialized from the selected package later. */
+    if (!size) {
+        return L6_BOARD_MODEL_INVALID;
+    }
+    if (size != 0x200000) {
+        error_setg(&error_fatal, "persistent MAIN NOR %s must contain 2 MiB", path);
+        return L6_BOARD_MODEL_INVALID;
+    }
+    uint32_t stack = ldl_le_p((uint8_t *)contents + 0x50000);
+    uint32_t reset = ldl_le_p((uint8_t *)contents + 0x50004);
+    L6BoardModel model = l6_board_model_from_vectors(stack, reset);
+    if (model == L6_BOARD_MODEL_INVALID) {
+        error_setg(&error_fatal,
+                   "unsupported persistent MAIN vector table (%08x, %08x)",
+                   stack, reset);
+    }
+    return model;
+}
+
+static const L6BoardProfile *l6_main_board_profile(const char *kernel)
+{
+    L6BoardModel installed = l6_persistent_main_model();
+    const L6BoardProfile *profile = installed != L6_BOARD_MODEL_INVALID ?
+        (installed == L6_BOARD_MODEL_L6 ? &L6_PROFILE : &L6MAX_PROFILE) :
+        (l6_main_flash_base(kernel) == L6_PROFILE.main_flash_base ?
+            &L6_PROFILE : &L6MAX_PROFILE);
+    qemu_log_mask(LOG_UNIMP,
+                  installed != L6_BOARD_MODEL_INVALID ?
+                    "l6 board profile %s selected from installed MAIN NOR\n" :
+                    "l6 board profile %s selected from MAIN reset vector\n",
+                  profile->name);
+    return profile;
+}
+
 static void l6_prepare_nor(L6ChipState *s, const char *kernel)
 {
     g_autofree char *directory = g_path_get_dirname(kernel);
@@ -2329,12 +4091,35 @@ static void l6_prepare_nor(L6ChipState *s, const char *kernel)
     }
 }
 
+static void l6_load_resource_flash(L6ChipState *s, const char *directory)
+{
+    g_autofree char *path = g_build_filename(directory, "resource_region.bin", NULL);
+    g_autofree char *contents = NULL;
+    gsize size = 0;
+    if (!g_file_get_contents(path, &contents, &size, NULL) || size > 0x400000) {
+        error_setg(&error_fatal, "cannot load L6 resource flash %s", path);
+        return;
+    }
+    uint8_t *seed = g_malloc(0x400000);
+    memset(seed, 0xff, 0x400000);
+    memcpy(seed, contents, size);
+    uint8_t *persistent = l6_persistent_bytes("resource-nor.bin", seed, 0x400000);
+    if (persistent) {
+        g_free(seed);
+        s->resource_flash = persistent;
+    } else {
+        s->resource_flash = seed;
+    }
+    s->resource_flash_size = 0x400000;
+}
+
 static void l6_chip_init(MachineState *machine, L6ChipState *s, bool panel,
                          MemoryRegion *system_memory, const char *kernel_filename,
                          const char *cpu_type, const char *prefix,
-                         const char *input_variable, bool external_serial)
+                         const char *input_variable, bool external_serial,
+                         const L6BoardProfile *profile)
 {
-    hwaddr flash_base = panel ? 0x08000000 : 0x80000000;
+    hwaddr flash_base = panel ? 0x08000000 : profile->main_flash_base;
     uint64_t flash_size = panel ? 0x10000 : 0x200000;
     DeviceState *cpu;
 
@@ -2347,8 +4132,167 @@ static void l6_chip_init(MachineState *machine, L6ChipState *s, bool panel,
     g_autofree char *unmodeled_mmio_name = g_strdup_printf("%s.unmodeled_mmio", prefix);
     s->registers = g_hash_table_new(g_direct_hash, g_direct_equal);
     s->panel = panel;
+    s->profile = profile;
+    if (!panel) {
+        static const struct {
+            hwaddr offset;
+            uint32_t value;
+        } flexspi1_reset[] = {
+            /* RT1040 RM Rev. 3, FlexSPI1 reset values. */
+            { 0x2a8000, 0xffff8002u }, { 0x2a8004, 0xffffffffu },
+            { 0x2a8008, 0x200081f7u }, { 0x2a800c, 0x00000018u },
+            { 0x2a8018, 0x5af05af0u }, { 0x2a801c, 0x00000002u },
+            { 0x2a8020, 0x80000020u }, { 0x2a8024, 0x80010020u },
+            { 0x2a8028, 0x80020020u }, { 0x2a802c, 0x80030020u },
+            { 0x2a8060, 0x00010000u }, { 0x2a8064, 0x00010000u },
+            { 0x2a8068, 0x00010000u }, { 0x2a806c, 0x00010000u },
+            { 0x2a8070, 0x00000063u }, { 0x2a8074, 0x00000063u },
+            { 0x2a8078, 0x00000063u }, { 0x2a807c, 0x00000063u },
+            { 0x2a80c0, 0x00000100u }, { 0x2a80c4, 0x00000100u },
+            { 0x2a80e0, 0x00000002u }, { 0x2a80e8, 0x01000100u },
+        };
+        static const struct {
+            hwaddr offset;
+            uint32_t value;
+        } lpspi3_reset[] = {
+            /* RT1040 RM Rev. 3, LPSPI3 nonzero reset values. */
+            { 0x3a0000, 0x01020004u }, { 0x3a0004, 0x00040404u },
+            { 0x3a0014, 0x00000001u }, { 0x3a0060, 0x0000001fu },
+            { 0x3a0070, 0x00000002u },
+        };
+        static const struct {
+            hwaddr offset;
+            uint32_t value;
+        } lpi2c1_reset[] = {
+            /* RT1040 RM Rev. 3, LPI2C1 nonzero reset values. */
+            { 0x3f0000, 0x01000003u }, { 0x3f0004, 0x00000202u },
+            { 0x3f0070, 0x00004000u },
+        };
+        static const struct {
+            hwaddr offset;
+            uint32_t value;
+        } ccm_reset[] = {
+            { L6_CCM_CSCMR1_OFFSET, L6_CCM_CSCMR1_RESET },
+            { L6_CCM_CS1CDR_OFFSET, L6_CCM_CS1CDR_RESET },
+            { L6_CCM_CS2CDR_OFFSET, L6_CCM_CS2CDR_RESET },
+            { L6_CCM_ANALOG_PLL_SYS, L6_CCM_ANALOG_PLL_SYS_RESET },
+            { L6_CCM_ANALOG_PLL_AUDIO, L6_CCM_ANALOG_PLL_AUDIO_RESET },
+            { L6_CCM_ANALOG_PLL_AUDIO_NUM,
+              L6_CCM_ANALOG_PLL_AUDIO_NUM_RESET },
+            { L6_CCM_ANALOG_PLL_AUDIO_DENOM,
+              L6_CCM_ANALOG_PLL_AUDIO_DENOM_RESET },
+            { L6_CCM_ANALOG_PFD_480, L6_CCM_ANALOG_PFD_480_RESET },
+            { L6_CCM_ANALOG_PFD_528, L6_CCM_ANALOG_PFD_528_RESET },
+        };
+        static const struct {
+            hwaddr offset;
+            uint32_t value;
+        } lpuart_reset[] = {
+            /* RT1040 RM Rev. 3, common LPUART instance reset values. */
+            { 0x0000, 0x04010003u }, /* VERID */
+            { 0x0004, 0x00000202u }, /* PARAM */
+            { 0x0010, 0x0f000004u }, /* BAUD */
+            { 0x0014, 0x00c00000u }, /* STAT */
+            { 0x001c, 0x00001000u }, /* DATA */
+            { 0x0028, 0x00c00011u }, /* FIFO */
+        };
+        for (unsigned i = 0; i < ARRAY_SIZE(flexspi1_reset); i++) {
+            g_hash_table_insert(s->registers,
+                GUINT_TO_POINTER((flexspi1_reset[i].offset >> 2) + 1),
+                GUINT_TO_POINTER(flexspi1_reset[i].value));
+        }
+        for (unsigned i = 0; i < ARRAY_SIZE(lpspi3_reset); i++) {
+            g_hash_table_insert(s->registers,
+                GUINT_TO_POINTER((lpspi3_reset[i].offset >> 2) + 1),
+                GUINT_TO_POINTER(lpspi3_reset[i].value));
+        }
+        for (unsigned i = 0; i < ARRAY_SIZE(lpi2c1_reset); i++) {
+            g_hash_table_insert(s->registers,
+                GUINT_TO_POINTER((lpi2c1_reset[i].offset >> 2) + 1),
+                GUINT_TO_POINTER(lpi2c1_reset[i].value));
+        }
+        for (unsigned i = 0; i < ARRAY_SIZE(ccm_reset); i++) {
+            g_hash_table_insert(s->registers,
+                GUINT_TO_POINTER((ccm_reset[i].offset >> 2) + 1),
+                GUINT_TO_POINTER(ccm_reset[i].value));
+        }
+        for (unsigned instance = 0; instance < 8; instance++) {
+            hwaddr base = 0x184000 + instance * 0x4000;
+            for (unsigned i = 0; i < ARRAY_SIZE(lpuart_reset); i++) {
+                hwaddr offset = base + lpuart_reset[i].offset;
+                g_hash_table_insert(s->registers,
+                    GUINT_TO_POINTER((offset >> 2) + 1),
+                    GUINT_TO_POINTER(lpuart_reset[i].value));
+            }
+        }
+        for (unsigned i = 0; i < profile->sai_count; i++) {
+            /* RT1041's reference manual gives SAI1 a four-line PARAM value;
+             * SAI2/SAI3 expose one line and reserve FIFO combine. */
+            l6_sai_init(&s->sai[i],
+                        profile->sai_bases[i] == 0x384000);
+            s->sai[i].rx_read_stream_compat =
+                profile->sai1_rx_read_stream_compat &&
+                profile->sai_bases[i] == 0x384000;
+        }
+    }
     s->input_trace = g_getenv("L6_INPUT_TRACE") != NULL;
+    s->audio_trace = g_getenv("L6_AUDIO_TRACE") != NULL;
+    s->audio_sample_trace = g_getenv("L6_AUDIO_SAMPLE_TRACE") != NULL;
+    if (!panel) {
+        const char *raw_capture_path = g_getenv("L6_AUDIO_RAW_CAPTURE");
+        const char *tdm_capture_path = g_getenv("L6_AUDIO_TDM_CAPTURE");
+        const char *dma_source_capture_path =
+            g_getenv("L6_AUDIO_DMA_SOURCE_CAPTURE");
+
+        if (raw_capture_path && *raw_capture_path) {
+            s->audio_raw_capture = g_fopen(raw_capture_path, "wb");
+            if (!s->audio_raw_capture) {
+                error_setg_errno(&error_fatal, errno,
+                                 "could not open L6_AUDIO_RAW_CAPTURE '%s'",
+                                 raw_capture_path);
+            }
+        }
+        if (tdm_capture_path && *tdm_capture_path) {
+            s->audio_tdm_capture = g_fopen(tdm_capture_path, "wb");
+            if (!s->audio_tdm_capture) {
+                error_setg_errno(&error_fatal, errno,
+                                 "could not open L6_AUDIO_TDM_CAPTURE '%s'",
+                                 tdm_capture_path);
+            }
+        }
+        if (dma_source_capture_path && *dma_source_capture_path) {
+            s->audio_dma_source_capture =
+                g_fopen(dma_source_capture_path, "wb");
+            if (!s->audio_dma_source_capture) {
+                error_setg_errno(&error_fatal, errno,
+                                 "could not open L6_AUDIO_DMA_SOURCE_CAPTURE '%s'",
+                                 dma_source_capture_path);
+            }
+        }
+    }
+    s->main_gpio_trace = g_getenv("L6_MAIN_GPIO_TRACE") != NULL;
+    s->main_gpio_output_trace = g_getenv("L6_MAIN_GPIO_OUTPUT_TRACE") != NULL;
+    s->main_gpio_pad_led_trace = g_getenv("L6_MAIN_GPIO_PAD_LED_TRACE") != NULL;
     s->input_fd = -1;
+    s->panel_usart_fd = -1;
+    if (!panel && machine->audiodev) {
+        struct audsettings settings = {
+            .freq = profile->audio_sample_rate_hz,
+            .nchannels = 2,
+            .fmt = AUDIO_FORMAT_S32,
+            .big_endian = false,
+        };
+        s->audio_backend = audio_be_by_name(machine->audiodev, &error_fatal);
+        s->audio_voice = audio_be_open_out(s->audio_backend, NULL,
+                                           "l6.sai1.tx", s,
+                                           l6_audio_output_callback,
+                                           &settings);
+        if (!s->audio_voice) {
+            error_setg(&error_fatal, "could not open L6 SAI1 audio output");
+        }
+        s->audio_pending = g_byte_array_new();
+        audio_be_set_active_out(s->audio_backend, s->audio_voice, true);
+    }
     for (unsigned i = 0; i < 5; i++) { s->analog_inputs[i] = 512; }
     memset(s->encoder_phase, 3, sizeof(s->encoder_phase));
     const char *input_fd = g_getenv(input_variable);
@@ -2383,6 +4327,15 @@ static void l6_chip_init(MachineState *machine, L6ChipState *s, bool panel,
         }
         display_fd = fd;
     }
+    if (!profile->oled && display_fd >= 0) {
+        /* The L6 has no display peripheral. Do not retain the host's shared
+         * OLED frame descriptor in its QEMU process. */
+        close(display_fd);
+        display_fd = -1;
+        qemu_log_mask(LOG_UNIMP,
+                      "l6 board profile %s has no OLED; display descriptor closed\n",
+                      profile->name);
+    }
     l6_display_init(&s->display, display_fd, l6_display_frame_ready,
                     s, &error_fatal);
     if (panel) {
@@ -2400,7 +4353,8 @@ static void l6_chip_init(MachineState *machine, L6ChipState *s, bool panel,
                 if (i >= L6_MAX_PANEL_KEYS ||
                     sscanf(entries[i], "%u:%u:%u:%u%n", &row, &column,
                            &start_ms, &end_ms, &consumed) != 4 ||
-                    entries[i][consumed] || row >= 8 || column >= 5 ||
+                    entries[i][consumed] || row >= 8 ||
+                    column >= s->profile->panel_matrix_columns ||
                     start_ms >= end_ms) {
                     error_setg(&error_fatal,
                                "L6_PANEL_KEYS expects comma-separated row:column:start_ms:end_ms entries (maximum %d)",
@@ -2444,6 +4398,15 @@ static void l6_chip_init(MachineState *machine, L6ChipState *s, bool panel,
         }
     }
     if (!panel) {
+        const char *bringup_ack = g_getenv("L6_AUDIO_BRINGUP_ACK");
+        const char *dsp_ack = g_getenv("L6_AUDIO_DSP_ACK");
+        bool master_ack =
+            bringup_ack ? g_strcmp0(bringup_ack, "0") != 0 : true;
+        s->service_audio_profile_ramp_ack = bringup_ack
+            ? master_ack : s->profile->audio_profile_ramp_ack;
+        s->service_audio_dsp_ack =
+            dsp_ack ? g_strcmp0(dsp_ack, "0") != 0
+                    : (bringup_ack ? master_ack : s->profile->audio_dsp_wait_ack);
         s->service_audio_queue = g_strcmp0(g_getenv("L6_SERVICE_AUDIO_QUEUE"),
                                              "1") == 0;
         const char *keys = g_getenv("L6_MAIN_KEYS");
@@ -2452,12 +4415,16 @@ static void l6_chip_init(MachineState *machine, L6ChipState *s, bool panel,
             for (unsigned i = 0; entries[i]; i++) {
                 unsigned id = 0, start_ms = 0, end_ms = 0;
                 int consumed = 0;
+                hwaddr port;
+                unsigned pin;
                 if (i >= L6_MAX_PANEL_KEYS ||
                     sscanf(entries[i], "%u:%u:%u%n", &id, &start_ms,
                            &end_ms, &consumed) != 3 ||
-                    entries[i][consumed] || id > 2 || start_ms >= end_ms) {
+                    entries[i][consumed] ||
+                    !l6_main_key_gpio(s, id, &port, &pin) ||
+                    start_ms >= end_ms) {
                     error_setg(&error_fatal,
-                               "L6_MAIN_KEYS expects comma-separated id:start_ms:end_ms entries (id 0=Menu, 1=Play, 2=Record)");
+                               "L6_MAIN_KEYS has an unsupported target or invalid interval");
                 }
                 s->main_keys[i] = (L6MainKey) { id, start_ms, end_ms };
                 s->main_key_count++;
@@ -2495,6 +4462,10 @@ static void l6_chip_init(MachineState *machine, L6ChipState *s, bool panel,
             s->flash_payload_size = st.st_size;
         }
     }
+    if (!panel && s->profile->resource_flash) {
+        g_autofree char *directory = g_path_get_dirname(kernel_filename);
+        l6_load_resource_flash(s, directory);
+    }
     g_autofree char *sysclk_name = g_strdup_printf("%s-SYSCLK", prefix);
     g_autofree char *refclk_name = g_strdup_printf("%s-REFCLK", prefix);
     s->sysclk = clock_new(OBJECT(machine), sysclk_name);
@@ -2515,6 +4486,16 @@ static void l6_chip_init(MachineState *machine, L6ChipState *s, bool panel,
                                &error_fatal);
         memory_region_add_subregion(system_memory, 0, &s->itcm);
         memcpy(memory_region_get_ram_ptr(&s->itcm), s->nor_flash + 0x50000, 0x100000);
+        if (s->profile->high_ram_size) {
+            /* L6 keeps writable heap state in the final 64 KiB of its MAIN
+             * image window; expose that profile-specific bank over NOR. */
+            memory_region_init_ram(&s->main_high_ram, NULL,
+                                   "l6-main-high-ram", s->profile->high_ram_size,
+                                   &error_fatal);
+            memory_region_add_subregion_overlap(system_memory,
+                                                s->profile->high_ram_base,
+                                                &s->main_high_ram, 1);
+        }
     }
 
     l6_make_ram(system_memory, &s->sram, sram_name, 0x20000000,
@@ -2570,30 +4551,48 @@ static void l6_chip_init(MachineState *machine, L6ChipState *s, bool panel,
     object_property_set_link(OBJECT(&s->armv7m), "memory",
                              OBJECT(system_memory), &error_abort);
     sysbus_realize(SYS_BUS_DEVICE(&s->armv7m), &error_fatal);
+    if (!panel && profile->audio_codec_bus) {
+        s->audio_i2c_bus = i2c_init_bus(cpu, "lpi2c1");
+        i2c_slave_create_simple(s->audio_i2c_bus, TYPE_L6MAX_AUDIO_ADC, 0x4c);
+        i2c_slave_create_simple(s->audio_i2c_bus, TYPE_L6MAX_AUDIO_ADC, 0x4d);
+    }
+    if (!panel) {
+        l6_main_gpio_setup(s, system_memory);
+    }
     if (panel) {
-        /* Panel USART1: a real stm32l4x5-usart device (register-compatible
-         * by inspection with what firmware was already observed driving),
-         * its chardev an in-process socket pair. Our end bridges bytes to
-         * the main chip's still hand-rolled LPUART1. */
-        int usart_fds[2];
-        if (socketpair(AF_UNIX, SOCK_STREAM, 0, usart_fds) < 0) {
-            error_setg(&error_fatal, "cannot create panel USART1 socket pair: %s",
-                       strerror(errno));
-        }
-        if (fcntl(usart_fds[1], F_SETFL, O_NONBLOCK) < 0) {
-            error_setg(&error_fatal, "cannot set panel USART1 bridge non-blocking");
-        }
-        g_autofree char *usart_chr_opts = g_strdup_printf(
-            "socket,id=l6-panel-usart1-link,fd=%d,server=off", usart_fds[0]);
-        QemuOpts *usart_chr_opts_parsed = qemu_opts_parse_noisily(
-            qemu_find_opts("chardev"), usart_chr_opts, true);
-        if (!usart_chr_opts_parsed) {
-            error_setg(&error_fatal, "cannot parse panel USART1 chardev options");
-        }
-        Chardev *usart_chr =
-            qemu_chr_new_from_opts(usart_chr_opts_parsed, NULL, &error_fatal);
-        if (!usart_chr) {
-            error_setg(&error_fatal, "cannot create panel USART1 chardev");
+        /* The dual-chip machine routes the real panel USART through an
+         * in-process socket pair to the main UART bridge. The standalone
+         * panel machine instead uses its -serial backend to connect to the
+         * independently launched main QEMU process. */
+        Chardev *usart_chr;
+        if (external_serial) {
+            usart_chr = serial_hd(0);
+            if (!usart_chr) {
+                error_setg(&error_fatal, "panel USART1 requires a serial backend");
+            }
+        } else {
+            int usart_fds[2];
+            if (socketpair(AF_UNIX, SOCK_STREAM, 0, usart_fds) < 0) {
+                error_setg(&error_fatal, "cannot create panel USART1 socket pair: %s",
+                           strerror(errno));
+            }
+            if (fcntl(usart_fds[1], F_SETFL, O_NONBLOCK) < 0) {
+                error_setg(&error_fatal, "cannot set panel USART1 bridge non-blocking");
+            }
+            g_autofree char *usart_chr_opts = g_strdup_printf(
+                "socket,id=l6-panel-usart1-link,fd=%d,server=off", usart_fds[0]);
+            QemuOpts *usart_chr_opts_parsed = qemu_opts_parse_noisily(
+                qemu_find_opts("chardev"), usart_chr_opts, true);
+            if (!usart_chr_opts_parsed) {
+                error_setg(&error_fatal, "cannot parse panel USART1 chardev options");
+            }
+            usart_chr = qemu_chr_new_from_opts(usart_chr_opts_parsed, NULL, &error_fatal);
+            if (!usart_chr) {
+                error_setg(&error_fatal, "cannot create panel USART1 chardev");
+            }
+            s->panel_usart_fd = usart_fds[1];
+            qemu_set_fd_handler(s->panel_usart_fd,
+                                l6_panel_usart_bridge_read, NULL, s);
         }
         s->panel_usart1 = qdev_new(TYPE_STM32L4X5_USART);
         qdev_prop_set_chr(s->panel_usart1, "chardev", usart_chr);
@@ -2603,22 +4602,44 @@ static void l6_chip_init(MachineState *machine, L6ChipState *s, bool panel,
             sysbus_mmio_get_region(SYS_BUS_DEVICE(s->panel_usart1), 0), 2);
         sysbus_connect_irq(SYS_BUS_DEVICE(s->panel_usart1), 0,
                            qdev_get_gpio_in(DEVICE(&s->armv7m), 27));
-        s->panel_usart_fd = usart_fds[1];
-        qemu_set_fd_handler(s->panel_usart_fd, l6_panel_usart_bridge_read, NULL, s);
     }
     g_autofree char *persistent_kernel = NULL;
     if (panel && g_getenv("L6_STATE_DIR")) {
         g_autofree char *contents = NULL;
         gsize size;
         g_autofree uint8_t *seed = g_malloc0(0x10000);
-        memset(seed, 0xff, 0x10000);
+        /* L6's volatile ROM loader leaves an omitted panel-image tail zeroed;
+         * L6max uses an erased flash tail. Keep first-run persistent state
+         * consistent with each model's existing boot behavior. */
+        if (profile != &L6_PROFILE) { memset(seed, 0xff, 0x10000); }
         if (!g_file_get_contents(kernel_filename, &contents, &size, NULL) || size > 0x10000) {
             error_setg(&error_fatal, "cannot seed persistent panel flash");
         }
         memcpy(seed, contents, size);
         s->persistent_panel = l6_persistent_bytes("panel-flash.bin", seed, 0x10000);
-        persistent_kernel = g_build_filename(g_getenv("L6_STATE_DIR"), "panel-flash.bin", NULL);
-        kernel_filename = persistent_kernel;
+        if (s->persistent_panel) {
+            /* The L6 package omits the rest of panel flash. Its volatile ROM
+             * image leaves that tail zeroed, and the L6 panel firmware only
+             * reaches its ready path with the same tail in persistent mode.
+             * Migrate only the old default seed (exact package prefix plus an
+             * erased tail); preserve any panel image that has since changed. */
+            if (profile == &L6_PROFILE && size < 0x10000 &&
+                !memcmp(s->persistent_panel, contents, size)) {
+                bool erased_tail = true;
+                for (size_t offset = size; offset < 0x10000; offset++) {
+                    if (s->persistent_panel[offset] != 0xff) {
+                        erased_tail = false;
+                        break;
+                    }
+                }
+                if (erased_tail) {
+                    memset(s->persistent_panel + size, 0, 0x10000 - size);
+                    l6_storage_flush(s->persistent_panel, 0x10000);
+                }
+            }
+            persistent_kernel = g_build_filename(g_getenv("L6_STATE_DIR"), "panel-flash.bin", NULL);
+            kernel_filename = persistent_kernel;
+        }
     }
     armv7m_load_kernel(s->armv7m.cpu, panel ? kernel_filename : NULL,
                        flash_base, flash_size);
@@ -2662,7 +4683,7 @@ static void l6_chip_init(MachineState *machine, L6ChipState *s, bool panel,
                               "l6-chipidea-device", 0x200);
         memory_region_add_subregion_overlap(system_memory, 0x402e0000,
                                             &s->usb_region, 2);
-        /* RT1052 USDHC1 overlays the sparse peripheral region. The SD slot
+        /* RT USDHC1 overlays the sparse peripheral region. The SD slot
          * itself, like the real card-edge connector, is always present; an
          * inherited `-drive if=sd,id=l6-sd` with no `file=` is an empty
          * slot. Whether a card is actually in it is a runtime QMP
@@ -2677,8 +4698,10 @@ static void l6_chip_init(MachineState *machine, L6ChipState *s, bool panel,
         s->sd_ops = s->sdhc->io_ops;
         s->sdhc->pwrcon = 0x0f;
         s->sdhc->clkcon = 3;
+        s->sd_sysctl = L6_USDHC_SYS_CTRL_RESET;
+        s->sd_vend_spec2 = L6_USDHC_VEND_SPEC2_RESET;
         memory_region_init_io(&s->sd_adapter, NULL, &l6_sd_ops, s,
-                              "l6-rt1052-usdhc", 0x100);
+                              "l6-usdhc", 0x100);
         memory_region_add_subregion_overlap(system_memory, 0x402c0000,
                                             &s->sd_adapter, 2);
         memory_region_add_subregion_overlap(system_memory, 0x402c0000,
@@ -2700,17 +4723,22 @@ static void l6_chip_init(MachineState *machine, L6ChipState *s, bool panel,
 static void l6_main_init(MachineState *machine)
 {
     L6ChipState *s = &L6_MACHINE(machine)->chip;
+    const L6BoardProfile *profile =
+        l6_main_board_profile(machine->kernel_filename);
     l6_chip_init(machine, s, false, get_system_memory(),
                  machine->kernel_filename, machine->cpu_type, "main",
-                 "L6_INPUT_FD", true);
+                 "L6_INPUT_FD", true, profile);
 }
 
 static void l6_panel_init(MachineState *machine)
 {
     L6ChipState *s = &L6_MACHINE(machine)->chip;
+    /* The standalone panel board has no MAIN image to identify its family. */
+    const L6BoardProfile *profile =
+        g_strcmp0(g_getenv("L6_MODEL"), "l6") == 0 ? &L6_PROFILE : &L6MAX_PROFILE;
     l6_chip_init(machine, s, true, get_system_memory(),
                  machine->kernel_filename, machine->cpu_type, "panel",
-                 "L6_INPUT_FD", true);
+                 "L6_INPUT_FD", true, profile);
 }
 
 static void l6_dual_init(MachineState *machine)
@@ -2719,8 +4747,12 @@ static void l6_dual_init(MachineState *machine)
     const char *panel_firmware = g_getenv("L6_PANEL_FIRMWARE");
     if (!panel_firmware || !*panel_firmware || !machine->kernel_filename) {
         error_setg(&error_fatal,
-                   "l6max-dual requires -kernel main image and L6_PANEL_FIRMWARE");
+                   "l6max-dual requires -kernel MAIN image and L6_PANEL_FIRMWARE");
     }
+    /* MAIN is the authority for the complete board, including the panel
+     * wiring profile. Frontends do not need to duplicate model selection. */
+    const L6BoardProfile *profile =
+        l6_main_board_profile(machine->kernel_filename);
     /* These MCUs overlap SRAM, peripheral and boot-vector addresses. Keep
      * separate address spaces while sharing QEMU_CLOCK_VIRTUAL and its loop. */
     memory_region_init(&s->main_memory, OBJECT(machine),
@@ -2729,10 +4761,10 @@ static void l6_dual_init(MachineState *machine)
                        "l6-panel-address-space", UINT64_MAX);
     l6_chip_init(machine, &s->main, false, &s->main_memory,
                  machine->kernel_filename, ARM_CPU_TYPE_NAME("cortex-m7"),
-                 "main", "L6_MAIN_INPUT_FD", false);
+                 "main", "L6_MAIN_INPUT_FD", false, profile);
     l6_chip_init(machine, &s->panel, true, &s->panel_memory,
                  panel_firmware, ARM_CPU_TYPE_NAME("cortex-m0"),
-                 "panel", "L6_PANEL_INPUT_FD", false);
+                 "panel", "L6_PANEL_INPUT_FD", false, profile);
     s->main.peer = &s->panel;
     s->panel.peer = &s->main;
     qdev_connect_gpio_out_named(DEVICE(&s->main.armv7m), "SYSRESETREQ", 0,
@@ -2766,31 +4798,33 @@ static void l6_dual_init(MachineState *machine)
 static void l6_dual_class_init(ObjectClass *oc, const void *data)
 {
     MachineClass *mc = MACHINE_CLASS(oc);
-    mc->desc = "L6max dual MCU board with a common virtual clock";
+    mc->desc = "ZOOM L6/L6max dual-MCU board (model detected from MAIN firmware)";
     mc->init = l6_dual_init;
     mc->default_cpu_type = ARM_CPU_TYPE_NAME("cortex-m7");
     mc->default_ram_size = 0x200000;
     mc->min_cpus = 2;
     mc->default_cpus = 2;
     mc->max_cpus = 2;
+    machine_add_audiodev_property(mc);
 }
 
 static void l6_main_class_init(ObjectClass *oc, const void *data)
 {
     MachineClass *mc = MACHINE_CLASS(oc);
     static const char * const cpus[] = { ARM_CPU_TYPE_NAME("cortex-m7"), NULL };
-    mc->desc = "L6max main MCU bring-up board (incomplete i.MX RT model)";
+    mc->desc = "ZOOM L6/L6max MAIN MCU bring-up board (model detected from firmware)";
     mc->init = l6_main_init;
     mc->valid_cpu_types = cpus;
     mc->default_cpu_type = cpus[0];
     mc->default_ram_size = 0x200000;
+    machine_add_audiodev_property(mc);
 }
 
 static void l6_panel_class_init(ObjectClass *oc, const void *data)
 {
     MachineClass *mc = MACHINE_CLASS(oc);
     static const char * const cpus[] = { ARM_CPU_TYPE_NAME("cortex-m0"), NULL };
-    mc->desc = "L6max panel MCU bring-up board (Cortex-M0 stand-in for M0+)";
+    mc->desc = "ZOOM L6/L6max panel MCU bring-up board (Cortex-M0 stand-in for M0+)";
     mc->init = l6_panel_init;
     mc->valid_cpu_types = cpus;
     mc->default_cpu_type = cpus[0];

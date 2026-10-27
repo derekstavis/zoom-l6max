@@ -1,0 +1,287 @@
+[[step]]
+action = "checkpoint"
+name = "initial"
+
+[[step]]
+action = "encoder"
+channel = 1
+steps = 12
+
+[[step]]
+action = "expect-ring"
+channel = 1
+changed = true
+only = true
+settle_ms = 3000
+guest_timeout_ms = 30000
+
+[[step]]
+action = "encoder"
+channel = 2
+steps = 12
+
+[[step]]
+action = "expect-ring"
+channel = 2
+changed = true
+only = true
+settle_ms = 3000
+guest_timeout_ms = 30000
+
+[[step]]
+action = "encoder"
+channel = 3
+steps = 12
+
+[[step]]
+action = "expect-ring"
+channel = 3
+changed = true
+only = true
+settle_ms = 3000
+guest_timeout_ms = 30000
+
+[[step]]
+action = "encoder"
+channel = 4
+steps = 12
+
+[[step]]
+action = "expect-ring"
+channel = 4
+changed = true
+only = true
+settle_ms = 3000
+guest_timeout_ms = 30000
+
+[[step]]
+action = "encoder"
+channel = 5
+steps = 12
+
+[[step]]
+action = "expect-ring"
+channel = 5
+changed = true
+only = true
+settle_ms = 3000
+guest_timeout_ms = 30000
+
+[[step]]
+action = "encoder"
+channel = 6
+steps = 12
+
+[[step]]
+action = "expect-ring"
+channel = 6
+changed = true
+only = true
+settle_ms = 3000
+guest_timeout_ms = 30000
+
+[[step]]
+models = ["l6max"]
+action = "encoder"
+channel = 7
+steps = 12
+
+[[step]]
+models = ["l6max"]
+action = "expect-ring"
+channel = 7
+changed = true
+only = true
+settle_ms = 3000
+guest_timeout_ms = 30000
+
+[[step]]
+models = ["l6max"]
+action = "encoder"
+channel = 8
+steps = 12
+
+[[step]]
+models = ["l6max"]
+action = "expect-ring"
+channel = 8
+changed = true
+only = true
+settle_ms = 3000
+guest_timeout_ms = 30000
+
+[[step]]
+action = "encoder"
+channel = 1
+steps = -12
+
+[[step]]
+models = ["l6max"]
+action = "expect-ring"
+channel = 1
+checkpoint = "initial"
+changed = true
+only = true
+settle_ms = 3000
+guest_timeout_ms = 30000
+
+[[step]]
+models = ["l6"]
+action = "expect-ring"
+channel = 1
+changed = true
+only = true
+settle_ms = 3000
+guest_timeout_ms = 30000
+
+[[step]]
+action = "encoder"
+channel = 2
+steps = -12
+
+[[step]]
+models = ["l6max"]
+action = "expect-ring"
+channel = 2
+checkpoint = "initial"
+changed = true
+only = true
+settle_ms = 3000
+guest_timeout_ms = 30000
+
+[[step]]
+models = ["l6"]
+action = "expect-ring"
+channel = 2
+changed = true
+only = true
+settle_ms = 3000
+guest_timeout_ms = 30000
+
+[[step]]
+action = "encoder"
+channel = 3
+steps = -12
+
+[[step]]
+models = ["l6max"]
+action = "expect-ring"
+channel = 3
+checkpoint = "initial"
+changed = true
+only = true
+settle_ms = 3000
+guest_timeout_ms = 30000
+
+[[step]]
+models = ["l6"]
+action = "expect-ring"
+channel = 3
+changed = true
+only = true
+settle_ms = 3000
+guest_timeout_ms = 30000
+
+[[step]]
+action = "encoder"
+channel = 4
+steps = -12
+
+[[step]]
+models = ["l6max"]
+action = "expect-ring"
+channel = 4
+checkpoint = "initial"
+changed = true
+only = true
+settle_ms = 3000
+guest_timeout_ms = 30000
+
+[[step]]
+models = ["l6"]
+action = "expect-ring"
+channel = 4
+changed = true
+only = true
+settle_ms = 3000
+guest_timeout_ms = 30000
+
+[[step]]
+action = "encoder"
+channel = 5
+steps = -12
+
+[[step]]
+models = ["l6max"]
+action = "expect-ring"
+channel = 5
+checkpoint = "initial"
+changed = true
+only = true
+settle_ms = 3000
+guest_timeout_ms = 30000
+
+[[step]]
+models = ["l6"]
+action = "expect-ring"
+channel = 5
+changed = true
+only = true
+settle_ms = 3000
+guest_timeout_ms = 30000
+
+[[step]]
+action = "encoder"
+channel = 6
+steps = -12
+
+[[step]]
+models = ["l6max"]
+action = "expect-ring"
+channel = 6
+checkpoint = "initial"
+changed = true
+only = true
+settle_ms = 3000
+guest_timeout_ms = 30000
+
+[[step]]
+models = ["l6"]
+action = "expect-ring"
+channel = 6
+changed = true
+only = true
+settle_ms = 3000
+guest_timeout_ms = 30000
+
+[[step]]
+models = ["l6max"]
+action = "encoder"
+channel = 7
+steps = -12
+
+[[step]]
+models = ["l6max"]
+action = "expect-ring"
+channel = 7
+checkpoint = "initial"
+changed = true
+only = true
+settle_ms = 3000
+guest_timeout_ms = 30000
+
+[[step]]
+models = ["l6max"]
+action = "encoder"
+channel = 8
+steps = -12
+
+[[step]]
+models = ["l6max"]
+action = "expect-ring"
+channel = 8
+checkpoint = "initial"
+changed = true
+only = true
+settle_ms = 3000
+guest_timeout_ms = 30000

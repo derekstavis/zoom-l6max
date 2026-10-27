@@ -1,0 +1,25 @@
+[[step]]
+action = "delay"
+guest_ms = 40000
+guest_timeout_ms = 45000
+wall_timeout_s = 900
+
+[[step]]
+models = ["l6max"]
+action = "press"
+control = "recorder-function-4"
+guest_timeout_ms = 10000
+wall_timeout_s = 60
+
+[[step]]
+action = "delay"
+guest_ms = 2000
+guest_timeout_ms = 5000
+wall_timeout_s = 30
+
+[[step]]
+models = ["l6max"]
+action = "press"
+control = "recorder-function-4"
+guest_timeout_ms = 10000
+wall_timeout_s = 60
