@@ -1,0 +1,133 @@
+# Copy to smoke.local.toml at the repository root. Paths are relative to that file.
+# The prepared scenario assumes L6max startup SD navigation is applicable and
+# channel 2 starts at the minimum ring mask 0x001 (required by the reversal check).
+version = 1
+qemu = "/absolute/path/to/qemu-system-arm"
+qemu_sha256 = "REPLACE_WITH_SHA256_FROM_shasum_-a_256"
+
+[[fixture]]
+name = "prepared"
+model = "l6"
+firmware_package = "/absolute/path/to/L6.BIN"
+state_template = "/absolute/path/to/known-l6-state"
+sd_image = "/absolute/path/to/l6-card.img"
+timing = "paced"
+
+[[fixture]]
+name = "prepared"
+model = "l6max"
+firmware_package = "/absolute/path/to/L6max.bin"
+state_template = "/absolute/path/to/known-l6max-state"
+sd_image = "/absolute/path/to/l6max-card.img"
+timing = "paced"
+
+# The L6 recorder playback test needs the normal QEMU audio queue service; it
+# records the result through the QEMU WAV backend while keeping the run headless.
+[[fixture]]
+name = "l6-recorder-playback"
+model = "l6"
+firmware_package = "/absolute/path/to/L6.BIN"
+state_template = "/absolute/path/to/mode-0-recorder-state"
+sd_image = "/absolute/path/to/card-with-RECORDER-recording-MASTER.WAV.img"
+audio_device = "driver=wav,id=l6-audio,path={logs}/audio.wav"
+gdb = true
+
+# L6max recorder playback assertion; the saved state must already be past
+# date/battery/card setup, with a valid recorder track selected.
+# [[fixture]]
+# name = "l6max-recorder-playback"
+# model = "l6max"
+# firmware_package = "/absolute/path/to/L6max.bin"
+# state_template = "/absolute/path/to/mode-0-l6max-recorder-state"
+# sd_image = "/absolute/path/to/l6max-card-with-recording.img"
+# gdb = true
+
+# No state_template means create an empty isolated state directory.
+# Enable fresh fixtures for the USB no-card probe and L6max date/persistence check.
+# [[fixture]]
+# name = "fresh"
+# model = "l6"
+# firmware_package = "/absolute/path/to/L6.BIN"
+# [[fixture]]
+# name = "fresh"
+# model = "l6max"
+# firmware_package = "/absolute/path/to/L6max.bin"
+
+# The factory-protocol scenario generates its own disposable jig card and state.
+# [[fixture]]
+# name = "factory-protocol"
+# model = "l6max"
+# firmware_package = "/absolute/path/to/L6max.bin"
+
+# Patched update performs the target package installation from stock firmware,
+# then invokes the migrated post-install MIDI-sync (L6) or knob-dialog
+# operation (L6max) on the installed image.
+# [[fixture]]
+# name = "patched-update"
+# model = "l6"
+# firmware_package = "/absolute/path/to/stock-L6-1.10.BIN"
+# update_package = "/absolute/path/to/patched-L6-midi-sync.BIN"
+# [[fixture]]
+# name = "patched-update"
+# model = "l6max"
+# firmware_package = "/absolute/path/to/stock-L6max-1.10.BIN"
+# update_package = "/absolute/path/to/patched-L6max-knob-dialog.BIN"
+# Run with: cargo run -p l6test -- run --case patched-update --model l6 (or l6max)
+
+# Legacy cases with extra prerequisites are BLOCKED unless explicitly configured.
+# [[fixture]]
+# name = "knob-patched"
+# model = "l6max"
+# firmware_dir = "/absolute/path/to/generated-knob-patch-directory"
+# Used by the knob-dialog and popup-concurrency scenarios.
+
+# Generate a patched fixture directly from stock firmware for the knob-dialog
+# and popup-concurrency cases. The generated package, hook metadata and images
+# stay in the case artifacts.
+# [[fixture]]
+# name = "knob-patched"
+# model = "l6max"
+# firmware_package = "/absolute/path/to/stock-L6max-1.10.BIN"
+# patches = ["knob-dialog"]
+
+# Prepare a persistent state by driving first-boot setup in a headless guest.
+# The recipe uses the scenario format and its own semantic controls/assertions.
+# [[fixture]]
+# name = "prepared"
+# model = "l6max"
+# firmware_package = "/absolute/path/to/stock-L6max-1.10.BIN"
+# state_recipe = "tests/smoke/scenarios/state-l6max-setup.toml"
+
+# The patched DIN mixer-control qualification boots this L6max firmware after
+# enabling Mixer Control via MIDI through the editor SysEx session.
+# [[fixture]]
+# name = "din-mixer-patched"
+# model = "l6max"
+# firmware_package = "/absolute/path/to/L6max-din-mixer-control.BIN"
+# state_template = "/absolute/path/to/known-l6max-state"
+# sd_image = "/absolute/path/to/l6max-card.img"
+
+# Packaged GUI tests launch the built .app executable directly. Pin its hash
+# and use a unique app-data directory under each driver's case artifact folder.
+# gui-bundle imports an L6 package first, then the configured L6max package;
+# its own checks verify per-model state isolation and bundled QEMU identity.
+# [legacy."gui-bundle"]
+# executable = "/absolute/path/to/L6max Emulator.app/Contents/MacOS/l6max-gui"
+# executable_sha256 = "REPLACE_WITH_SHA256_OF_BUNDLED_GUI_EXECUTABLE"
+# environment = { L6_APP_DATA = "{logs}/app-data", L6_BUNDLE_SMOKE_FIRST = "/absolute/path/to/L6.BIN", L6_BUNDLE_SMOKE_SECOND = "{package}", L6_BUNDLE_SMOKE_QEMU_SHA256 = "REPLACE_WITH_SHA256_OF_BUNDLED_QEMU" }
+#
+# gui-menu checks native file and directory pickers without disturbing a running
+# guest. It verifies the bundled QEMU independently of the host QEMU pin above.
+# [legacy."gui-menu"]
+# executable = "/absolute/path/to/L6max Emulator.app/Contents/MacOS/l6max-gui"
+# executable_sha256 = "REPLACE_WITH_SHA256_OF_BUNDLED_GUI_EXECUTABLE"
+# environment = { L6_APP_DATA = "{logs}/app-data", L6_MENU_SMOKE_FIRMWARE = "{package}", L6_MENU_SMOKE_QEMU_SHA256 = "REPLACE_WITH_SHA256_OF_BUNDLED_QEMU" }
+
+# Expected failures match an exact case/model/step plus an error substring.
+# A pass becomes XPASS; unrelated failures stay FAIL. Never add one just to get green.
+# [[expected_failure]]
+# case = "mute"
+# model = "l6"
+# step = 11
+# contains = "ExpectMute"
+# reason = "Link to the tracked investigation"

@@ -43,10 +43,13 @@ impl Bundle {
             return Err("Invalid saved firmware selection; select the package again".into());
         }
         let firmware = self.data.join("firmware").join(hash);
-        for name in ["main_firmware.bin", "secondary_firmware.bin", "L6max.bin"] {
+        for name in ["main_firmware.bin", "secondary_firmware.bin"] {
             if !firmware.join(name).is_file() {
                 return Err("Saved firmware is incomplete; select the package again".into());
             }
+        }
+        if !firmware.join("L6.bin").is_file() && !firmware.join("L6max.bin").is_file() {
+            return Err("Saved firmware package is missing; select it again".into());
         }
         let qemu = self.resources.join("libexec/qemu-system-arm");
         if !qemu.is_file() {
@@ -64,23 +67,17 @@ impl Bundle {
     /// Validate before changing the running guest. Only complete imports are remembered.
     pub fn import(&self, package: &Path, options: &mut Options) -> Result<(), String> {
         let mut file = fs::File::open(package).map_err(|e| format!("Cannot read firmware: {e}"))?;
-        if file.metadata().map_err(|e| e.to_string())?.len() != 0x1a8200 {
-            return Err("Select a supported L6max update package (1,737,216 bytes)".into());
+        let size = file.metadata().map_err(|e| e.to_string())?.len();
+        if !matches!(size, 0x1a8200 | 0x395200) {
+            return Err("Select a supported L6 or L6max update package".into());
         }
         use std::io::Read;
-        let mut bytes = Vec::with_capacity(0x1a8200);
+        let mut bytes = Vec::with_capacity(size as usize);
         file.by_ref()
-            .take(0x1a8201)
+            .take(size + 1)
             .read_to_end(&mut bytes)
             .map_err(|e| e.to_string())?;
-        l6fw::check_layout(&bytes)?;
-        let expected = u32::from_be_bytes(bytes[0x1fc..0x200].try_into().unwrap());
-        let actual = bytes[0x200..]
-            .iter()
-            .fold(0u32, |sum, b| sum.wrapping_add(*b as u32));
-        if actual != expected {
-            return Err("Firmware checksum does not match".into());
-        }
+        let model = l6fw::model_from_package(&bytes)?;
         let hash = format!("{:x}", Sha256::digest(&bytes));
         let parent = self.data.join("firmware");
         fs::create_dir_all(&parent).map_err(|e| e.to_string())?;
@@ -94,7 +91,11 @@ impl Bundle {
             let snapshot = parent.join(format!(".package-{}.bin", std::process::id()));
             fs::write(&snapshot, &bytes).map_err(|e| e.to_string())?;
             let result = l6fw::unpack(&snapshot, &temporary).and_then(|()| {
-                fs::rename(&snapshot, temporary.join("L6max.bin")).map_err(|e| e.to_string())?;
+                let name = match model {
+                    l6fw::Model::L6 => "L6.bin",
+                    l6fw::Model::L6max => "L6max.bin",
+                };
+                fs::rename(&snapshot, temporary.join(name)).map_err(|e| e.to_string())?;
                 fs::rename(&temporary, &destination).map_err(|e| e.to_string())
             });
             if result.is_err() {
@@ -116,6 +117,37 @@ impl Bundle {
         fs::write(&temporary, hash).map_err(|e| e.to_string())?;
         fs::rename(temporary, self.data.join("selected-firmware.txt")).map_err(|e| e.to_string())
     }
+}
+
+/// Return the packaged update file matching the extracted MAIN image.
+pub fn selected_package(firmware_dir: &Path) -> Result<PathBuf, String> {
+    let main = fs::read(firmware_dir.join("main_firmware.bin"))
+        .map_err(|error| format!("Cannot read selected MAIN firmware: {error}"))?;
+    let filename = match l6fw::model_from_main(&main)? {
+        l6fw::Model::L6 => "L6.bin",
+        l6fw::Model::L6max => "L6max.bin",
+    };
+    let package = firmware_dir.join(filename);
+    if !package.is_file() {
+        return Err(format!("Selected firmware package is missing: {filename}"));
+    }
+    Ok(package)
+}
+
+pub fn verify_bundled_qemu(resources: &Path, expected_sha256: &str) -> Result<PathBuf, String> {
+    if expected_sha256.len() != 64 || !expected_sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err("A 64-character bundled QEMU SHA-256 is required".into());
+    }
+    let qemu = resources.join("libexec/qemu-system-arm");
+    let bytes = fs::read(&qemu).map_err(|error| format!("Cannot read bundled QEMU: {error}"))?;
+    let actual = format!("{:x}", Sha256::digest(bytes));
+    if !actual.eq_ignore_ascii_case(expected_sha256) {
+        return Err(format!(
+            "Bundled QEMU hash mismatch: expected {expected_sha256}, got {actual}"
+        ));
+    }
+    Ok(qemu)
 }
 
 /// Writable per-user storage: Application Support on macOS, XDG data elsewhere.
@@ -171,6 +203,23 @@ mod tests {
             None
         );
     }
+
+    #[test]
+    fn selected_package_follows_the_main_reset_vector_when_both_files_exist() {
+        let dir = std::env::temp_dir().join(format!("l6-bundle-model-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        for (reset, expected) in [(0x8000_1415u32, "L6.bin"), (0x8000_0415, "L6max.bin")] {
+            let mut main = vec![0; 8];
+            main[..4].copy_from_slice(&0x2001_0000u32.to_le_bytes());
+            main[4..].copy_from_slice(&reset.to_le_bytes());
+            fs::write(dir.join("main_firmware.bin"), main).unwrap();
+            fs::write(dir.join("L6.bin"), b"L6 package").unwrap();
+            fs::write(dir.join("L6max.bin"), b"L6max package").unwrap();
+            assert_eq!(selected_package(&dir).unwrap(), dir.join(expected));
+        }
+        fs::remove_dir_all(dir).unwrap();
+    }
     #[test]
     fn recognizes_an_appdir_only_with_bundled_qemu() {
         let root = std::env::temp_dir().join(format!("l6-appdir-{}", std::process::id()));
@@ -183,6 +232,20 @@ mod tests {
         assert_eq!(resources_for(&executable), Some(resources));
         assert_eq!(resources_for(Path::new("/usr/bin/l6max-gui")), None);
         fs::remove_dir_all(&root).unwrap();
+    }
+    #[test]
+    fn bundled_qemu_verification_requires_the_exact_pinned_binary() {
+        let root = std::env::temp_dir().join(format!("l6-bundle-qemu-{}", std::process::id()));
+        let resources = root.join("Resources");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(resources.join("libexec")).unwrap();
+        let qemu = resources.join("libexec/qemu-system-arm");
+        fs::write(&qemu, b"pinned bundled qemu").unwrap();
+        let expected = format!("{:x}", Sha256::digest(b"pinned bundled qemu"));
+        assert_eq!(verify_bundled_qemu(&resources, &expected).unwrap(), qemu);
+        assert!(verify_bundled_qemu(&resources, &"0".repeat(64)).is_err());
+        assert!(verify_bundled_qemu(&resources, "not-a-sha").is_err());
+        fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn rejects_invalid_package_without_changing_selection() {

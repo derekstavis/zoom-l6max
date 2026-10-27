@@ -1,5 +1,6 @@
 export interface PatchInfo {
   id: string
+  models: readonly ('L6' | 'L6max')[]
   title: string
   description: string
   readmeUrl: string
@@ -15,6 +16,7 @@ export interface PatchInfo {
 export const PATCHES: PatchInfo[] = [
   {
     id: 'knob-dialog',
+    models: ['L6max'],
     title: 'Show knob values on display',
     description:
       'Shows a popup with the actual value — dB, Hz, percent, or pan position — when you turn a channel knob. The stock firmware changes the value but never displays it.',
@@ -24,6 +26,7 @@ export const PATCHES: PatchInfo[] = [
   },
   {
     id: 'din-mixer-control',
+    models: ['L6max'],
     title: 'Mixer control over MIDI jack',
     description:
       "Makes the mixer's documented \"Mixer Control via MIDI\" setting work over the physical TRS MIDI IN jack, not just USB — the stock firmware never implements that direction despite the setting existing.",
@@ -33,6 +36,7 @@ export const PATCHES: PatchInfo[] = [
   },
   {
     id: 'midi-sync',
+    models: ['L6', 'L6max'],
     title: 'Read mixer values over MIDI',
     description:
       "Lets a MIDI controller (for example a motorized-fader surface or the editor app) request the mixer's entire current state. Pairs with mixer control above: without it, a motorized surface starts out of sync until you touch each fader. The stock firmware only ever announces changes made after the controller connects.",

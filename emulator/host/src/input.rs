@@ -345,6 +345,20 @@ impl InputHub {
     pub fn analog_positions(&self) -> [u16; 5] {
         *self.analog.lock().unwrap()
     }
+    pub fn set_analog_position(&self, channel: usize, value: u16) -> io::Result<u32> {
+        let adc = *crate::controls::ANALOG_CHANNELS
+            .get(channel)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "invalid analog channel"))?;
+        if value > 1023 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "analog value must be 0..1023",
+            ));
+        }
+        let sequence = self.main.adc(adc, value)?;
+        self.analog.lock().unwrap()[channel] = value;
+        Ok(sequence)
+    }
     pub fn restore_analog_positions(&self, values: [u16; 5]) -> io::Result<()> {
         for (channel, value) in crate::controls::ANALOG_CHANNELS.into_iter().zip(values) {
             self.main.adc(channel, value)?;
@@ -365,9 +379,8 @@ impl InputHub {
         let value = (positions[knob] as i64
             + steps as i64 * crate::controls::ANALOG_COUNTS_PER_STEP)
             .clamp(0, 1023) as u16;
-        let sequence = self
-            .main
-            .adc(crate::controls::ANALOG_CHANNELS[knob], value)?;
+        let adc = crate::controls::ANALOG_CHANNELS[knob];
+        let sequence = self.main.adc(adc, value)?;
         positions[knob] = value;
         Ok(sequence)
     }

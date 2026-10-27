@@ -22,14 +22,14 @@ for ownership and expiry.
 
 ## Reproduction and validation
 
-`popup-trigger-probe` opens LEVEL through GPIO encoder input and invokes the
+`l6dbg popup-trigger` opens LEVEL through GPIO encoder input and invokes the
 original recorder callback through GDB. It does not fabricate busy state. On
 the earlier wrapper, busy flag 0 accompanied a transition from active popup to
 inactive, with the original bitmap restored before expiry.
 
 ```sh
 # Requires an earlier affected build; run from the repository root.
-cargo run --offline -p popup-trigger-probe -- \
+cargo run --offline -p l6dbg -- popup-trigger \
   --firmware-dir firmware-knob-dialog-live-refresh --volatile \
   --logs emulator/logs/recorder-poll-trigger
 ```

@@ -1,0 +1,145 @@
+[[step]]
+models = ["l6max"]
+action = "analog"
+channel = 1
+steps = 4
+
+[[step]]
+models = ["l6max"]
+action = "expect-analog"
+channel = 1
+value = 640
+
+[[step]]
+models = ["l6max"]
+action = "analog"
+channel = 2
+steps = 6
+
+[[step]]
+models = ["l6max"]
+action = "expect-analog"
+channel = 2
+value = 704
+
+[[step]]
+models = ["l6max"]
+action = "analog"
+channel = 3
+steps = 8
+
+[[step]]
+models = ["l6max"]
+action = "expect-analog"
+channel = 3
+value = 768
+
+[[step]]
+models = ["l6max"]
+action = "analog"
+channel = 4
+steps = 10
+
+[[step]]
+models = ["l6max"]
+action = "expect-analog"
+channel = 4
+value = 832
+
+[[step]]
+models = ["l6max"]
+action = "analog"
+channel = 5
+steps = 12
+
+[[step]]
+models = ["l6max"]
+action = "expect-analog"
+channel = 5
+value = 896
+
+[[step]]
+models = ["l6max"]
+action = "analog"
+channel = 1
+steps = -2
+
+[[step]]
+models = ["l6max"]
+action = "expect-analog"
+channel = 1
+value = 576
+
+[[step]]
+models = ["l6max"]
+action = "analog"
+channel = 2
+steps = -2
+
+[[step]]
+models = ["l6max"]
+action = "expect-analog"
+channel = 2
+value = 640
+
+[[step]]
+models = ["l6max"]
+action = "analog"
+channel = 3
+steps = -2
+
+[[step]]
+models = ["l6max"]
+action = "expect-analog"
+channel = 3
+value = 704
+
+[[step]]
+models = ["l6max"]
+action = "analog"
+channel = 4
+steps = -2
+
+[[step]]
+models = ["l6max"]
+action = "expect-analog"
+channel = 4
+value = 768
+
+[[step]]
+models = ["l6max"]
+action = "analog"
+channel = 5
+steps = -2
+
+[[step]]
+models = ["l6max"]
+action = "expect-analog"
+channel = 5
+value = 832
+
+[[step]]
+models = ["l6max"]
+action = "analog"
+channel = 1
+steps = 6
+gesture = "drag-vertical"
+
+[[step]]
+models = ["l6max"]
+action = "expect-analog"
+channel = 1
+value = 768
+
+[[step]]
+models = ["l6max"]
+action = "analog"
+channel = 3
+steps = -4
+gesture = "drag-horizontal"
+
+[[step]]
+models = ["l6max"]
+action = "expect-analog"
+channel = 3
+value = 576

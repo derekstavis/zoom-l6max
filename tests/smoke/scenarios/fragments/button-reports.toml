@@ -1,0 +1,291 @@
+[[step]]
+action = "press"
+control = "recorder-function-2"
+
+[[step]]
+action = "expect-button-report"
+control = "recorder-function-2"
+
+[[step]]
+action = "press"
+control = "recorder-function-3"
+
+[[step]]
+action = "expect-button-report"
+control = "recorder-function-3"
+
+[[step]]
+action = "press"
+control = "recorder-function-4"
+
+[[step]]
+action = "expect-button-report"
+control = "recorder-function-4"
+
+[[step]]
+action = "press"
+control = "rec-bounce"
+
+[[step]]
+action = "expect-button-report"
+control = "rec-bounce"
+
+[[step]]
+action = "press"
+control = "input1-hi-z"
+
+[[step]]
+action = "expect-button-report"
+control = "input1-hi-z"
+
+[[step]]
+action = "press"
+control = "input2-hi-z"
+
+[[step]]
+action = "expect-button-report"
+control = "input2-hi-z"
+
+[[step]]
+action = "press"
+control = "input1-48v"
+
+[[step]]
+action = "expect-button-report"
+control = "input1-48v"
+
+[[step]]
+action = "press"
+control = "ch1-mute"
+
+[[step]]
+action = "expect-button-report"
+control = "ch1-mute"
+
+[[step]]
+action = "press"
+control = "ch2-mute"
+
+[[step]]
+action = "expect-button-report"
+control = "ch2-mute"
+
+[[step]]
+action = "press"
+control = "input3-48v"
+
+[[step]]
+action = "expect-button-report"
+control = "input3-48v"
+
+[[step]]
+action = "press"
+control = "ch3-mute"
+
+[[step]]
+action = "expect-button-report"
+control = "ch3-mute"
+
+[[step]]
+action = "press"
+control = "ch4-mute"
+
+[[step]]
+action = "expect-button-report"
+control = "ch4-mute"
+
+[[step]]
+action = "press"
+control = "mode-eq-high"
+
+[[step]]
+action = "expect-button-report"
+control = "mode-eq-high"
+
+[[step]]
+action = "press"
+control = "mode-freq"
+
+[[step]]
+action = "expect-button-report"
+control = "mode-freq"
+
+[[step]]
+action = "press"
+control = "mode-mid"
+
+[[step]]
+action = "expect-button-report"
+control = "mode-mid"
+
+[[step]]
+action = "press"
+control = "mode-low"
+
+[[step]]
+action = "expect-button-report"
+control = "mode-low"
+
+[[step]]
+action = "press"
+control = "ch5-mode"
+
+[[step]]
+action = "expect-button-report"
+control = "ch5-mode"
+
+[[step]]
+action = "press"
+control = "ch6-mode"
+
+[[step]]
+action = "expect-button-report"
+control = "ch6-mode"
+
+[[step]]
+action = "press"
+control = "ch7-mode"
+
+[[step]]
+action = "expect-button-report"
+control = "ch7-mode"
+
+[[step]]
+action = "press"
+control = "ch8-mode"
+
+[[step]]
+action = "expect-button-report"
+control = "ch8-mode"
+
+[[step]]
+action = "press"
+control = "ch5-mute"
+
+[[step]]
+action = "expect-button-report"
+control = "ch5-mute"
+
+[[step]]
+action = "press"
+control = "ch6-mute"
+
+[[step]]
+action = "expect-button-report"
+control = "ch6-mute"
+
+[[step]]
+action = "press"
+control = "ch7-mute"
+
+[[step]]
+action = "expect-button-report"
+control = "ch7-mute"
+
+[[step]]
+action = "press"
+control = "ch8-mute"
+
+[[step]]
+action = "expect-button-report"
+control = "ch8-mute"
+
+[[step]]
+action = "press"
+control = "mode-aux1"
+
+[[step]]
+action = "expect-button-report"
+control = "mode-aux1"
+
+[[step]]
+action = "press"
+control = "mode-aux2"
+
+[[step]]
+action = "expect-button-report"
+control = "mode-aux2"
+
+[[step]]
+action = "press"
+control = "mode-efx"
+
+[[step]]
+action = "expect-button-report"
+control = "mode-efx"
+
+[[step]]
+action = "press"
+control = "mode-sub-mix"
+
+[[step]]
+action = "expect-button-report"
+control = "mode-sub-mix"
+
+[[step]]
+action = "press"
+control = "mode-pan"
+
+[[step]]
+action = "expect-button-report"
+control = "mode-pan"
+
+[[step]]
+action = "press"
+control = "mode-level"
+
+[[step]]
+action = "expect-button-report"
+control = "mode-level"
+
+[[step]]
+action = "press"
+control = "efx-select"
+
+[[step]]
+action = "expect-button-report"
+control = "efx-select"
+
+[[step]]
+action = "press"
+control = "compressor"
+
+[[step]]
+action = "expect-button-report"
+control = "compressor"
+
+[[step]]
+action = "press"
+control = "scene-a"
+
+[[step]]
+action = "expect-button-report"
+control = "scene-a"
+
+[[step]]
+action = "press"
+control = "scene-b"
+
+[[step]]
+action = "expect-button-report"
+control = "scene-b"
+
+[[step]]
+action = "press"
+control = "scene-c"
+
+[[step]]
+action = "expect-button-report"
+control = "scene-c"
+
+[[step]]
+action = "press"
+control = "scene-d"
+
+[[step]]
+action = "expect-button-report"
+control = "scene-d"
+
+[[step]]
+action = "include"
+path = "switches.toml"

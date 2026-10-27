@@ -3,6 +3,7 @@
 // not committed. See web/README.md.
 import init, {
   applyPatches as applyPatchesWasm,
+  detectFirmwareModel as detectFirmwareModelWasm,
 } from '../wasm/generated/firmware_patch_wasm.js'
 
 let ready: Promise<void> | null = null
@@ -46,4 +47,11 @@ export async function applyPatches(
   const result = applyPatchesWasm(packageBytes, selected)
   const report = JSON.parse(result.reportJson) as PatchReport
   return { package: result.package, report }
+}
+
+export type FirmwareModel = 'L6' | 'L6max'
+
+export async function detectFirmwareModel(packageBytes: Uint8Array): Promise<FirmwareModel> {
+  await ensureReady()
+  return detectFirmwareModelWasm(packageBytes) as FirmwareModel
 }

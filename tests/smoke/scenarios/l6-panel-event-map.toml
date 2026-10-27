@@ -1,0 +1,193 @@
+version = 1
+name = "l6-panel-event-map"
+models = ["l6"]
+fixture = "fresh"
+backends = ["headless"]
+
+[[step]]
+action = "delay"
+guest_ms = 42000
+guest_timeout_ms = 45000
+wall_timeout_s = 600
+
+[[step]]
+action = "panel-event"
+target = 7
+column = 1
+row = 0
+event = 7
+
+[[step]]
+action = "panel-event"
+target = 8
+column = 2
+row = 0
+event = 12
+
+[[step]]
+action = "panel-event"
+target = 9
+column = 3
+row = 0
+event = 26
+
+[[step]]
+action = "panel-event"
+target = 10
+column = 1
+row = 1
+event = 0
+
+[[step]]
+action = "panel-event"
+target = 11
+column = 2
+row = 1
+event = 13
+
+[[step]]
+action = "panel-event"
+target = 12
+column = 3
+row = 1
+event = 6
+
+[[step]]
+action = "panel-event"
+target = 13
+column = 1
+row = 2
+event = 1
+
+[[step]]
+action = "panel-event"
+target = 14
+column = 2
+row = 2
+event = 14
+
+[[step]]
+action = "panel-event"
+target = 15
+column = 3
+row = 2
+event = 27
+
+[[step]]
+action = "panel-event"
+target = 16
+column = 1
+row = 3
+event = 2
+
+[[step]]
+action = "panel-event"
+target = 17
+column = 2
+row = 3
+event = 15
+
+[[step]]
+action = "panel-event"
+target = 18
+column = 3
+row = 3
+event = 28
+
+[[step]]
+action = "panel-event"
+target = 19
+column = 1
+row = 4
+event = 3
+
+[[step]]
+action = "panel-event"
+target = 20
+column = 2
+row = 4
+event = 16
+
+[[step]]
+action = "panel-event"
+target = 21
+column = 3
+row = 4
+event = 29
+
+[[step]]
+action = "panel-event"
+target = 22
+column = 1
+row = 5
+event = 4
+
+[[step]]
+action = "panel-event"
+target = 23
+column = 2
+row = 5
+event = 17
+
+[[step]]
+action = "panel-event"
+target = 24
+column = 3
+row = 5
+event = 31
+
+[[step]]
+action = "panel-event"
+target = 25
+column = 1
+row = 6
+event = 5
+
+[[step]]
+action = "panel-event"
+target = 26
+column = 2
+row = 6
+event = 18
+
+[[step]]
+action = "panel-event"
+target = 28
+column = 1
+row = 7
+event = 20
+
+[[step]]
+action = "panel-event"
+target = 29
+column = 2
+row = 7
+event = 19
+
+[[step]]
+action = "panel-event"
+target = 2
+column = 0
+row = 1
+event = 8
+
+[[step]]
+action = "panel-event"
+target = 3
+column = 0
+row = 2
+event = 9
+
+[[step]]
+action = "panel-event"
+target = 6
+column = 0
+row = 3
+event = 10
+
+[[step]]
+action = "panel-event"
+target = 47
+column = 0
+row = 4
+event = 11

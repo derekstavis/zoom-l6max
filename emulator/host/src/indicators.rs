@@ -3,6 +3,8 @@
 //! (common, serial column) pairs are at 0x800c460c. SPI bytes shift MSB first.
 //! Panel 0x08002d88 reverses byte order and uses MSB-first bit indices:
 //! firmware column n therefore occupies shift-register bit n ^ 7.
+//! L6 QEMU traces for CC 83–88 and isolated encoder turns verify that the first
+//! six entries decode to their corresponding L6 ring outputs as well.
 pub const RING_PINS: [[(usize, u32); 9]; 8] = [
     [
         (0, 2),
@@ -197,4 +199,160 @@ pub const LED_PINS: [(usize, u32); 72] = [
 ];
 pub fn leds(rows: [u32; 8]) -> [bool; 72] {
     LED_PINS.map(|(row, column)| rows[row] & (1 << (column ^ 7)) != 0)
+}
+
+/// L6 mute, mono, USB, phantom-power, and compressor lamps measured from
+/// sequential panel events and stock USB Mixer Control CCs. These positions
+/// are model-specific; the L6max LED table does not cover the six mute lamps.
+const L6_BUTTON_PINS: [(usize, u32); 12] = [
+    (4, 1 << 11),
+    (4, 1 << 10),
+    (5, 1 << 11),
+    (5, 1 << 10),
+    (6, 1 << 11),
+    (6, 1 << 10),
+    (5, 1 << 9),
+    (5, 1 << 8),
+    (6, 1 << 9),
+    (6, 1 << 8),
+    (7, 1 << 10),
+    (7, 1 << 11),
+];
+
+pub fn l6_button_leds(rows: [u32; 8]) -> [bool; 12] {
+    L6_BUTTON_PINS.map(|(row, mask)| rows[row] & mask != 0)
+}
+
+/// L6 SOUND PAD playback lamps in physical pad order, mapped from the
+/// firmware's playback blink task and repeated QEMU indicator-row traces.
+const L6_SOUND_PAD_PINS: [(usize, u32); 4] =
+    [(3, 1 << 15), (3, 1 << 14), (4, 1 << 15), (4, 1 << 14)];
+
+pub fn l6_sound_pad_leds(rows: [u32; 8]) -> [bool; 4] {
+    L6_SOUND_PAD_PINS.map(|(row, mask)| rows[row] & mask != 0)
+}
+
+/// Five L6 effect-selection lamps in the order printed on the faceplate.
+/// Successive EFX SEL events cycle through these independent outputs.
+const L6_EFFECT_PINS: [(usize, u32); 5] = [
+    (0, 1 << 12), // Hall (CC 00)
+    (1, 1 << 13), // Room (CC 1A)
+    (1, 1 << 12), // Spring (CC 33)
+    (2, 1 << 13), // Delay (CC 4D)
+    (2, 1 << 12), // Echo (CC 66)
+];
+
+pub fn l6_effect_leds(rows: [u32; 8]) -> [bool; 5] {
+    L6_EFFECT_PINS.map(|(row, mask)| rows[row] & mask != 0)
+}
+
+/// L6 channel-strip modes, in faceplate order. These pins were observed
+/// changing with their corresponding firmware selector events.
+const L6_MODE_PINS: [(usize, u32); 9] = [
+    (0, 1 << 9), // HIGH
+    (0, 1 << 8), // FREQ
+    (1, 1 << 9), // MID
+    (1, 1 << 8), // LOW
+    (2, 1 << 9), // AUX1
+    (2, 1 << 8), // AUX2
+    (3, 1 << 9), // EFX
+    (3, 1 << 8), // PAN (L6 repurposes the L6max SUB-MIX lamp pin)
+    (4, 1 << 8), // LEVEL
+];
+
+pub fn l6_mode_leds(rows: [u32; 8]) -> [bool; 9] {
+    L6_MODE_PINS.map(|(row, mask)| rows[row] & mask != 0)
+}
+
+/// L6 scene lamps in faceplate order, measured while saving A, B, and C.
+const L6_SCENE_PINS: [(usize, u32); 3] = [(2, 1 << 11), (2, 1 << 10), (3, 1 << 11)];
+
+pub fn l6_scene_leds(rows: [u32; 8]) -> [bool; 3] {
+    L6_SCENE_PINS.map(|(row, mask)| rows[row] & mask != 0)
+}
+
+/// L6 Record button lamp, observed after its MAIN event 31 press.
+pub fn l6_record_led(rows: [u32; 8]) -> bool {
+    rows[1] & (1 << 10) != 0
+}
+
+#[cfg(test)]
+mod l6_tests {
+    use super::*;
+
+    #[test]
+    fn l6_mute_outputs_follow_the_six_measured_matrix_bits() {
+        for (channel, &(row, mask)) in L6_BUTTON_PINS[..6].iter().enumerate() {
+            let mut rows = [0; 8];
+            rows[row] = mask;
+            let mut expected = [false; 6];
+            expected[channel] = true;
+            assert_eq!(&l6_button_leds(rows)[..6], expected);
+        }
+        for (index, &(row, mask)) in L6_BUTTON_PINS.iter().enumerate().skip(6) {
+            let mut rows = [0; 8];
+            rows[row] = mask;
+            let mut expected = [false; 12];
+            expected[index] = true;
+            assert_eq!(l6_button_leds(rows), expected);
+        }
+        assert_eq!(l6_button_leds([0; 8]), [false; 12]);
+    }
+
+    #[test]
+    fn l6_sound_pad_lamps_follow_the_four_playback_blink_bits() {
+        for (pad, &(row, mask)) in L6_SOUND_PAD_PINS.iter().enumerate() {
+            let mut rows = [0; 8];
+            rows[row] = mask;
+            let mut expected = [false; 4];
+            expected[pad] = true;
+            assert_eq!(l6_sound_pad_leds(rows), expected);
+        }
+        assert_eq!(l6_sound_pad_leds([0; 8]), [false; 4]);
+    }
+
+    #[test]
+    fn l6_effect_lamps_follow_the_five_sel_cycle_outputs() {
+        for (effect, &(row, mask)) in L6_EFFECT_PINS.iter().enumerate() {
+            let mut rows = [0; 8];
+            rows[row] = mask;
+            let mut expected = [false; 5];
+            expected[effect] = true;
+            assert_eq!(l6_effect_leds(rows), expected);
+        }
+        assert_eq!(l6_effect_leds([0; 8]), [false; 5]);
+    }
+
+    #[test]
+    fn l6_mode_lamps_follow_the_nine_selector_outputs() {
+        for (mode, &(row, mask)) in L6_MODE_PINS.iter().enumerate() {
+            let mut rows = [0; 8];
+            rows[row] = mask;
+            let mut expected = [false; 9];
+            expected[mode] = true;
+            assert_eq!(l6_mode_leds(rows), expected);
+        }
+        assert_eq!(l6_mode_leds([0; 8]), [false; 9]);
+    }
+
+    #[test]
+    fn l6_scene_lamps_follow_the_three_measured_outputs() {
+        for (scene, &(row, mask)) in L6_SCENE_PINS.iter().enumerate() {
+            let mut rows = [0; 8];
+            rows[row] = mask;
+            let mut expected = [false; 3];
+            expected[scene] = true;
+            assert_eq!(l6_scene_leds(rows), expected);
+        }
+        assert_eq!(l6_scene_leds([0; 8]), [false; 3]);
+    }
+
+    #[test]
+    fn l6_record_lamp_uses_its_measured_matrix_bit() {
+        let mut rows = [0; 8];
+        rows[1] = 1 << 10;
+        assert!(l6_record_led(rows));
+        rows[1] = 0;
+        assert!(!l6_record_led(rows));
+    }
 }

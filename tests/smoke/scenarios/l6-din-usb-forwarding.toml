@@ -1,0 +1,40 @@
+version = 1
+name = "l6-din-usb-forwarding"
+models = ["l6"]
+backends = ["headless"]
+fixture = "fresh"
+
+[[step]]
+action = "wait"
+until = "boot-ready"
+guest_timeout_ms = 120000
+wall_timeout_s = 600
+
+[[step]]
+action = "delay"
+guest_ms = 22000
+guest_timeout_ms = 30000
+wall_timeout_s = 900
+
+[[step]]
+action = "press"
+control = "ch4-mono"
+
+[[step]]
+action = "delay"
+guest_ms = 2000
+wall_timeout_s = 180
+
+[[step]]
+action = "press"
+control = "ch4-mono"
+
+[[step]]
+action = "delay"
+guest_ms = 5000
+wall_timeout_s = 300
+
+[[step]]
+action = "l6-din-usb-forwarding"
+guest_timeout_ms = 2000
+wall_timeout_s = 180

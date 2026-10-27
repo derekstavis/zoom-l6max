@@ -1,0 +1,15 @@
+version = 1
+name = "l6max-din-mixer-control"
+models = ["l6max"]
+backends = ["headless"]
+fixture = "prepared"
+
+[[step]]
+action = "include"
+path = "fragments/l6max-din-mixer-setup.toml"
+
+[[step]]
+action = "l6max-din-mixer-control"
+expect_din_ring_change = false
+guest_timeout_ms = 10000
+wall_timeout_s = 120

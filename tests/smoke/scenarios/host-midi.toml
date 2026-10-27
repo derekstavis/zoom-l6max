@@ -1,0 +1,64 @@
+version = 1
+name = "host-midi"
+models = ["l6", "l6max"]
+backends = ["headless"]
+fixture = "prepared"
+
+[[step]]
+models = ["l6max"]
+action = "delay"
+guest_ms = 40000
+guest_timeout_ms = 45000
+wall_timeout_s = 900
+
+[[step]]
+models = ["l6"]
+action = "delay"
+guest_ms = 22000
+guest_timeout_ms = 30000
+wall_timeout_s = 900
+
+[[step]]
+models = ["l6"]
+action = "press"
+control = "ch4-mono"
+
+[[step]]
+models = ["l6max"]
+action = "press"
+control = "recorder.confirm"
+
+[[step]]
+models = ["l6"]
+action = "delay"
+guest_ms = 2000
+
+[[step]]
+models = ["l6max"]
+action = "delay"
+guest_ms = 1950
+
+[[step]]
+models = ["l6"]
+action = "press"
+control = "ch4-mono"
+
+[[step]]
+models = ["l6max"]
+action = "press"
+control = "recorder.confirm"
+
+[[step]]
+models = ["l6"]
+action = "delay"
+guest_ms = 5000
+
+[[step]]
+models = ["l6max"]
+action = "delay"
+guest_ms = 4950
+
+[[step]]
+action = "host-midi-round-trip"
+guest_timeout_ms = 15000
+wall_timeout_s = 120

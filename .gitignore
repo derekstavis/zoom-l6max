@@ -49,3 +49,6 @@ target/
 
 # Local investigation workspace.
 /analysis/
+
+# Local firmware/state fixture configuration.
+/smoke.local.toml

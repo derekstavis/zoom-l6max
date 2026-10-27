@@ -1,0 +1,25 @@
+{
+  "base": "0x80109ef0",
+  "hooks": [
+    {
+      "address": "0x8003e8ee",
+      "length": 4,
+      "symbol": "din_in_hook",
+      "target": "0x80109ef0"
+    }
+  ],
+  "knob_dialog_call_sites": [],
+  "knob_dialog_entry": null,
+  "model": "L6max",
+  "name": "din-mixer-control",
+  "payload_file": "din-mixer-control-80109ef0.bin",
+  "payload_length": 72,
+  "window_byte_total": 4,
+  "windows": [
+    {
+      "firmware_address": "0x8003e8ee",
+      "length": 4,
+      "payload_offset": 12
+    }
+  ]
+}

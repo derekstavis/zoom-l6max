@@ -1,0 +1,61 @@
+version = 1
+name = "l6-recorder-record-stop"
+models = ["l6"]
+fixture = "prepared"
+backends = ["headless"]
+main_sha256 = "827c7c5cb2a43cc3a011d4556462b8cb9539242f817ebeed7727d66a36c03799"
+
+[[step]]
+action = "wait"
+until = "boot-ready"
+guest_timeout_ms = 600000
+wall_timeout_s = 1800
+
+[[step]]
+action = "expect-memory"
+address = 0x806293c6
+bytes = [0, 0, 0, 0]
+
+[[step]]
+action = "press"
+control = "rec-record"
+guest_timeout_ms = 30000
+wall_timeout_s = 60
+
+[[step]]
+action = "delay"
+guest_ms = 500
+guest_timeout_ms = 5000
+wall_timeout_s = 15
+
+[[step]]
+action = "expect-memory"
+address = 0x806293c6
+bytes = [16, 0, 0, 0]
+guest_timeout_ms = 30000
+wall_timeout_s = 60
+
+[[step]]
+action = "delay"
+guest_ms = 3000
+guest_timeout_ms = 10000
+wall_timeout_s = 30
+
+[[step]]
+action = "press"
+control = "rec-record"
+guest_timeout_ms = 30000
+wall_timeout_s = 60
+
+[[step]]
+action = "delay"
+guest_ms = 500
+guest_timeout_ms = 5000
+wall_timeout_s = 15
+
+[[step]]
+action = "expect-memory"
+address = 0x806293c6
+bytes = [0, 0, 0, 0]
+guest_timeout_ms = 30000
+wall_timeout_s = 60

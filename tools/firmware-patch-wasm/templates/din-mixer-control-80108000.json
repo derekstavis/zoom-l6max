@@ -4,11 +4,13 @@
     {
       "address": "0x8003e8ee",
       "length": 4,
+      "symbol": "din_in_hook",
       "target": "0x80108000"
     }
   ],
   "knob_dialog_call_sites": [],
   "knob_dialog_entry": null,
+  "model": "L6max",
   "name": "din-mixer-control",
   "payload_file": "din-mixer-control-80108000.bin",
   "payload_length": 72,

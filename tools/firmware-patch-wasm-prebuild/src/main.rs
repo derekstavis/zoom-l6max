@@ -3,7 +3,7 @@
 //!
 //! Produces the static templates the browser-based patcher ships: for each
 //! of the 7 non-empty subsets of `firmware_patch_core::PATCHES`, and for each
-//! patch within it, the payload `firmware-patch` would compile at that
+//! patch within it, the payload `l6patch` would compile at that
 //! patch's position — but with every byte that came from the user's firmware
 //! (via a patch's `trampolines.s` `.incbin`) zeroed out, plus metadata
 //! recording exactly which firmware address each zeroed window came from.
@@ -13,9 +13,8 @@
 //! How a window is found, per (patch, base): compile the payload twice
 //! against the same base — once against the real firmware, once against a
 //! copy with every byte any of that patch's hooks displace replaced by a
-//! unique, per-byte sentinel value. Compilation is otherwise deterministic
-//! (verified elsewhere this session: no `build.rs`, no env/time/randomness,
-//! pinned toolchain), so the two compiled payloads can only differ at a byte
+//! unique, per-byte sentinel value. With the pinned toolchain and identical
+//! compilation options, the two compiled payloads differ at a byte
 //! that a `.incbin` actually read — anywhere else, by construction, nothing
 //! about the input changed. Diffing them finds those bytes without needing
 //! to understand each patch's trampoline assembly; reversing the sentinel
@@ -25,7 +24,10 @@
 //! payload exactly, byte for byte — the load-bearing guarantee this whole
 //! approach rests on.
 use firmware_patch_compile::{compile, symbol};
-use firmware_patch_core::{EXPECTED_FIRMWARE_SHA256, FIRST_PAYLOAD, PATCHES};
+use firmware_patch_core::{
+    EXPECTED_FIRMWARE_SHA256, FIRST_PAYLOAD, FirmwareModel, L6_EXPECTED_FIRMWARE_SHA256,
+    L6_MAIN_BASE, PATCHES, first_payload_for, verify_firmware_for,
+};
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
@@ -35,7 +37,7 @@ use std::{
 
 /// `knob-dialog`'s three `bl` call-site redirects (address, hook symbol,
 /// original target) — not part of `hooks.tsv`, applied separately by
-/// `firmware-patch` and by `firmware-patch-core::apply_patch`.
+/// `l6patch` and by `firmware-patch-core::apply_patch`.
 const KNOB_DIALOG_CALL_SITES: [(u32, &str, u32); 3] = [
     (0x8000648e, "notification_initialize_hook", 0x8005f600),
     (0x80006126, "semaphore_take_hook", 0x80091048),
@@ -70,14 +72,18 @@ fn read_hook_rows(patch_root: &Path) -> Result<Vec<HookRow>, Box<dyn std::error:
 /// replaced by a unique value in `0x01..=0xfe`, distinct from that byte's
 /// real value. Returns the sentinel firmware and a reverse lookup from
 /// sentinel value to the firmware address it stands in for.
-fn build_sentinel_firmware(firmware: &[u8], rows: &[HookRow]) -> (Vec<u8>, HashMap<u8, u32>) {
+fn build_sentinel_firmware(
+    firmware: &[u8],
+    rows: &[HookRow],
+    firmware_base: u32,
+) -> (Vec<u8>, HashMap<u8, u32>) {
     let mut sentinel = firmware.to_vec();
     let mut value_to_address = HashMap::new();
     let mut candidate: u16 = 1;
     for row in rows {
         for i in 0..row.length as u32 {
             let address = row.address + i;
-            let offset = (address - 0x80000000) as usize;
+            let offset = (address - firmware_base) as usize;
             let real_byte = firmware[offset];
             while candidate <= 0xfe
                 && (value_to_address.contains_key(&(candidate as u8))
@@ -159,12 +165,18 @@ struct Unit {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let source = PathBuf::from(
-        std::env::args()
-            .nth(1)
-            .ok_or("Usage: firmware-patch-wasm-prebuild REAL_UNPACKED_FIRMWARE_DIR")?,
-    )
+    let mut args = std::env::args().skip(1);
+    let source = PathBuf::from(args.next().ok_or(
+        "Usage: firmware-patch-wasm-prebuild L6MAX_UNPACKED_FIRMWARE_DIR L6_UNPACKED_FIRMWARE_DIR",
+    )?)
     .canonicalize()?;
+    let l6_source = PathBuf::from(args.next().ok_or(
+        "Usage: firmware-patch-wasm-prebuild L6MAX_UNPACKED_FIRMWARE_DIR L6_UNPACKED_FIRMWARE_DIR",
+    )?)
+    .canonicalize()?;
+    if args.next().is_some() {
+        return Err("expected exactly two unpacked firmware directories".into());
+    }
     let firmware = fs::read(source.join("main_firmware.bin"))?;
     let digest = format!("{:x}", Sha256::digest(&firmware));
     if digest != EXPECTED_FIRMWARE_SHA256 {
@@ -173,6 +185,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .into());
     }
+    verify_firmware_for(FirmwareModel::L6max, &firmware)?;
+    let l6_firmware = fs::read(l6_source.join("main_firmware.bin"))?;
+    verify_firmware_for(FirmwareModel::L6, &l6_firmware)?;
 
     let patches_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../patches");
     let scratch = std::env::temp_dir().join(format!(
@@ -208,7 +223,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .into());
             }
         }
-        let (sentinel, value_to_address) = build_sentinel_firmware(&firmware, &rows);
+        let (sentinel, value_to_address) = build_sentinel_firmware(&firmware, &rows, 0x80000000);
         let sentinel_source = scratch.join(format!("{name}-sentinel"));
         fs::create_dir_all(&sentinel_source)?;
         fs::write(sentinel_source.join("main_firmware.bin"), &sentinel)?;
@@ -349,11 +364,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let hooks_json: Vec<_> = unit
             .hooks
             .iter()
-            .map(|(address, target, length)| {
+            .zip(&per_patch[unit.name].rows)
+            .map(|((address, target, length), row)| {
                 serde_json::json!({
                     "address": format!("{address:#x}"),
                     "target": format!("{target:#x}"),
                     "length": length,
+                    "symbol": row.symbol,
                 })
             })
             .collect();
@@ -370,6 +387,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .collect();
         let metadata = serde_json::json!({
             "name": unit.name,
+            "model": "L6max",
             "base": format!("{:#x}", unit.base),
             "payload_file": format!("{stem}.bin"),
             "payload_length": unit.template.len(),
@@ -383,7 +401,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             templates_dir.join(format!("{stem}.json")),
             serde_json::to_string_pretty(&metadata)?,
         )?;
-        manifest_units.push(serde_json::json!({"name": unit.name, "base": format!("{:#x}", unit.base), "metadata_file": format!("{stem}.json")}));
+        manifest_units.push(serde_json::json!({"name": unit.name, "model": "L6max", "base": format!("{:#x}", unit.base), "metadata_file": format!("{stem}.json")}));
         println!(
             "{stem}: {} bytes, {} window(s), {} window byte(s)",
             unit.template.len(),
@@ -391,18 +409,133 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             unit.windows.iter().map(|w| w.length).sum::<usize>()
         );
     }
+
+    // Build the supported L6 profiles at the addresses selected by the native
+    // CLI, then zero only firmware-derived .incbin windows in browser templates.
+    let l6_root = patches_dir.join("midi-sync/l6").canonicalize()?;
+    let l6_rows = read_hook_rows(&l6_root)?;
+    for row in &l6_rows {
+        let offset = (row.address - L6_MAIN_BASE) as usize;
+        let actual = format!(
+            "{:x}",
+            Sha256::digest(&l6_firmware[offset..offset + row.length])
+        );
+        if actual != row.sha256 {
+            return Err(format!(
+                "L6 midi-sync: hooks.tsv hash mismatch for {} at {:#x}",
+                row.symbol, row.address
+            )
+            .into());
+        }
+    }
+    let l6_base = first_payload_for(FirmwareModel::L6, l6_firmware.len());
+    let (l6_sentinel, l6_value_to_address) =
+        build_sentinel_firmware(&l6_firmware, &l6_rows, L6_MAIN_BASE);
+    let l6_sentinel_source = scratch.join("l6-midi-sync-sentinel");
+    fs::create_dir_all(&l6_sentinel_source)?;
+    fs::write(l6_sentinel_source.join("main_firmware.bin"), &l6_sentinel)?;
+    let (l6_payload, l6_symbols) = compile(
+        &l6_source,
+        &l6_root,
+        &output_scratch,
+        "l6-midi-sync",
+        l6_base,
+    )?;
+    let (l6_sentinel_payload, _) = compile(
+        &l6_sentinel_source,
+        &l6_root,
+        &output_scratch,
+        "l6-midi-sync",
+        l6_base,
+    )?;
+    let l6_windows = find_windows(&l6_payload, &l6_sentinel_payload, &l6_value_to_address)?;
+    let mut l6_template = l6_payload.clone();
+    for window in &l6_windows {
+        l6_template[window.payload_offset..window.payload_offset + window.length].fill(0);
+    }
+    let mut l6_reconstructed = l6_template.clone();
+    for window in &l6_windows {
+        let start = (window.firmware_address - L6_MAIN_BASE) as usize;
+        l6_reconstructed[window.payload_offset..window.payload_offset + window.length]
+            .copy_from_slice(&l6_firmware[start..start + window.length]);
+    }
+    if l6_reconstructed != l6_payload {
+        return Err(
+            "L6 midi-sync: template + L6 firmware windows do not reconstruct payload".into(),
+        );
+    }
+    let l6_hooks = l6_rows
+        .iter()
+        .map(|row| Ok((row.address, symbol(&l6_symbols, &row.symbol)?, row.length)))
+        .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()?;
+    let l6_stem = format!("midi-sync-l6-{l6_base:08x}");
+    fs::write(templates_dir.join(format!("{l6_stem}.bin")), &l6_template)?;
+    let l6_windows_json: Vec<_> = l6_windows
+        .iter()
+        .map(|window| {
+            serde_json::json!({
+                "payload_offset": window.payload_offset,
+                "firmware_address": format!("{:#x}", window.firmware_address),
+                "length": window.length,
+            })
+        })
+        .collect();
+    let l6_hooks_json: Vec<_> = l6_hooks
+        .iter()
+        .zip(&l6_rows)
+        .map(|((address, target, length), row)| {
+            serde_json::json!({
+                "address": format!("{address:#x}"),
+                "target": format!("{target:#x}"),
+                "length": length,
+                "symbol": row.symbol,
+            })
+        })
+        .collect();
+    let l6_metadata = serde_json::json!({
+        "name": "midi-sync",
+        "model": "L6",
+        "base": format!("{l6_base:#x}"),
+        "payload_file": format!("{l6_stem}.bin"),
+        "payload_length": l6_template.len(),
+        "windows": l6_windows_json,
+        "hooks": l6_hooks_json,
+        "knob_dialog_entry": null,
+        "knob_dialog_call_sites": [],
+        "window_byte_total": l6_windows.iter().map(|w| w.length).sum::<usize>(),
+    });
+    let l6_metadata_file = format!("{l6_stem}.json");
+    fs::write(
+        templates_dir.join(&l6_metadata_file),
+        serde_json::to_string_pretty(&l6_metadata)?,
+    )?;
+    manifest_units.push(serde_json::json!({
+        "name": "midi-sync",
+        "model": "L6",
+        "base": format!("{l6_base:#x}"),
+        "metadata_file": l6_metadata_file,
+    }));
+    println!(
+        "{}: {} bytes, {} window(s), {} window byte(s)",
+        l6_stem,
+        l6_template.len(),
+        l6_windows.len(),
+        l6_windows.iter().map(|w| w.length).sum::<usize>()
+    );
+
     fs::write(
         templates_dir.join("manifest.json"),
         serde_json::to_string_pretty(&serde_json::json!({
             "source_firmware_sha256": digest,
+            "l6_source_firmware_sha256": L6_EXPECTED_FIRMWARE_SHA256,
             "units": manifest_units,
         }))?,
     )?;
     fs::remove_dir_all(&scratch)?;
     println!(
         "Wrote {} build units ({} Zoom-byte-free templates) to {}",
-        unit_list.len(),
-        unit_list.len(),
+        unit_list.len() + 1,
+        unit_list.len() + 1,
         templates_dir.display()
     );
     Ok(())

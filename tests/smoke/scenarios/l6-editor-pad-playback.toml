@@ -1,0 +1,44 @@
+version = 1
+name = "l6-editor-pad-playback"
+models = ["l6"]
+fixture = "prepared"
+backends = ["headless"]
+
+[[step]]
+action = "include"
+path = "fragments/editor-pad-setup-l6.toml"
+
+[[step]]
+action = "include"
+path = "fragments/editor-pad-usb-ready.toml"
+
+[[step]]
+action = "editor-pad-assignments"
+guest_timeout_ms = 60000
+wall_timeout_s = 900
+
+# Exercise the Editor SysEx play command and the firmware's per-pad playing
+# state, then require nonzero SAI1 TX samples for each assigned WAV.
+[[step]]
+action = "editor-pad-playback"
+pad = 0
+guest_timeout_ms = 15000
+wall_timeout_s = 300
+
+[[step]]
+action = "editor-pad-playback"
+pad = 1
+guest_timeout_ms = 15000
+wall_timeout_s = 300
+
+[[step]]
+action = "editor-pad-playback"
+pad = 2
+guest_timeout_ms = 15000
+wall_timeout_s = 300
+
+[[step]]
+action = "editor-pad-playback"
+pad = 3
+guest_timeout_ms = 15000
+wall_timeout_s = 300

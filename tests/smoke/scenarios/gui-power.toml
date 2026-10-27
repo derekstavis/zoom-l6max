@@ -1,0 +1,100 @@
+version = 1
+name = "gui-power"
+models = ["l6", "l6max"]
+backends = ["gui"]
+fixture = "prepared"
+
+[[step]]
+action = "delay"
+guest_ms = 2000
+models = ["l6"]
+
+[[step]]
+action = "delay"
+guest_ms = 2000
+
+[[step]]
+action = "press"
+control = "power"
+models = ["l6"]
+
+[[step]]
+action = "expect-powered"
+powered = false
+guest_timeout_ms = 20000
+wall_timeout_s = 60
+models = ["l6"]
+
+[[step]]
+action = "press"
+control = "rec-record"
+models = ["l6"]
+
+[[step]]
+action = "press"
+control = "power"
+models = ["l6"]
+
+[[step]]
+action = "delay"
+guest_ms = 5000
+models = ["l6"]
+
+[[step]]
+action = "expect-startup-report"
+control = "rec-record"
+guest_timeout_ms = 30000
+wall_timeout_s = 60
+models = ["l6"]
+
+[[step]]
+action = "delay"
+guest_ms = 40000
+guest_timeout_ms = 60000
+wall_timeout_s = 600
+models = ["l6max"]
+
+[[step]]
+action = "press"
+control = "recorder.confirm"
+models = ["l6max"]
+
+[[step]]
+action = "delay"
+guest_ms = 2000
+models = ["l6max"]
+
+[[step]]
+action = "press"
+control = "recorder.confirm"
+models = ["l6max"]
+
+[[step]]
+action = "delay"
+guest_ms = 5000
+models = ["l6max"]
+
+[[step]]
+action = "hold"
+control = "power"
+duration_ms = 4000
+models = ["l6max"]
+wall_timeout_s = 120
+
+[[step]]
+action = "expect-powered"
+powered = false
+models = ["l6max"]
+wall_timeout_s = 60
+
+[[step]]
+action = "press"
+control = "power"
+models = ["l6max"]
+
+[[step]]
+action = "delay"
+guest_ms = 40000
+guest_timeout_ms = 60000
+wall_timeout_s = 600
+models = ["l6max"]

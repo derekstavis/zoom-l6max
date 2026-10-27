@@ -1,0 +1,10 @@
+version = 1
+name = "audio-path"
+models = ["l6", "l6max"]
+backends = ["headless"]
+fixture = "prepared"
+
+[[step]]
+action = "audio-callbacks"
+guest_timeout_ms = 60000
+wall_timeout_s = 300

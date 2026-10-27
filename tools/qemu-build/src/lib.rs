@@ -1,4 +1,4 @@
-//! Build the pinned QEMU with the L6max board model.
+//! Build the pinned QEMU with the L6 and L6max board models.
 //!
 //! The submodule stays pristine: a copy is staged under
 //! `emulator/qemu/build-source`, the board sources are installed into it, and it
@@ -13,6 +13,63 @@ use std::{
 };
 
 const MESON_ENTRY: &str = "arm_common_ss.add(files('l6max.c'))";
+const BOARD_SOURCES: &[&str] = &[
+    "l6max.c",
+    "l6-profile.h",
+    "l6max-display.h",
+    "l6max-indicators.h",
+    "l6max-usb.h",
+    "l6-sai.h",
+    "l6-edma.h",
+    "l6-ccm-analog.h",
+];
+
+fn install_board_sources(repository: &Path, source: &Path) -> Result<(), String> {
+    let board_dir = repository.join("emulator/qemu/hw/arm");
+    let target_dir = source.join("hw/arm");
+    for name in BOARD_SOURCES {
+        fs::copy(board_dir.join(name), target_dir.join(name))
+            .map_err(|error| format!("cannot install {name}: {error}"))?;
+    }
+    Ok(())
+}
+
+fn apply_coreaudio_patch(source: &Path, repository: &Path) -> Result<(), String> {
+    let patch = repository.join("emulator/qemu/patches/coreaudio-underrun.patch");
+    let coreaudio = fs::read_to_string(source.join("audio/coreaudio.m"))
+        .map_err(|error| format!("could not read QEMU CoreAudio source: {error}"))?;
+    if coreaudio.contains("kAudioFormatFlagsNativeFloatPacked")
+        && coreaudio.contains("core->underruns++")
+        && coreaudio.contains("playback had")
+        && coreaudio.contains("L6_AUDIO_COREAUDIO_CAPTURE")
+    {
+        return Ok(());
+    }
+
+    let check = Command::new("patch")
+        .current_dir(source)
+        .args(["--dry-run", "--forward", "--batch", "--quiet", "-p1"])
+        .arg("--input")
+        .arg(&patch)
+        .status()
+        .map_err(|error| format!("could not check the CoreAudio patch: {error}"))?;
+    if !check.success() {
+        return Err("the CoreAudio underrun patch does not apply to this QEMU source".into());
+    }
+
+    let status = Command::new("patch")
+        .current_dir(source)
+        .args(["--forward", "--batch", "-p1"])
+        .arg("--input")
+        .arg(&patch)
+        .status()
+        .map_err(|error| format!("could not apply the CoreAudio patch: {error}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("applying the CoreAudio patch exited with {status}"))
+    }
+}
 
 fn copy_source(source: &std::path::Path, target: &std::path::Path) -> Result<(), String> {
     fs::create_dir_all(target).map_err(|e| e.to_string())?;
@@ -110,7 +167,13 @@ pub fn is_stale(repository: &Path, binary: &Path) -> bool {
             })
             .max()
     }
-    newest(&repository.join("emulator/qemu/hw")).is_some_and(|source| source > built)
+    [
+        repository.join("emulator/qemu/hw"),
+        repository.join("emulator/qemu/patches"),
+    ]
+    .into_iter()
+    .filter_map(|path| newest(&path))
+    .any(|source| source > built)
 }
 
 /// Build under an exclusive lock, so concurrent callers (for example two smoke
@@ -156,28 +219,8 @@ pub fn build(request: &Request) -> Result<PathBuf, String> {
     } else {
         source
     };
-    let board = request.repository.join("emulator/qemu/hw/arm/l6max.c");
-    fs::copy(&board, source.join("hw/arm/l6max.c"))
-        .map_err(|error| format!("cannot install board source: {error}"))?;
-    fs::copy(
-        request
-            .repository
-            .join("emulator/qemu/hw/arm/l6max-display.h"),
-        source.join("hw/arm/l6max-display.h"),
-    )
-    .map_err(|error| format!("cannot install display model: {error}"))?;
-    fs::copy(
-        request
-            .repository
-            .join("emulator/qemu/hw/arm/l6max-indicators.h"),
-        source.join("hw/arm/l6max-indicators.h"),
-    )
-    .map_err(|error| format!("cannot install indicator model: {error}"))?;
-    fs::copy(
-        request.repository.join("emulator/qemu/hw/arm/l6max-usb.h"),
-        source.join("hw/arm/l6max-usb.h"),
-    )
-    .map_err(|error| format!("cannot install USB model: {error}"))?;
+    apply_coreaudio_patch(&source, &request.repository)?;
+    install_board_sources(&request.repository, &source)?;
     let meson_path = source.join("hw/arm/meson.build");
     let meson = fs::read_to_string(&meson_path)
         .map_err(|error| format!("cannot read ARM Meson file: {error}"))?;
@@ -229,4 +272,40 @@ pub fn build(request: &Request) -> Result<PathBuf, String> {
         return Err(format!("QEMU build exited with {status}"));
     }
     Ok(source.join("build/qemu-system-arm"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BOARD_SOURCES, install_board_sources};
+    use std::{fs, time::SystemTime};
+
+    #[test]
+    fn stages_all_shared_board_sources_including_profile_header() {
+        let unique = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "qemu-build-board-sources-{}-{unique}",
+            std::process::id()
+        ));
+        let board_dir = root.join("repository/emulator/qemu/hw/arm");
+        let source_dir = root.join("qemu/hw/arm");
+        fs::create_dir_all(&board_dir).unwrap();
+        fs::create_dir_all(&source_dir).unwrap();
+        for name in BOARD_SOURCES {
+            fs::write(board_dir.join(name), format!("source {name}")).unwrap();
+        }
+
+        install_board_sources(&root.join("repository"), &root.join("qemu")).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(source_dir.join("l6-profile.h")).unwrap(),
+            "source l6-profile.h"
+        );
+        for name in BOARD_SOURCES {
+            assert!(source_dir.join(name).is_file(), "missing staged {name}");
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
 }

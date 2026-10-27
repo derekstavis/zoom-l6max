@@ -10,9 +10,19 @@ excluded from Git. Stop the guest before copying or editing these files.
 These files represent nonvolatile hardware. Display and input communication
 still uses anonymous shared memory and inherited sockets.
 
+The GUI detects the model from the installed MAIN image and keeps persistent
+devices separate. It preserves an existing legacy state directory for the
+model whose MAIN NOR is already installed there; when another model is selected,
+its device files live under `models/l6/` or `models/l6max/` within that state
+directory. The installed MAIN image takes precedence over the package selected
+for the next boot. This keeps MAIN/resource NOR, panel flash, RTC, and default SD
+selection from crossing between L6 and L6max. An explicit `--state-dir` remains
+the parent path supplied by the user.
+
 | File | Size | Representation |
 | --- | ---: | --- |
 | `main-nor.bin` | 2 MiB | Main MCU's physical serial NOR, erased bytes `ff` |
+| `resource-nor.bin` | 4 MiB, L6 only | External serial NOR containing the L6 resource region |
 | `panel-flash.bin` | 64 KiB | Panel executable flash at `0x08000000` |
 | `panel-options.bin` | 4 bytes | Panel ROM protocol's option-byte word at `0x1fff7800` |
 | `panel-rtc.bin` | 256 bytes | Panel RTC backup domain, separate from flash |
@@ -23,9 +33,20 @@ and modeled peripheral defaults. Existing files retain their contents: changing
 `--firmware-dir` does not reinstall firmware in an existing device.
 Main execution is loaded from the installed NOR application region; panel
 execution is loaded from panel flash.
+For L6, the external resource NOR is seeded from `resource_region.bin` on the
+first persistent boot. It is then retained independently of the selected
+firmware directory and receives the resource segment during an emulated L6
+update install.
 On a fresh device the main firmware programs the panel and writes its version
 stamp at `0x08003ffc`. Retaining panel flash prevents this programming sequence
 from repeating on the next process launch.
+
+The L6 package contains a 13,440-byte panel image rather than a full 64 KiB
+flash dump. Its missing tail is seeded as zero to match the volatile ROM
+mapping, which lets the L6 panel reach its ready path. L6max retains the erased
+`0xff` tail. Older L6 state seeded by earlier builds is migrated only when its
+panel prefix exactly matches the supplied image and its remaining bytes are
+all `0xff`; changed panel contents are preserved.
 
 ## Main NOR map
 
@@ -102,6 +123,10 @@ layout follows the [STM32G0 reference manual](https://www.st.com/resource/en/ref
 The calendar and subsecond counter advance with QEMU virtual time. Pausing
 QEMU freezes them. Date/time is retained across process restarts; time while
 the emulator is stopped is not added to the calendar.
+On a fresh device the firmware asks for Date/Time and Battery Type. Reusing the
+same `--state-dir` retains the panel RTC and main settings, so later smoke runs
+can start from the normal home screen without repeating setup. `--volatile`
+discards that setup along with the rest of the device storage.
 The panel's RCC oscillator-ready and clock-switch status must also be modeled.
 Without them, its two startup waits time out, delaying the RTC reply beyond the
 main firmware's two-second limit and reopening Date/Time setup despite a valid
@@ -113,8 +138,7 @@ calendar. Persisted settings also avoid repeating Battery Type setup.
 From the repository root, use a fresh state directory:
 
 ```sh
-cargo run -p persistence-smoke -- \
-  --state-dir /tmp/l6-storage-test --logs emulator/logs/persistence-smoke
+cargo run --offline --locked -p l6test -- run --case persistence --model l6max --config smoke.local.toml
 ```
 
 The harness uses GPIO inputs to edit all five date/time fields, closes QEMU,

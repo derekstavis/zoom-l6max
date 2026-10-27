@@ -1,0 +1,17 @@
+version = 1
+name = "storage-empty"
+models = ["l6", "l6max"]
+backends = ["headless"]
+fixture = "prepared"
+trace_sd = true
+
+[[step]]
+action = "wait"
+until = "boot-ready"
+guest_timeout_ms = 120000
+wall_timeout_s = 600
+
+[[step]]
+action = "expect-trace"
+contains = []
+absent = ["sdhci_send_command"]
