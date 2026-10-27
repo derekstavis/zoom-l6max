@@ -124,6 +124,7 @@ mod platform {
         mine: Addr,
         target: Addr,
         endpoint: String,
+        decoder: alsa::seq::MidiEvent,
     }
 
     fn status(error: alsa::Error) -> String {
@@ -166,6 +167,7 @@ mod platform {
                 mine,
                 target,
                 endpoint: name.to_owned(),
+                decoder: alsa::seq::MidiEvent::new(16_384).map_err(status)?,
             })
         }
     }
