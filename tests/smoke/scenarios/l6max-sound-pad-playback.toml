@@ -1,0 +1,54 @@
+version = 1
+name = "l6max-sound-pad-playback"
+models = ["l6max"]
+fixture = "prepared"
+backends = ["headless"]
+
+[[step]]
+action = "include"
+path = "fragments/editor-pad-setup-l6max.toml"
+
+[[step]]
+action = "include"
+path = "fragments/editor-pad-usb-ready.toml"
+
+[[step]]
+action = "editor-pad-assignments"
+guest_timeout_ms = 60000
+wall_timeout_s = 900
+
+[[step]]
+action = "delay"
+guest_ms = 3000
+guest_timeout_ms = 6000
+wall_timeout_s = 120
+
+# Exercise every mapped physical pad. Each action takes a fresh audio-trace
+# baseline, so playback from the preceding pad cannot satisfy the next check.
+[[step]]
+action = "sound-pad-playback"
+pad = 0
+target = 49
+guest_timeout_ms = 15000
+wall_timeout_s = 300
+
+[[step]]
+action = "sound-pad-playback"
+pad = 1
+target = 50
+guest_timeout_ms = 15000
+wall_timeout_s = 300
+
+[[step]]
+action = "sound-pad-playback"
+pad = 2
+target = 51
+guest_timeout_ms = 15000
+wall_timeout_s = 300
+
+[[step]]
+action = "sound-pad-playback"
+pad = 3
+target = 52
+guest_timeout_ms = 15000
+wall_timeout_s = 300

@@ -1,0 +1,363 @@
+[[step]]
+action = "press"
+control = "channel.1.mute"
+
+[[step]]
+models = ["l6"]
+action = "expect-button-report"
+control = "channel.1.mute"
+
+[[step]]
+action = "expect-mute"
+channel = 1
+
+[[step]]
+action = "press"
+control = "channel.1.mute"
+
+[[step]]
+models = ["l6"]
+action = "expect-button-report"
+control = "channel.1.mute"
+
+[[step]]
+action = "expect-mute"
+channel = 1
+
+[[step]]
+action = "press"
+control = "channel.2.mute"
+
+[[step]]
+models = ["l6"]
+action = "expect-button-report"
+control = "channel.2.mute"
+
+[[step]]
+action = "expect-mute"
+channel = 2
+
+[[step]]
+action = "press"
+control = "channel.2.mute"
+
+[[step]]
+models = ["l6"]
+action = "expect-button-report"
+control = "channel.2.mute"
+
+[[step]]
+action = "expect-mute"
+channel = 2
+
+[[step]]
+action = "press"
+control = "channel.3.mute"
+
+[[step]]
+models = ["l6"]
+action = "expect-button-report"
+control = "channel.3.mute"
+
+[[step]]
+action = "expect-mute"
+channel = 3
+
+[[step]]
+action = "press"
+control = "channel.3.mute"
+
+[[step]]
+models = ["l6"]
+action = "expect-button-report"
+control = "channel.3.mute"
+
+[[step]]
+action = "expect-mute"
+channel = 3
+
+[[step]]
+action = "press"
+control = "channel.4.mute"
+
+[[step]]
+models = ["l6"]
+action = "expect-button-report"
+control = "channel.4.mute"
+
+[[step]]
+action = "expect-mute"
+channel = 4
+
+[[step]]
+action = "press"
+control = "channel.4.mute"
+
+[[step]]
+models = ["l6"]
+action = "expect-button-report"
+control = "channel.4.mute"
+
+[[step]]
+action = "expect-mute"
+channel = 4
+
+[[step]]
+action = "press"
+control = "channel.5.mute"
+
+[[step]]
+models = ["l6"]
+action = "expect-button-report"
+control = "channel.5.mute"
+
+[[step]]
+action = "expect-mute"
+channel = 5
+
+[[step]]
+action = "press"
+control = "channel.5.mute"
+
+[[step]]
+models = ["l6"]
+action = "expect-button-report"
+control = "channel.5.mute"
+
+[[step]]
+action = "expect-mute"
+channel = 5
+
+[[step]]
+action = "press"
+control = "channel.6.mute"
+
+[[step]]
+models = ["l6"]
+action = "expect-button-report"
+control = "channel.6.mute"
+
+[[step]]
+action = "expect-mute"
+channel = 6
+
+[[step]]
+action = "press"
+control = "channel.6.mute"
+
+[[step]]
+models = ["l6"]
+action = "expect-button-report"
+control = "channel.6.mute"
+
+[[step]]
+action = "expect-mute"
+channel = 6
+
+[[step]]
+models = ["l6max"]
+action = "press"
+control = "channel.7.mute"
+
+[[step]]
+models = ["l6max"]
+action = "expect-mute"
+channel = 7
+
+[[step]]
+models = ["l6max"]
+action = "press"
+control = "channel.7.mute"
+
+[[step]]
+models = ["l6max"]
+action = "expect-mute"
+channel = 7
+
+[[step]]
+models = ["l6max"]
+action = "press"
+control = "channel.8.mute"
+
+[[step]]
+models = ["l6max"]
+action = "expect-mute"
+channel = 8
+
+[[step]]
+models = ["l6max"]
+action = "press"
+control = "channel.8.mute"
+
+[[step]]
+models = ["l6max"]
+action = "expect-mute"
+channel = 8
+
+[[step]]
+action = "press"
+control = "mode.eq-high"
+
+[[step]]
+models = ["l6"]
+action = "expect-button-report"
+control = "mode.eq-high"
+
+[[step]]
+action = "expect-mode"
+mode = "eq-high"
+
+[[step]]
+action = "wait"
+until = "panel-settled"
+
+[[step]]
+action = "press"
+control = "mode.freq"
+
+[[step]]
+models = ["l6"]
+action = "expect-button-report"
+control = "mode.freq"
+
+[[step]]
+action = "expect-mode"
+mode = "freq"
+
+[[step]]
+action = "wait"
+until = "panel-settled"
+
+[[step]]
+action = "press"
+control = "mode.mid"
+
+[[step]]
+models = ["l6"]
+action = "expect-button-report"
+control = "mode.mid"
+
+[[step]]
+action = "expect-mode"
+mode = "mid"
+
+[[step]]
+action = "wait"
+until = "panel-settled"
+
+[[step]]
+action = "press"
+control = "mode.low"
+
+[[step]]
+models = ["l6"]
+action = "expect-button-report"
+control = "mode.low"
+
+[[step]]
+action = "expect-mode"
+mode = "low"
+
+[[step]]
+action = "wait"
+until = "panel-settled"
+
+[[step]]
+action = "press"
+control = "mode.aux1"
+
+[[step]]
+models = ["l6"]
+action = "expect-button-report"
+control = "mode.aux1"
+
+[[step]]
+action = "expect-mode"
+mode = "aux1"
+
+[[step]]
+action = "wait"
+until = "panel-settled"
+
+[[step]]
+action = "press"
+control = "mode.aux2"
+
+[[step]]
+models = ["l6"]
+action = "expect-button-report"
+control = "mode.aux2"
+
+[[step]]
+action = "expect-mode"
+mode = "aux2"
+
+[[step]]
+action = "wait"
+until = "panel-settled"
+
+[[step]]
+action = "press"
+control = "mode.efx"
+
+[[step]]
+models = ["l6"]
+action = "expect-button-report"
+control = "mode.efx"
+
+[[step]]
+action = "expect-mode"
+mode = "efx"
+
+[[step]]
+action = "wait"
+until = "panel-settled"
+
+[[step]]
+models = ["l6max"]
+action = "press"
+control = "mode.sub-mix"
+
+[[step]]
+models = ["l6max"]
+action = "expect-mode"
+mode = "sub-mix"
+
+[[step]]
+models = ["l6max"]
+action = "wait"
+until = "panel-settled"
+
+[[step]]
+action = "press"
+control = "mode.pan"
+
+[[step]]
+models = ["l6"]
+action = "expect-button-report"
+control = "mode.pan"
+
+[[step]]
+action = "expect-mode"
+mode = "pan"
+
+[[step]]
+action = "wait"
+until = "panel-settled"
+
+[[step]]
+action = "press"
+control = "mode.level"
+
+[[step]]
+models = ["l6"]
+action = "expect-button-report"
+control = "mode.level"
+
+[[step]]
+action = "expect-mode"
+mode = "level"
+
+[[step]]
+action = "wait"
+until = "panel-settled"

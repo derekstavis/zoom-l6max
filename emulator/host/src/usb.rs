@@ -10,6 +10,19 @@ use std::{
 };
 const MAGIC: u32 = 0x4c365553;
 const MAX: usize = 16384;
+
+/// Adds a description, except for the transient errors callers retry on
+/// (ENODEV while the guest's USB controller is still coming up, EAGAIN on a
+/// socket timeout): `io::Error::new` always clears `raw_os_error()` even
+/// when passed the same `ErrorKind`, so wrapping one of these here would
+/// make every retry-on-`raw_os_error()` check above this call stop matching
+/// and treat a startup race as a fatal error instead of retrying it.
+fn context(error: io::Error, operation: &str) -> io::Error {
+    match error.raw_os_error() {
+        Some(libc::ENODEV) | Some(libc::EAGAIN) => error,
+        _ => io::Error::new(error.kind(), format!("{operation}: {error}")),
+    }
+}
 pub struct UsbHost {
     socket: Mutex<UnixStream>,
     sequence: Mutex<u32>,
@@ -97,20 +110,29 @@ impl UsbHost {
     }
     pub fn control(&self, setup: [u8; 8]) -> io::Result<Vec<u8>> {
         let _control = self.control_lock.lock().unwrap();
-        self.request(2, 0, 8, &setup)?;
+        self.request(2, 0, 8, &setup)
+            .map_err(|e| context(e, "USB SETUP packet"))?;
+        self.control_data_stage(setup)
+    }
+
+    fn control_data_stage(&self, setup: [u8; 8]) -> io::Result<Vec<u8>> {
         let length = u16::from_le_bytes([setup[6], setup[7]]) as usize;
         if setup[0] & 0x80 != 0 {
-            let data = self.receive(0, MAX)?;
+            let data = self
+                .receive(0, MAX)
+                .map_err(|error| context(error, "USB control IN data stage"))?;
             if data.len() > length {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
                     "control response exceeds wLength",
                 ));
             }
-            self.send(0, &[])?;
+            self.send(0, &[])
+                .map_err(|error| context(error, "USB control IN status stage"))?;
             Ok(data)
         } else if length == 0 {
             self.receive(0, MAX)
+                .map_err(|error| context(error, "USB control OUT status stage"))
         } else {
             Err(io::Error::new(
                 io::ErrorKind::Unsupported,
@@ -119,21 +141,154 @@ impl UsbHost {
         }
     }
 
+    fn retry_control_token(
+        &self,
+        endpoint: u8,
+        input: bool,
+        data: &[u8],
+        deadline: Instant,
+    ) -> io::Result<Vec<u8>> {
+        loop {
+            let result = if input {
+                self.try_receive(endpoint, MAX)
+            } else {
+                self.request(4, (endpoint & 15) as u32, data.len(), data)
+            };
+            match result {
+                Err(error)
+                    if error.raw_os_error() == Some(libc::EAGAIN) && Instant::now() < deadline =>
+                {
+                    thread::sleep(Duration::from_millis(2));
+                }
+                result => return result,
+            }
+        }
+    }
+
+    fn control_data_stage_raw(&self, setup: [u8; 8], deadline: Instant) -> io::Result<Vec<u8>> {
+        let length = u16::from_le_bytes([setup[6], setup[7]]) as usize;
+        if setup[0] & 0x80 != 0 {
+            let data = self.retry_control_token(0, true, &[], deadline)?;
+            if data.len() > length {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "control response exceeds wLength",
+                ));
+            }
+            self.retry_control_token(0, false, &[], deadline)?;
+            Ok(data)
+        } else if length == 0 {
+            self.retry_control_token(0, true, &[], deadline)
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "control OUT data stage",
+            ))
+        }
+    }
+
+    fn control_once_raw(&self, setup: [u8; 8], deadline: Instant) -> io::Result<Vec<u8>> {
+        self.request(2, 0, 8, &setup)?;
+        self.control_data_stage_raw(setup, deadline)
+    }
+
+    fn control_with_retry(&self, setup: [u8; 8]) -> io::Result<Vec<u8>> {
+        let _control = self.control_lock.lock().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            match self.control_once_raw(setup, deadline) {
+                Err(error)
+                    if matches!(
+                        error.raw_os_error(),
+                        Some(libc::ENODEV) | Some(libc::EAGAIN)
+                    ) && Instant::now() < deadline =>
+                {
+                    thread::sleep(Duration::from_millis(25));
+                }
+                result => return result,
+            }
+        }
+    }
+
     pub fn enumerate(&self) -> io::Result<Configuration> {
-        self.connect(true)?;
+        self.enumerate_with_descriptors()
+            .map(|(_, _, config)| config)
+    }
+
+    /// Enumerate through the production retry path, retaining wire evidence.
+    pub fn enumerate_with_descriptors(&self) -> io::Result<(Vec<u8>, Vec<u8>, Configuration)> {
+        self.connect(true)
+            .map_err(|e| context(e, "connect USB device"))?;
         // Give the guest USB task time to handle bus reset before SETUP.
-        thread::sleep(Duration::from_millis(250));
-        let device = self.control([0x80, 6, 0, 1, 0, 0, 18, 0])?;
+        thread::sleep(Duration::from_millis(500));
+        let device = self.device_descriptor()?;
         if device.len() != 18 || device[..2] != [18, 1] {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("invalid device descriptor {device:02x?}"),
             ));
         }
-        let bytes = self.control([0x80, 6, 0, 2, 0, 0, 0xff, 0x3f])?;
+        let bytes = self
+            .control_with_retry([0x80, 6, 0, 2, 0, 0, 0xff, 0x3f])
+            .map_err(|e| context(e, "get USB configuration descriptor"))?;
         let config = Configuration::parse(&bytes)?;
-        self.control([0, 9, config.value, 0, 0, 0, 0, 0])?;
-        Ok(config)
+        self.control_with_retry([0, 9, config.value, 0, 0, 0, 0, 0])
+            .map_err(|e| context(e, "set USB configuration"))?;
+        Ok((device, bytes, config))
+    }
+
+    fn device_descriptor(&self) -> io::Result<Vec<u8>> {
+        let setup = [0x80, 6, 0, 1, 0, 0, 18, 0];
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let _control = self.control_lock.lock().unwrap();
+        loop {
+            match self.request(2, 0, 8, &setup) {
+                Ok(_) => {
+                    match self.control_data_stage_raw(setup, deadline) {
+                        Ok(descriptor) if descriptor.len() == 18 => return Ok(descriptor),
+                        Ok(descriptor) if descriptor.len() < 18 && Instant::now() < deadline => {
+                            // Some firmware revisions prime EP0 with a short
+                            // initial descriptor fragment while USB startup is
+                            // settling. Restart the control transfer and wait
+                            // for the complete fixed-size device descriptor.
+                            thread::sleep(Duration::from_millis(25));
+                        }
+                        Ok(descriptor) => {
+                            return Err(io::Error::new(
+                                io::ErrorKind::UnexpectedEof,
+                                format!("short USB device descriptor: {} bytes", descriptor.len()),
+                            ));
+                        }
+                        Err(error)
+                            if matches!(
+                                error.raw_os_error(),
+                                Some(libc::ENODEV) | Some(libc::EAGAIN)
+                            ) && Instant::now() < deadline =>
+                        {
+                            // The setup packet can be accepted before the
+                            // firmware primes EP0's IN dTD. Retry the whole
+                            // control transfer until the device controller is
+                            // ready, as well as retrying a rejected SETUP.
+                            thread::sleep(Duration::from_millis(25));
+                        }
+                        Err(error) => {
+                            return Err(context(error, "get USB device descriptor"));
+                        }
+                    }
+                }
+                Err(error)
+                    if matches!(
+                        error.raw_os_error(),
+                        Some(libc::ENODEV) | Some(libc::EAGAIN)
+                    ) && Instant::now() < deadline =>
+                {
+                    // The controller can reject SETUP until the firmware has
+                    // enabled its device role after VBUS.
+                    thread::sleep(Duration::from_millis(25));
+                }
+                Err(error) => return Err(context(error, "get USB device descriptor")),
+            }
+        }
     }
 }
 
@@ -257,6 +412,128 @@ mod tests {
         bad[9] = 0;
         assert!(Configuration::parse(&bad).is_err());
         assert!(Configuration::parse(&configuration()[..12]).is_err());
+    }
+    #[test]
+    fn device_descriptor_waits_for_guest_usb_controller_enable() {
+        let (socket, mut peer) = UnixStream::pair().unwrap();
+        let server = thread::spawn(move || {
+            for status in [-libc::ENODEV, 0] {
+                let mut request = [0; 28];
+                peer.read_exact(&mut request).unwrap();
+                assert_eq!(u32::from_le_bytes(request[4..8].try_into().unwrap()), 2);
+                assert_eq!(&request[20..], &[0x80, 6, 0, 1, 0, 0, 18, 0]);
+                let sequence = u32::from_le_bytes(request[8..12].try_into().unwrap());
+                let mut reply = Vec::new();
+                for word in [MAGIC, 0x80000000, sequence, status as u32, 0] {
+                    reply.extend(word.to_le_bytes());
+                }
+                peer.write_all(&reply).unwrap();
+            }
+            for (kind, endpoint, data) in [(3, 0x80, vec![0; 18]), (4, 0, vec![])] {
+                let mut request = [0; 20];
+                peer.read_exact(&mut request).unwrap();
+                assert_eq!(u32::from_le_bytes(request[4..8].try_into().unwrap()), kind);
+                assert_eq!(
+                    u32::from_le_bytes(request[12..16].try_into().unwrap()),
+                    endpoint
+                );
+                let sequence = u32::from_le_bytes(request[8..12].try_into().unwrap());
+                let mut reply = Vec::new();
+                for word in [MAGIC, 0x80000000, sequence, 0, data.len() as u32] {
+                    reply.extend(word.to_le_bytes());
+                }
+                reply.extend(data);
+                peer.write_all(&reply).unwrap();
+            }
+        });
+        let usb = UsbHost::new(socket).unwrap();
+        assert_eq!(usb.device_descriptor().unwrap(), [0; 18]);
+        server.join().unwrap();
+    }
+    #[test]
+    fn device_descriptor_retries_when_ep0_is_not_primed_after_setup() {
+        let (socket, mut peer) = UnixStream::pair().unwrap();
+        let server = thread::spawn(move || {
+            let mut receive_reply = |kind: u32, endpoint: u32, status: i32, data: &[u8]| {
+                let mut request = [0; 28];
+                let request_len = if kind == 2 { 28 } else { 20 };
+                peer.read_exact(&mut request[..request_len]).unwrap();
+                assert_eq!(u32::from_le_bytes(request[4..8].try_into().unwrap()), kind);
+                assert_eq!(
+                    u32::from_le_bytes(request[12..16].try_into().unwrap()),
+                    endpoint
+                );
+                let sequence = u32::from_le_bytes(request[8..12].try_into().unwrap());
+                let mut reply = Vec::new();
+                for word in [
+                    MAGIC,
+                    0x80000000,
+                    sequence,
+                    status as u32,
+                    data.len() as u32,
+                ] {
+                    reply.extend(word.to_le_bytes());
+                }
+                reply.extend(data);
+                peer.write_all(&reply).unwrap();
+            };
+
+            // SETUP succeeds while the device is still enabling its USB
+            // controller, so the following EP0 IN transaction returns ENODEV.
+            receive_reply(2, 0, 0, &[]);
+            receive_reply(3, 0x80, -libc::ENODEV, &[]);
+            // The first post-startup attempt can return only the two-byte
+            // descriptor header; retry the full control transfer once more.
+            receive_reply(2, 0, 0, &[]);
+            receive_reply(3, 0x80, 0, &[18, 1]);
+            receive_reply(4, 0, 0, &[]);
+            // The next SETUP receives the complete device descriptor.
+            receive_reply(2, 0, 0, &[]);
+            receive_reply(
+                3,
+                0x80,
+                0,
+                &[18, 1, 0, 2, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+            );
+            receive_reply(4, 0, 0, &[]);
+        });
+        let usb = UsbHost::new(socket).unwrap();
+        assert_eq!(
+            usb.device_descriptor().unwrap(),
+            [18, 1, 0, 2, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]
+        );
+        server.join().unwrap();
+    }
+    #[test]
+    fn enumeration_control_retries_transient_status_stage_eagain() {
+        let (socket, mut peer) = UnixStream::pair().unwrap();
+        let server = thread::spawn(move || {
+            for (kind, status) in [(2, 0), (3, -libc::EAGAIN), (3, 0)] {
+                let request_len = if kind == 2 { 28 } else { 20 };
+                let mut request = vec![0; request_len];
+                peer.read_exact(&mut request).unwrap();
+                assert_eq!(u32::from_le_bytes(request[4..8].try_into().unwrap()), kind);
+                if kind == 3 {
+                    assert_eq!(
+                        u32::from_le_bytes(request[12..16].try_into().unwrap()),
+                        0x80
+                    );
+                }
+                let sequence = u32::from_le_bytes(request[8..12].try_into().unwrap());
+                let mut reply = Vec::new();
+                for word in [MAGIC, 0x80000000, sequence, status as u32, 0] {
+                    reply.extend(word.to_le_bytes());
+                }
+                peer.write_all(&reply).unwrap();
+            }
+        });
+        let usb = UsbHost::new(socket).unwrap();
+        assert!(
+            usb.control_with_retry([0, 9, 1, 0, 0, 0, 0, 0])
+                .unwrap()
+                .is_empty()
+        );
+        server.join().unwrap();
     }
     #[test]
     fn fragmented_replies_and_usb_errors_preserve_stream_order() {

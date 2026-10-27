@@ -54,7 +54,7 @@ when useful; exclude raw firmware, RAM dumps, and derived binary exports.
   supported revision, resource ownership, and validation before adding a patch.
 - Keep public documentation and patch bindings consistent. Use reviewed
   upstream FreeRTOS names for established matches.
-- Distinguish static evidence, emulator behavior, hardware observations, and
+- Distinguish compatibility findings, emulator behavior, hardware observations, and
   hypotheses. A tested payload does not establish compatibility for every release.
 
 Contributions must be independently written. Document observable hardware and
@@ -69,10 +69,10 @@ Keep the README focused on purpose and getting started. Put practical guides in
 `docs/guides/`, emulator behavior in `docs/emulator/`, firmware behavior in
 `docs/firmware/`, and reproduction workflows in `docs/development/`.
 
-Lead detailed pages with the finding and its scope. Preserve addresses, hashes,
-method, evidence, and unresolved context. Prefer “investigation pointed to”
-over chronological progress reports. List unsupported or unverified behavior
-as bullets. Use relative links and commands without personal checkout paths.
+Lead detailed pages with current behavior and its scope. Include relevant
+compatibility addresses, hashes, validation, and unresolved limits. List
+unsupported or unverified behavior as bullets. Use relative links and commands
+without personal checkout paths.
 Add new pages to the [documentation index](docs/README.md).
 
 ## Licensing

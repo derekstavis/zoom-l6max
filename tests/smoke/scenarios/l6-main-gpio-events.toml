@@ -1,0 +1,46 @@
+version = 1
+name = "l6-main-gpio-events"
+models = ["l6"]
+fixture = "prepared"
+backends = ["headless"]
+
+[[step]]
+action = "wait"
+until = "boot-ready"
+guest_timeout_ms = 600000
+wall_timeout_s = 1800
+
+[[step]]
+action = "l6-main-gpio-event"
+target = 48
+event = 25
+guest_timeout_ms = 30000
+wall_timeout_s = 60
+
+[[step]]
+action = "l6-main-gpio-event"
+target = 49
+event = 21
+guest_timeout_ms = 30000
+wall_timeout_s = 60
+
+[[step]]
+action = "l6-main-gpio-event"
+target = 50
+event = 22
+guest_timeout_ms = 30000
+wall_timeout_s = 60
+
+[[step]]
+action = "l6-main-gpio-event"
+target = 51
+event = 23
+guest_timeout_ms = 30000
+wall_timeout_s = 60
+
+[[step]]
+action = "l6-main-gpio-event"
+target = 52
+event = 24
+guest_timeout_ms = 30000
+wall_timeout_s = 60

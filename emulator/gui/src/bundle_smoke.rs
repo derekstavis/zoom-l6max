@@ -69,6 +69,12 @@ impl BundleSmoke {
                         "Run this check from a bundle with a fresh L6_APP_DATA directory".into(),
                     );
                 }
+                let expected_qemu = std::env::var("L6_BUNDLE_SMOKE_QEMU_SHA256")
+                    .map_err(|_| "L6_BUNDLE_SMOKE_QEMU_SHA256 is required")?;
+                crate::bundle::verify_bundled_qemu(
+                    &panel.bundle.as_ref().unwrap().resources,
+                    &expected_qemu,
+                )?;
                 let menus = cx.get_menus().ok_or("No native menu")?;
                 let has_open = menus.iter().any(|menu| menu.name.as_ref() == "File" && menu.items.iter().any(|item| {
                     matches!(item, gpui::OwnedMenuItem::Action { name, disabled: false, .. } if name == "Open Firmware…")
@@ -95,8 +101,12 @@ impl BundleSmoke {
                 if controls.panel.snapshot().guest_ms < 40000 {
                     return Ok(false);
                 }
-                if panel.last_frame.iter().all(|b| *b == 0) {
-                    return Err("No firmware display after boot".into());
+                let panel_data = panel.panel_data();
+                if panel.model == l6fw::Model::L6max && panel_data.display.iter().all(|b| *b == 0) {
+                    return Err(format!(
+                        "No firmware display after boot:\n{}",
+                        panel_data.display_ascii()
+                    ));
                 }
                 let bundle = panel.bundle.as_ref().unwrap();
                 let nor = std::fs::read(
@@ -118,17 +128,16 @@ impl BundleSmoke {
                 if restored.firmware_dir != panel.options.firmware_dir {
                     return Err("Selection was not remembered".into());
                 }
-                println!(
-                    "PASS: firmware boots, displays pixels, persists matching NOR and selection"
-                );
+                println!("PASS: firmware boots and persists matching NOR and selection");
+                if panel.model == l6fw::Model::L6 && panel_data.display.iter().all(|b| *b == 0) {
+                    println!("NOTE: L6 display output is not available to the bundle smoke");
+                }
                 if self.stage == 3 {
                     let mut configured = panel.options.clone();
                     configured.sd_image = None;
-                    crate::configuration::configure_with_package(
-                        &mut configured,
-                        Some(&panel.options.firmware_dir.join("L6max.bin")),
-                    )
-                    .map_err(|e| e.to_string())?;
+                    let package = crate::bundle::selected_package(&panel.options.firmware_dir)?;
+                    crate::configuration::configure_with_package(&mut configured, Some(&package))
+                        .map_err(|e| e.to_string())?;
                     if configured.sd_image != panel.options.sd_image {
                         return Err("SD folder selection not restored".into());
                     }

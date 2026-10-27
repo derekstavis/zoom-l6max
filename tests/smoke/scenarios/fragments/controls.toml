@@ -1,0 +1,46 @@
+[[step]]
+action = "encoder"
+channel = 1
+steps = 12
+gesture = "scroll"
+
+[[step]]
+action = "expect-ring"
+channel = 1
+changed = true
+only = true
+
+[[step]]
+action = "encoder"
+channel = 2
+steps = 12
+gesture = "drag-vertical"
+
+[[step]]
+action = "expect-ring"
+channel = 2
+changed = true
+only = true
+
+[[step]]
+action = "encoder"
+channel = 2
+steps = -12
+gesture = "drag-horizontal"
+
+[[step]]
+action = "expect-ring"
+channel = 2
+mask = 0x001
+changed = true
+only = true
+
+[[step]]
+action = "press"
+control = "channel.1.mute"
+
+[[step]]
+action = "expect-mute"
+channel = 1
+guest_timeout_ms = 3000
+wall_timeout_s = 30

@@ -1,0 +1,16 @@
+version = 1
+name = "l6-input-sweep"
+models = ["l6"]
+fixture = "prepared"
+backends = ["headless"]
+
+[[step]]
+action = "wait"
+until = "boot-ready"
+guest_timeout_ms = 600000
+wall_timeout_s = 1800
+
+[[step]]
+action = "l6-input-sweep"
+guest_timeout_ms = 600000
+wall_timeout_s = 1800

@@ -1,0 +1,12 @@
+version = 1
+name = "indicators"
+models = ["l6", "l6max"]
+fixture = "prepared"
+
+[[step]]
+action = "include"
+path = "fragments/prepared-level.toml"
+
+[[step]]
+action = "include"
+path = "fragments/indicators.toml"

@@ -1,7 +1,7 @@
-# L6max firmware patcher (web)
+# L6 / L6max firmware patcher (web)
 
-A static site that applies the firmware patches in [`../patches`](../patches)
-to a user-uploaded Zoom update package entirely client-side, via
+A static site that detects an uploaded L6 or L6max firmware package and applies
+compatible firmware patches from [`../patches`](../patches) entirely client-side, via
 WebAssembly. No server, no upload — see [`../tools/firmware-patch-wasm`](../tools/firmware-patch-wasm)
 for how that's possible without ever shipping any of Zoom's firmware.
 

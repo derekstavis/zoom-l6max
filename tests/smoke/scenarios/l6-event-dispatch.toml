@@ -1,0 +1,13 @@
+version = 1
+name = "l6-event-dispatch"
+models = ["l6"]
+fixture = "fresh"
+backends = ["headless"]
+
+[[step]]
+action = "l6-din-event-dispatch"
+group = 3
+cc = 92
+value = 35
+guest_timeout_ms = 600000
+wall_timeout_s = 1800

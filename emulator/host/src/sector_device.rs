@@ -3,7 +3,7 @@
 //! The emulated SD card can be reached in different ways: through the firmware's
 //! USB mass-storage interface ([`crate::usb_storage::UsbSectors`]), or directly as
 //! an image file ([`StreamSectors`]). Both present 512-byte sectors, so the FAT
-//! access in `usb-files` and tests is written once against [`SectorDevice`]. A
+//! access in `l6fs usb` and tests is written once against [`SectorDevice`]. A
 //! future host mount (FUSE on Linux, a disk-image service on macOS) would be one
 //! more implementation.
 use std::io::{self, Read, Seek, SeekFrom, Write};

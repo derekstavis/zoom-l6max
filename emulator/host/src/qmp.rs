@@ -71,13 +71,24 @@ impl QmpClient {
     fn execute<C: Command>(&self, command: &C) -> io::Result<C::Ok> {
         let mut management = self.management.lock().unwrap();
         management.inner_mut().get_mut_read().get_mut().deadline = Instant::now() + REQUEST_TIMEOUT;
+        let started = Instant::now();
         let result = management.execute(command);
+        let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
         if matches!(result, Err(qapi::ExecuteError::Io(_))) {
             // A timed out response might arrive later. Closing prevents a later
             // request from accidentally consuming that response as its own.
             let _ = management.inner().get_ref_write().shutdown(Shutdown::Both);
         }
-        result.map_err(io::Error::from)
+        match result {
+            Ok(value) => {
+                tracing::debug!(target: "l6max_host::qmp", event = "qmp_command", command = C::NAME, elapsed_ms, outcome = "ok", "QMP command completed");
+                Ok(value)
+            }
+            Err(error) => {
+                tracing::warn!(target: "l6max_host::qmp", event = "qmp_command", command = C::NAME, elapsed_ms, outcome = "error", error = %error, "QMP command failed");
+                Err(io::Error::from(error))
+            }
+        }
     }
 
     pub fn query_status(&self) -> io::Result<Status> {
@@ -143,6 +154,14 @@ impl QmpClient {
         })
     }
 
+    /// Snapshot TCG translation-cache and invalidation counters.
+    pub fn jit_stats(&self) -> io::Result<String> {
+        self.execute(&qmp::human_monitor_command {
+            command_line: "info jit".into(),
+            cpu_index: None,
+        })
+    }
+
     /// Read a bounded physical-memory region for firmware diagnostics.
     pub fn read_memory(&self, cpu: i64, address: u32, size: usize) -> io::Result<Vec<u8>> {
         if size == 0 || size > 4096 {
@@ -176,7 +195,20 @@ impl QmpClient {
     }
 
     pub fn drain_events(&self) -> Vec<qmp::Event> {
-        self.management.lock().unwrap().events().collect()
+        let events: Vec<_> = self.management.lock().unwrap().events().collect();
+        for event in &events {
+            let name = serde_json::to_value(event)
+                .ok()
+                .and_then(|value| {
+                    value
+                        .get("event")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_owned)
+                })
+                .unwrap_or_else(|| "unknown".into());
+            tracing::debug!(target: "l6max_host::qmp", event = "qmp_event", qmp_event = %name, "QMP event received");
+        }
+        events
     }
 }
 

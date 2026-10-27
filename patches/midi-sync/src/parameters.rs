@@ -26,7 +26,9 @@ pub const SYNC_REQUEST_MIN_VALUE: u8 = 64;
 pub const MAX_MIXER_CHANNEL: u32 = 11;
 
 /// First parameter identifier of each setting's group of eight channels.
-const GROUP_BASE: [u8; MODES] = [0x00, 0x08, 0x10, 0x18, 0x28, 0x30, 0x38, 0x20, 0x40, 0x48, 0x50];
+const GROUP_BASE: [u8; MODES] = [
+    0x00, 0x08, 0x10, 0x18, 0x28, 0x30, 0x38, 0x20, 0x40, 0x48, 0x50,
+];
 
 /// Which stock getter, and with which extra argument, reads a setting.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -120,7 +122,9 @@ mod tests {
 
     #[test]
     fn identifiers_match_the_stock_dispatch_table() {
-        let first = [0x00, 0x08, 0x10, 0x18, 0x28, 0x30, 0x38, 0x20, 0x40, 0x48, 0x50];
+        let first = [
+            0x00, 0x08, 0x10, 0x18, 0x28, 0x30, 0x38, 0x20, 0x40, 0x48, 0x50,
+        ];
         for (mode, id) in first.into_iter().enumerate() {
             assert_eq!(parameter_id(mode, 0), Some(id));
             assert_eq!(parameter_id(mode, 7), Some(id + 7));
@@ -137,11 +141,18 @@ mod tests {
             assert!(id >= 0x58 && id < 0x5e, "out of the global range: {id:#x}");
             assert!(!seen[id], "duplicate identifier: {id:#x}");
             seen[id] = true;
-            assert!(toggle.slot <= MAX_MIXER_CHANNEL, "slot out of range: {}", toggle.slot);
+            assert!(
+                toggle.slot <= MAX_MIXER_CHANNEL,
+                "slot out of range: {}",
+                toggle.slot
+            );
         }
         assert_eq!(EFX_TYPE_ID, 0x5C);
         assert_eq!(COMPRESSOR_ID, 0x5D);
-        assert!(!seen[EFX_TYPE_ID as usize] && !seen[COMPRESSOR_ID as usize], "collides with a slot-based global");
+        assert!(
+            !seen[EFX_TYPE_ID as usize] && !seen[COMPRESSOR_ID as usize],
+            "collides with a slot-based global"
+        );
     }
 
     #[test]

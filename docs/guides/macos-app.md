@@ -12,7 +12,8 @@ source checkout. They supply their own firmware.
 
 1. Unzip the app and place **L6max Emulator.app** in Applications or another folder.
 2. Open it. A fresh installation shows **Select firmware** over the panel.
-3. Click **Select firmware…** and choose a supported `L6max.bin` update package.
+3. Click **Select firmware…** and choose a supported L6 (`L6.BIN`) or L6max
+   (`L6max.bin`) update package.
    The app validates its layout and checksum, extracts it into local storage,
    creates its demo SD card, and starts the firmware.
 4. Complete Date/Time and Battery Type setup with Up, Down, and Confirm.
@@ -54,7 +55,7 @@ Bundled mode writes to `~/Library/Application Support/L6max Emulator/`:
 | Path | Contents |
 | --- | --- |
 | `firmware/<package-sha256>/` | Imported package and extracted components |
-| `devices/<package-sha256>/` | Persistent flash, RTC, and demo SD card |
+| `devices/<package-sha256>/` | Persistent flash, RTC, and the model-matched demo SD card |
 | `logs/<package-sha256>/` | QEMU trace and diagnostic output |
 | `cards/card-*.img` | Persistent copies imported from selected directories |
 | `devices/<package-sha256>/sd-card-selection.txt` | Remembered imported card selection |
@@ -130,12 +131,17 @@ L6_BUNDLE_SMOKE_SD_FOLDER=/path/to/sd-folder \
   "emulator/dist/L6max Emulator.app/Contents/MacOS/l6max-gui"
 ```
 
-It imports the first package, waits for actual firmware display output, compares
-persisted NOR with the selected image, verifies restored selection, rejects an
-invalid package without disturbing the guest, and restarts into the second
-package's isolated state. With `L6_BUNDLE_SMOKE_SD_FOLDER`, it also imports a
-folder, hotplug-inserts it with no further restart, and verifies actual SD
-read commands and restored card selection. Native file-picker presentation
+For an L6 bundle check, use supported `L6.BIN` packages for both firmware
+variables. The smoke waits for the boot interval and validates model-selected
+package import and persistent state; it does not require LCD pixels from L6.
+
+It imports the first package, waits for firmware boot (and requires display
+output for L6max), compares persisted NOR with the selected image, verifies
+restored selection, rejects an invalid package without disturbing the guest,
+and restarts into the second package's isolated state. With
+`L6_BUNDLE_SMOKE_SD_FOLDER`, it also imports a folder, hotplug-inserts it with
+no further restart, and verifies actual SD read commands and restored card
+selection. Native file-picker presentation
 should also be checked
 interactively; the diagnostic supplies paths directly to the import/restart code.
 

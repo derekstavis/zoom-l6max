@@ -1,0 +1,12 @@
+version = 1
+name = "knob-dialog"
+models = ["l6max"]
+backends = ["headless"]
+fixture = "knob-patched"
+main_sha256 = "76925b4e017083910ef33c2d52e3930d3cdad819cc8b4ffe5f782dd2f07212d7"
+main_sha256_any = ["90c7cbdd0fee494bdcaf805730b1eb3931117d27d96ab651fe5dc604695c3010", "863ee4475b728e9a7b1d04fcdd4eb28555aee3fc8009eca9c36d2a3032b5fc32"]
+
+[[step]]
+action = "knob-dialog"
+guest_timeout_ms = 180000
+wall_timeout_s = 600

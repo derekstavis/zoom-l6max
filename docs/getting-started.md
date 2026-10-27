@@ -10,7 +10,7 @@ is a separate workflow in the [knob patch guide](guides/knob-patch.md).
 - A source checkout of this repository.
 - Rust installed through rustup. `rust-toolchain.toml` selects
   `nightly-2026-08-05`; Cargo installs that toolchain through rustup as needed.
-- A locally obtained stock **L6max 1.10** update package, `L6max.bin`.
+- A locally obtained stock **L6 1.10** (`L6.BIN`) or **L6max 1.10** (`L6max.bin`) update package.
   Firmware is not included in this repository.
 - The pinned **QEMU 11.1.2** submodule, initialized with
   `git submodule update --init emulator/qemu/upstream`. The builder rejects
@@ -35,14 +35,14 @@ Git dependency. Use `--offline` only after dependencies are cached.
 
 ## 1. Provide the firmware
 
-Place the stock `L6max.bin` in the repository root (or `firmware/`). The first
+Place `L6.BIN` or `L6max.bin` in the repository root (or `firmware/`). The first
 run unpacks it into `emulator/state/firmware/<package SHA-256>/`, once. To use
 another location pass `--firmware-package FILE` or set `L6_FIRMWARE`. An already
 unpacked set works with `--firmware-dir DIR`, and a directory named `unpacked/`
 in the root is used as is. To unpack by hand:
 
 ```sh
-cargo run -p l6fw -- unpack /path/to/L6max.bin unpacked
+cargo run -p l6fw -- unpack /path/to/L6.BIN unpacked
 ```
 
 The tool creates a new directory with main and panel images, package records,
@@ -79,24 +79,39 @@ The application owns QEMU and stops it when the window closes. The screen
 contains firmware-rendered pixels, while native components reproduce the
 panel controls and show modeled GPIO indicators.
 
-On a fresh device, the firmware asks for Date/Time and Battery Type settings.
-Use **Up**, **Down**, and **Confirm** to select, edit, and confirm fields, then
-select **OK**. The Date/Time screen initially selects OK. **Menu** opens the
-firmware menu once setup is complete.
+On a fresh L6max device, the firmware asks for Date/Time and Battery Type
+settings. Use **Up**, **Down**, and **Confirm** to select, edit, and confirm
+fields, then select **OK**. The Date/Time screen initially selects OK. **Menu**
+opens the firmware menu once setup is complete.
+
+The L6 firmware also boots. The UI includes verified hit targets for its six
+mutes, MONO and USB source keys, channel modes, COMP, EFX SEL, phantom power,
+scenes, Record, TAP, and four sound pads. Play target 4 drives active-low
+GPIO2.25 and submits runtime event `0x20`; the separately startup-sampled,
+active-low GPIO1.9 input is the Power Switch. Playback and physical Play lamp
+correlation remain unverified. The L6 has no screen, so
+first-boot setup and menu navigation remain incomplete, and encoder changes
+have no LCD readback. Some unassigned panel matrix coordinates and downstream
+control effects remain under investigation.
 
 - Scroll or drag a channel encoder to change its selected setting.
-- Click the blue control-strip buttons to select LEVEL, PAN, EQ, or send mode.
-- Scroll or drag the five global knobs to change their modeled ADC inputs.
-- Click switches to toggle their retained position.
+- On L6max, click the blue control-strip buttons to select LEVEL, PAN, EQ, or
+  send mode, scroll or drag the five global knobs, and click switches.
 - Hold **Power** for about 3.5 seconds and release to request firmware shutdown;
   click it again after the display goes blank to restart.
 
 ## Device state and media
 
-The visual emulator creates `emulator/state/sd-card.img` on first persistent
-launch. It contains four generated sample WAVs and the locally supplied update
-package. Existing cards are reused without overwriting their contents.
-Audio output is unmodeled; browsing and assignment still exercise firmware.
+The visual emulator creates a model-matched demo card on first persistent
+launch: `emulator/state/sd-card.img` for L6max and
+`emulator/state/sd-card-l6.img` for L6. It contains four generated sample WAVs,
+an additional snare sample under Pad 1, and the locally supplied update
+package. Existing cards are reused without overwriting their contents. The
+macOS GUI routes L6 SAI1 playback to CoreAudio
+by default. Headless runs can set `L6_AUDIODEV='driver=coreaudio,id=l6-audio'`;
+both models now route firmware output to the host backend using their SAI1 TDM
+stereo slots. The L6max snare playback path has been verified with QEMU's WAV
+and CoreAudio backends. The corrected signal level is under listening review.
 
 Flash and RTC settings also persist in `emulator/state/`. For an independent
 device, select another state directory:
@@ -128,7 +143,7 @@ The headless host does not automatically attach a demo card; pass
 
 ## Troubleshooting
 
-- **"no firmware found":** put `L6max.bin` in the repository root, or pass
+- **"no firmware found":** put `L6.BIN` or `L6max.bin` in the repository root, or pass
   `--firmware-package FILE` / set `L6_FIRMWARE`. Use `--firmware-dir DIR` for an
   extracted or patched image set. Inspect `emulator/logs/engine.stderr` if the
   panel appears without a running firmware screen.

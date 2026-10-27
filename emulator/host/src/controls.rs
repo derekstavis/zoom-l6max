@@ -261,3 +261,85 @@ pub const CONTROLS: &[Control] = &[
         switch: false,
     },
 ];
+
+/// Stable semantic control names shared by command-line control and scenarios.
+pub fn control_target(model: l6fw::Model, control: &str) -> Result<u32, String> {
+    if let Some(channel) = control
+        .strip_prefix("channel.")
+        .and_then(|s| s.strip_suffix(".mute"))
+        .and_then(|s| s.parse::<usize>().ok())
+    {
+        let ids: &[u32] = if model == l6fw::Model::L6 {
+            &[10, 13, 16, 19, 22, 25]
+        } else {
+            &[22, 27, 37, 42, 29, 34, 39, 44]
+        };
+        return channel
+            .checked_sub(1)
+            .and_then(|i| ids.get(i))
+            .copied()
+            .ok_or_else(|| format!("invalid control {control}"));
+    }
+    if let Some(mode) = control.strip_prefix("mode.") {
+        let index = mode_index(model, mode)?;
+        return Ok(if model == l6fw::Model::L6 {
+            [8, 11, 14, 17, 20, 23, 26, 29, 28][index]
+        } else {
+            [28, 33, 38, 43, 10, 15, 20, 25, 30, 35][index]
+        });
+    }
+    if model == l6fw::Model::L6max {
+        if let Some(control) = CONTROLS.iter().find(|entry| entry.name == control) {
+            return Ok(control.id);
+        }
+    }
+    match (model, control) {
+        (l6fw::Model::L6, "scene-a") => Ok(15),
+        (l6fw::Model::L6, "scene-b") => Ok(18),
+        (l6fw::Model::L6, "scene-c") => Ok(21),
+        (l6fw::Model::L6, "phantom-48v") => Ok(7),
+        (l6fw::Model::L6, "ch3-mono") => Ok(2),
+        (l6fw::Model::L6, "play") => Ok(4),
+        (l6fw::Model::L6, "rec-record" | "record") => Ok(24),
+        (l6fw::Model::L6, "power") => Ok(53),
+        (l6fw::Model::L6, "tap") => Ok(48),
+        (l6fw::Model::L6, "sound-pad-1") => Ok(49),
+        (l6fw::Model::L6, "sound-pad-2") => Ok(50),
+        (l6fw::Model::L6, "sound-pad-3") => Ok(51),
+        (l6fw::Model::L6, "sound-pad-4") => Ok(52),
+        (l6fw::Model::L6, "ch5-usb-1-2") => Ok(6),
+        (l6fw::Model::L6, "ch6-usb-3-4") => Ok(47),
+        (l6fw::Model::L6, "efx-type") => Ok(9),
+        (l6fw::Model::L6, "comp-master") => Ok(12),
+        (l6fw::Model::L6, "ch4-mono") => Ok(3),
+        (l6fw::Model::L6, "mode.level") => Ok(28),
+        (l6fw::Model::L6max, "mode.level") => Ok(35),
+        (l6fw::Model::L6max, "recorder.up") => Ok(1),
+        (l6fw::Model::L6max, "recorder.menu") => Ok(0),
+        (l6fw::Model::L6max, "recorder.down") => Ok(2),
+        (l6fw::Model::L6max, "recorder.confirm") => Ok(3),
+        _ => Err(format!(
+            "unsupported {} control {control}",
+            match model {
+                l6fw::Model::L6 => "L6",
+                l6fw::Model::L6max => "L6max",
+            }
+        )),
+    }
+}
+
+pub fn mode_index(model: l6fw::Model, mode: &str) -> Result<usize, String> {
+    let names: &[&str] = if model == l6fw::Model::L6 {
+        &[
+            "eq-high", "freq", "mid", "low", "aux1", "aux2", "efx", "pan", "level",
+        ]
+    } else {
+        &[
+            "eq-high", "freq", "mid", "low", "aux1", "aux2", "efx", "sub-mix", "pan", "level",
+        ]
+    };
+    names
+        .iter()
+        .position(|name| *name == mode)
+        .ok_or_else(|| format!("unsupported mode {mode}"))
+}

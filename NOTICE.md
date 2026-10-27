@@ -23,6 +23,15 @@ original project artwork, licensed under MIT.
 - [Phosphor icons](emulator/gui/assets/icons/phosphor/README.md): MIT. Preserve
   the bundled [license](emulator/gui/assets/icons/phosphor/LICENSE).
 
+## Demo audio
+
+`tools/sd-image/assets/SNARE8.WAV` is a converted snare sample from
+[Judd Madden's free drum samples](https://juddmadden.com/drum-samples.html),
+as identified by the person who supplied it. The source page states that the
+samples can be used for anything; it does not give a standard license identifier
+or separate redistribution terms. The bundled version was converted to stereo
+48 kHz float WAV. This attribution records its provenance.
+
 Cargo dependencies retain their own licenses; the project license does not
 relicense them. The macOS packager includes Cargo dependency inventories and
 available license/notice files, as well as native-library inventories and

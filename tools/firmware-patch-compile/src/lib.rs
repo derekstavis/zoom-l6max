@@ -1,6 +1,6 @@
 //! Native-only: compiles one patch's `payload.rs` to a flat ARM Thumb binary
 //! via `rustc --target=thumbv7em-none-eabihf` + `lld` + `llvm-objcopy`. Shared
-//! by the `firmware-patch` CLI and the WASM-template prebuild tool, so both
+//! by the `l6patch` CLI and the WASM-template prebuild tool, so both
 //! ever compile a payload through exactly this one code path — the whole
 //! premise of shipping precompiled templates depends on this being the same
 //! compile every time, not two paths that could silently drift apart.
@@ -75,11 +75,10 @@ pub fn compile(
     run(Command::new("rustc")
         .current_dir(source)
         .arg(root.join("src/payload.rs"))
-        // Keep embedded source paths stable when organizing payload modules.
+        // Use a checkout-independent source path in compiler-generated data.
         .arg(format!(
-            "--remap-path-prefix={}={}",
+            "--remap-path-prefix={}=patches/{name}",
             root.join("src").display(),
-            root.display()
         ))
         .args([
             "--edition=2024",

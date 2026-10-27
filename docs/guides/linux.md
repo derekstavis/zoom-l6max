@@ -36,13 +36,14 @@ wheel into a non-isolated environment.
 
 ## Build
 
-`cargo run -p l6max-gui` (or any binary) builds QEMU and unpacks `L6max.bin` from
-the repository root on first use; the steps below are for doing it explicitly.
+`cargo run -p l6max-gui` (or any binary) builds QEMU and unpacks a supported
+L6 or L6max package on first use; the steps below are for doing it explicitly.
 `qemu-build` fetches the pinned QEMU submodule (shallow) when it is missing;
 `git submodule update --init emulator/qemu/upstream` does the same by hand.
 
 ```sh
 cargo run -p l6fw -- unpack /path/to/L6max.bin unpacked
+# For L6 instead, use /path/to/L6.BIN as the package path.
 cargo run -p qemu-build
 cargo run -p l6max-host -- --qemu emulator/qemu/build-source/build/qemu-system-arm \
   --volatile --seconds 10
@@ -60,7 +61,7 @@ starts the native UI. It compiles on Linux, but see the limits below.
 
 ## Patch builder
 
-`firmware-patch` needs no LLVM installation or environment variables on Linux.
+`l6patch` needs no LLVM installation or environment variables on Linux.
 It links with `rust-lld` and extracts symbols and the flat binary with
 `llvm-nm` and `llvm-objcopy`, all from the active Rust toolchain (the
 `llvm-tools` component, which `rust-toolchain.toml` requests). Resolution order
@@ -72,16 +73,18 @@ within one toolchain.
 
 ## MIDI ports
 
-With `--usb`, the host creates one ALSA sequencer client, `L6max Emulator`,
-with three duplex ports for the USB MIDI cables, named like the macOS
-CoreMIDI endpoints:
+With `--usb`, the host creates one ALSA sequencer client with three duplex
+ports for the USB MIDI cables. The detected MAIN firmware selects its client
+and endpoint names:
 
-- `L6max MIDI I/O Port (Emulator)`
-- `L6max Mixer Control Port (Emulator)`
-- `for L6 Editor Port (Emulator)`
+- L6: client `L6 Emulator`; `L6 MIDI I/O Port (Emulator)`,
+  `L6 Mixer Control Port (Emulator)`, and `for L6 Editor Port (Emulator)`.
+- L6max: client `L6max Emulator`; `L6max MIDI I/O Port (Emulator)`,
+  `L6max Mixer Control Port (Emulator)`, and `for L6 Editor Port (Emulator)`.
 
 A separate client exposes a fourth port for the physical MIDI IN/OUT
-(DIN/TRS) jacks, `L6max MIDI In/Out Port (Emulator)`; see
+(DIN/TRS) jacks, named `L6 MIDI In/Out Port (Emulator)` or
+`L6max MIDI In/Out Port (Emulator)`; see
 [the DIN MIDI section](../emulator/usb.md#physical-midi-inout-dintrs-jacks).
 It exists regardless of USB mode, since it models a different peripheral.
 
@@ -92,7 +95,8 @@ them with:
 ```sh
 aconnect -l
 amidi -l          # raw MIDI devices only; sequencer ports appear in aconnect
-aconnect 'L6max Emulator:1' 'Your Synth:0'
+aconnect 'L6 Emulator:1' 'Your Synth:0'   # L6
+# For L6max, use: aconnect 'L6max Emulator:1' 'Your Synth:0'
 ```
 
 Opening `/dev/snd/seq` requires membership of the `audio` group on many
@@ -101,19 +105,14 @@ distributions (`sudo usermod -aG audio "$USER"`, then log in again).
 ## Checks
 
 ```sh
-cargo run -p firmware-patch -- unpacked firmware-knob-midi-v113 --patch knob-dialog --patch midi-sync
-cargo run -p knob-dialog-smoke -- --qemu "$QEMU" --firmware-dir firmware-knob-midi-v113 --volatile
-# USB-level MIDI check, independent of the host MIDI system:
-L6_MIDI_DIRECT=1 L6_MIDI_SYNC=1 cargo run -p midi-smoke -- --qemu "$QEMU" \
-  --firmware-dir firmware-knob-midi-v113 --volatile
-# Through ALSA (needs /dev/snd/seq access):
-L6_MIDI_SYNC=1 cargo run -p midi-smoke -- --qemu "$QEMU" --firmware-dir firmware-knob-midi-v113 --volatile
+cargo run -p l6patch -- unpacked firmware-knob-midi-v113 --patch knob-dialog --patch midi-sync
+cargo run --offline --locked -p l6test -- run --case knob-dialog --model l6max --config smoke.local.toml
 ```
 
-`QEMU` is the path of the built `qemu-system-arm`. Without `L6_MIDI_SYNC`,
-`midi-smoke` verifies the knob CC and the host CC to LED path as on macOS. With
-it, the check sends CC 127 and requires 84 Control Change replies, which only a
-midi-sync image produces.
+These cases use the QEMU binary and patched firmware pinned in
+`smoke.local.toml`. The direct USB case runs without the host MIDI service; the
+native case exercises ALSA and checks the model's configured MIDI-sync reply
+map.
 
 ## AppImage
 
@@ -150,13 +149,13 @@ with `WLR_BACKENDS=headless` works for automated checks. The build needs
 Verified on Ubuntu 26.04 x86_64:
 
 - QEMU 11.1.2 builds from the pinned submodule with the custom board.
-- `l6fw`, `firmware-patch`, `l6max-host` and the GUI crate build; the host test
+- `l6fw`, `l6patch`, `l6max-host` and the GUI crate build; the host test
   suite, including the MIDI bridge and FAT-volume tests, passes.
-- The macOS back end and `midi-smoke` type-check for `aarch64-apple-darwin`
+- The macOS back end and shared smoke MIDI client type-check for `aarch64-apple-darwin`
   from Linux (`cargo check`; not linked or run).
-- The headless host boots the stock firmware; `knob-dialog-smoke` passes on a
+- The headless host boots the stock firmware; the `knob-dialog` smoke case passes on a
   patched image.
-- `midi-smoke` through live ALSA ports passes on a knob+midi-sync image: knob CC,
+- The `l6test` driver through live ALSA ports passes on a knob+midi-sync image: knob CC,
   host CC to the LED ring, 80 replies to CC 127, and the ports disappear on
   shutdown. The same check passes in direct USB mode, and on the stock image
   the sync check receives 0 replies.

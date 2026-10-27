@@ -1,0 +1,8 @@
+version = 1
+name = "wasm-patch"
+models = ["l6", "l6max"]
+backends = ["headless"]
+fixture = "prepared"
+
+[[step]]
+action = "wasm-patch"

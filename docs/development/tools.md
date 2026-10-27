@@ -1,60 +1,35 @@
-# Standalone tools
+# Tool index
 
-[Documentation index](../README.md)
+This page is an index. Each command page documents its full command syntax and
+options. Run commands from the repository root unless that page says otherwise.
 
-Each CLI is its own Cargo package with a binary of the same name. Run from the
-repository root using `cargo run -p <name> -- <arguments>`. These crates do not
-depend on GPUI. The workspace lockfile and toolchain apply to all tools.
+## Emulator and device tools
 
-## Firmware and media
+| Tool | Purpose | Reference |
+| --- | --- | --- |
+| `l6test` | Qualified scenarios, suites, GUI probes, and L6max screen GIF capture | [l6test](tools/l6test.md) |
+| `l6dbg` | TOML observations and focused input, MIDI, UART-startup, and popup probes | [l6dbg](tools/l6dbg.md) |
+| `l6ctl` | Control a running emulator through its local Unix socket | [l6ctl](tools/l6ctl.md) |
+| `l6fs` | Create SD images and access SD files through USB storage | [l6fs](tools/l6fs.md) |
+| `l6fw` | Inspect, unpack and rebuild firmware packages | [l6fw](tools/l6fw.md) |
+| `qemu-run` | Low-level scripted QEMU input, memory probes and timed runs | [qemu-run](tools/qemu-run.md) |
+| `cpu-profile` | Measure CPU use, guest clock, sampled PCs and exceptions | [cpu-profile](tools/cpu-profile.md) |
 
-```sh
-cargo run -p l6fw -- unpack L6max.bin unpacked
-cargo run -p l6fw -- repack unpacked L6max-repacked.bin --recompute-checksum
-cargo run -p firmware-patch -- unpacked firmware-knob-dialog-new --update-version 0112
-cargo run -p sd-image -- emulator/state/demo.img --demo L6max.bin
-cargo run -p sd-image -- emulator/state/folder-card.img --directory /path/to/sd-folder
-```
+For the smoke driver’s TOML files, see [fixture and catalog configuration](testing.md#fixture-and-catalog-toml)
+and the complete [scenario and state-recipe schema](scenario-format.md).
+The diagnostic recipe schema is documented in the [l6dbg reference](tools/l6dbg.md#toml-recipe-schema).
 
-- `l6fw`: package unpack/repack CLI and reusable fixed-layout package library.
-- `firmware-patch`: guarded payload builder and repacker for `knob-dialog` and `midi-sync`; `--patch` may repeat to combine them.
-- `sd-image`: empty/demo cards and directory snapshots, with reusable media builders.
-- `macos-package`: firmware-free macOS app/ZIP assembly with relocated native dependencies.
-- `linux-package`: firmware-free Linux AppDir and x86_64 AppImage assembly; bundles non-host
-  libraries and records the Debian package of each.
-- `qemu-build`: stage and build the pinned QEMU submodule with the custom board;
-  an explicit external QEMU 11.1.2 source path still builds in place.
-- `qemu-run`: low-level scripted diagnostic runner using QEMU monitors.
-- `usb-files`: list, download, upload, and round-trip files through modeled USB storage.
-- `gui-probe`: run scripted guest buttons and capture display state through the host.
-- `cpu-profile`: measure idle QEMU CPU use and guest clock progression.
+## Build, patch and packaging tools
 
-## Emulator diagnostics
+| Tool | Purpose | Reference |
+| --- | --- | --- |
+| `l6patch` | Apply supported, revision-guarded firmware patches | [l6patch](tools/l6patch.md) |
+| `qemu-build` | Build the repository’s pinned QEMU fork | [qemu-build](tools/qemu-build.md) |
+| `macos-package` | Package a macOS `.app` without firmware | [macos-package](tools/macos-package.md) |
+| `linux-package` | Package a Linux AppDir/AppImage without firmware | [linux-package](tools/linux-package.md) |
+| `firmware-patch-wasm-prebuild` | Maintainer build helper for browser patch templates | [WASM template prebuild](tools/firmware-patch-wasm-prebuild.md) |
 
-Each diagnostic below has its own crate and binary, and uses `l6max-host`:
-
-```sh
-cargo run -p input-smoke -- --volatile --qemu /path/to/qemu-system-arm
-cargo run -p knob-dialog-smoke -- --volatile --firmware-dir firmware-knob-dialog-recorder-fix-v112
-```
-
-- `input-smoke`, `control-smoke`, `indicator-smoke`: input and GPIO/LED behavior.
-- `power-smoke`, `persistence-smoke`: device shutdown and persistent state.
-- `storage-smoke`, `usb-smoke`, `midi-smoke`: SD and USB services. `midi-smoke`
-  uses CoreMIDI on macOS and ALSA on Linux; `L6_MIDI_DIRECT=1` (Linux) talks USB
-  MIDI without a host MIDI system and `L6_MIDI_SYNC=1` also checks the
-  [midi-sync patch](../guides/midi-sync-patch.md) (CC 127 yields 80 replies).
-- `factory-protocol-smoke`: firmware's factory MIDI protocol.
-- `firmware-update-smoke`, `patched-update-smoke`: update preparation, replacement
-  installation, and restart checks.
-- `knob-dialog-smoke`, `popup-concurrency-smoke`, `popup-trigger-probe`: patched
-  notification behavior and recorder polling diagnostics.
-
-`diagnostics/` is a library of shared GDB helpers used by diagnostic binaries.
-Visual input checks remain in the GUI crate because they exercise GPUI event
-dispatch. See [the GUI documentation](../emulator/frontend.md) and
-[patch validation commands](../../patches/knob-dialog/README.md#validation).
-
-Run diagnostics with explicit disposable state where required. Tools that modify
-packages or create media require new output paths; proprietary firmware and
-generated artifacts remain excluded from Git.
+`smoke-core`, `sd-image`, `l6max-diagnostics`, patch compiler crates, and media
+libraries are workspace implementation crates, not standalone user commands.
+Their owning command pages link to the subsystem guides and qualification cases
+when more context is needed.

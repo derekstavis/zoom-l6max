@@ -17,9 +17,6 @@ use std::{
     time::Duration,
 };
 
-/// The single port name; back ends append [`crate::host_midi::ENDPOINT_SUFFIX`].
-pub const PORT_NAME: &str = "L6max MIDI In/Out Port";
-
 /// Bytes the host port received become writes to the UART socket.
 fn forward_host_to_uart<P: HostMidi>(
     ports: &mut P,
@@ -59,7 +56,7 @@ impl<P: HostMidi + 'static> DinMidiBridge<P> {
     /// `stream` is the host end of the pair whose other end is the guest's
     /// inherited `L6_MAIN_MIDI_UART_FD` socket. `connected` is the initial
     /// state of the native MIDI port.
-    pub fn start(stream: UnixStream, connected: bool) -> io::Result<Self> {
+    pub fn start(stream: UnixStream, connected: bool, port_name: &'static str) -> io::Result<Self> {
         stream.set_nonblocking(true)?;
         let stop = Arc::new(AtomicBool::new(false));
         let connected = Arc::new(AtomicBool::new(connected));
@@ -70,7 +67,7 @@ impl<P: HostMidi + 'static> DinMidiBridge<P> {
         let worker = thread::Builder::new()
             .name("l6-din-midi".into())
             .spawn(move || {
-                if let Err(e) = Self::run(stream, &flag, &worker_connected, &state) {
+                if let Err(e) = Self::run(stream, port_name, &flag, &worker_connected, &state) {
                     if flag.load(Ordering::Acquire) {
                         return;
                     }
@@ -97,6 +94,7 @@ impl<P: HostMidi + 'static> DinMidiBridge<P> {
     }
     fn run(
         mut stream: UnixStream,
+        port_name: &str,
         stop: &AtomicBool,
         connected: &AtomicBool,
         state: &Mutex<String>,
@@ -108,7 +106,7 @@ impl<P: HostMidi + 'static> DinMidiBridge<P> {
         while !stop.load(Ordering::Acquire) {
             let wanted = connected.load(Ordering::Acquire);
             if wanted && ports.is_none() && !unsupported {
-                match P::open(&[PORT_NAME]) {
+                match P::open(&[port_name]) {
                     Ok(opened) => {
                         ports = Some(opened);
                         set("MIDI IN/OUT port connected".into());

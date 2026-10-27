@@ -1,5 +1,5 @@
 //! ALSA sequencer client with three duplex ports.
-use super::{HostMidi, PORT_NAMES, endpoint_name};
+use super::{HostMidi, client_name_for_ports, endpoint_name};
 use alsa::seq::{MidiEvent, PortCap, PortType, Seq};
 use std::{ffi::CString, io};
 
@@ -19,7 +19,7 @@ impl HostMidi for AlsaPorts {
     fn open(names: &[&str]) -> io::Result<Self> {
         // Non-blocking so the worker can interleave USB polling.
         let seq = Seq::open(None, None, true).map_err(error)?;
-        seq.set_client_name(&CString::new("L6max Emulator").unwrap())
+        seq.set_client_name(&CString::new(client_name_for_ports(names)).unwrap())
             .map_err(error)?;
         let mut ports = Vec::new();
         for &name in names {

@@ -1,23 +1,30 @@
 # Documentation
 
-Start with [getting started](getting-started.md) to run the emulator, or
-[firmware packages](guides/firmware-packages.md) to inspect a local update file.
-Commands use the repository root unless a page says otherwise.
+This repository is maintained for emulator developers and coding agents. Start
+with the repository workflow, then use the testing or diagnostics guide for the
+task at hand.
 
-## Guides
+## Repository workflow
 
-- [macOS app](guides/macos-app.md): firmware selection, packaged builds, and local storage.
-- [Linux](guides/linux.md): packages, build, ALSA MIDI ports, and what is verified.
+1. Read the repository [agent instructions](../AGENTS.md).
+2. Check [current development status](development/current-status.md) for known
+   limits and qualification state.
+3. Use the [testing workflow](development/testing.md) for repeatable test runs,
+   or [diagnostics](development/diagnostics.md) to collect focused runtime
+   observations.
+4. Read the [scenario format](development/scenario-format.md) before extending
+   the consolidated test driver.
 
-- [Getting started](getting-started.md): prerequisites, first boot, controls,
-  device state, and troubleshooting.
-- [Firmware packages](guides/firmware-packages.md): supported input, extraction,
-  lossless repacking, and checksum regeneration.
-- [Knob value patch](guides/knob-patch.md): build, run, and validate version 1.12.
-- [MIDI state sync patch](guides/midi-sync-patch.md): ask the L6max for its full mixer state over MIDI.
-- [MIDI editor](editor.md): SwiftUI app, demo mode, and hardware/emulator transport.
+## Development references
 
-## Emulator reference
+- [CI and releases](development/ci.md): automated checks, app artifacts, and tag publishing.
+- [Tool index](development/tools.md): command references for emulator, firmware, and packaging tools.
+- [Contributing](../CONTRIBUTING.md): conventions, review, and evidence standards.
+- [Patch conventions](../patches/README.md): layout, hook guards, and adding patches.
+- [MIDI sync implementation](../patches/midi-sync/README.md): hook, getters, combining, validation.
+- [Knob patch implementation](../patches/knob-dialog/README.md): payload design, synchronization, placement, and validation.
+
+## Emulator and firmware references
 
 | Page | Topics |
 | --- | --- |
@@ -30,36 +37,32 @@ Commands use the repository root unless a page says otherwise.
 | [SD and USB](emulator/usb.md) | Card detection, CoreMIDI and ALSA MIDI, USB file transfers, limits |
 | [Power lifecycle](emulator/power.md) | GPIO power input, shutdown, restart, validation |
 
-## Firmware behavior and patches
+The [firmware overview](firmware/README.md) summarizes supported revisions,
+model differences, patch contracts, updates, and MIDI protocols. Focused pages
+cover [updates](firmware/updates.md), [MIDI protocols](firmware/protocols/editor-midi.md),
+[GUI notifications](firmware/gui/notification-lifecycle.md), and
+[parameter values](firmware/gui/parameter-values.md).
 
-The [firmware overview](firmware/README.md) introduces chip responsibilities,
-the supported revision, and evidence boundaries.
+## User and operator guides
 
-| Area | Reference |
-| --- | --- |
-| Updates | [Checks, storage handoff, panel programming, installer model](firmware/updates.md) |
-| Notifications | [Ownership and lifetime](firmware/gui/notification-lifecycle.md), [dismissal behavior](firmware/gui/popup-triggers.md) |
-| Values | [EQ units, percentages, pan/balance](firmware/gui/parameter-values.md) |
-| MIDI | [Editor protocol](firmware/protocols/editor-midi.md), [factory protocol](firmware/protocols/factory-midi.md) |
+These pages cover common setup and usage workflows for the emulator and its
+companion tools:
 
-## Development
+- [Getting started](getting-started.md): prerequisites, first boot, controls, device state, and troubleshooting.
+- [macOS app](guides/macos-app.md): firmware selection, packaged builds, and local storage.
+- [Linux](guides/linux.md): packages, build, ALSA MIDI ports, and verified scope.
+- [L6 and L6max compatibility](guides/model-compatibility.md): model detection, simulator coverage, and current patch/update limits.
+- [Firmware packages](guides/firmware-packages.md): supported input, extraction, lossless repacking, and checksum regeneration.
+- [Knob value patch](guides/knob-patch.md): build, run, and validate version 1.12.
+- [MIDI state sync patch](guides/midi-sync-patch.md): request model-specific mixer state over MIDI.
+- [MIDI editor](editor.md): SwiftUI app, demo mode, and hardware/emulator transport.
 
-- [Contributing](../CONTRIBUTING.md): repository conventions and change workflow.
-- [CI and releases](development/ci.md): automated checks, app artifacts, and tag publishing.
-- [Testing](development/testing.md): unit checks, GPIO/UI integration, patches,
-  storage, and protocol diagnostics.
-- [Tool catalog](development/tools.md): standalone Rust binaries.
-- [Patch conventions](../patches/README.md): layout, hook guards, and adding patches.
-- [MIDI sync implementation](../patches/midi-sync/README.md): hook, getters, combining, validation.
-- [Knob patch implementation](../patches/knob-dialog/README.md): payload design,
-  synchronization, placement, and detailed validation.
+## Reading behavior claims
 
-## Reading the findings
-
-- **Static evidence** describes bytes, decoded instructions, or inferred call
-  shapes; assigned names are not recovered manufacturer symbols.
+- **Compatibility findings** describe behavior scoped to the identified model
+  and firmware revision. Assigned function names are project names.
 - **Emulator evidence** describes behavior exercised in the modeled peripherals.
   Debugger stops affect timing, and replacement models have explicit limits.
 - **Hardware evidence** describes a particular tested payload or observation.
   It does not establish every scheduling interleaving or update policy.
-- **Unknowns and unsupported behavior** are listed as bullets in the relevant page.
+- **Unknowns and unsupported behavior** are listed on the relevant reference page.

@@ -8,7 +8,7 @@ pub const MIXER_GET_LEVEL: usize = 0x8000b0b0;
 /// `fn(mapped_channel: u32) -> u8`, one byte at `mapped_channel*0x18 +
 /// 0x8045ff84` — the same 24-byte-stride per-channel record `MIXER_GET_CHANNEL_FLAG`
 /// indexes into, just a different field (offset 0 there, offset 0x15 here).
-/// Paired with the setter at `MIXER_SET_MUTE`. Found by decompiling the MUTE
+/// Paired with the setter at `MIXER_SET_MUTE`. Identified through analysis of the MUTE
 /// button dispatcher (`0x80055050`), which reads this, toggles, calls
 /// `0x8000cd30` (identifier `channel | 0x50`, confirming this is MUTE) to
 /// notify, then writes the new value back with `MIXER_SET_MUTE`.

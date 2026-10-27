@@ -1,0 +1,24 @@
+[[step]]
+action = "include"
+path = "prepared-home.toml"
+
+# L6's encoder sweep passes through a blank-ring interval before MAIN's saved
+# values settle. Recheck the mixer after that interval before sending controls.
+[[step]]
+models = ["l6"]
+action = "include"
+path = "l6-post-sweep-settle.toml"
+
+# Establish a visible editing mode before taking isolated ring baselines.
+[[step]]
+action = "select-mode"
+mode = "level"
+guest_timeout_ms = 30000
+
+[[step]]
+action = "expect-mode"
+mode = "level"
+
+[[step]]
+action = "wait"
+until = "panel-settled"

@@ -1,0 +1,164 @@
+version = 1
+name = "persistence"
+models = ["l6max"]
+backends = ["headless"]
+fixture = "fresh"
+
+[[step]]
+action = "wait"
+until = "boot-ready"
+guest_timeout_ms = 120000
+wall_timeout_s = 600
+
+[[step]]
+action = "include"
+path = "fragments/recorder-next.toml"
+
+[[step]]
+action = "include"
+path = "fragments/edit-date-field.toml"
+
+[[step]]
+action = "include"
+path = "fragments/recorder-next.toml"
+
+[[step]]
+action = "include"
+path = "fragments/edit-date-field.toml"
+
+[[step]]
+action = "include"
+path = "fragments/recorder-next.toml"
+
+[[step]]
+action = "include"
+path = "fragments/edit-date-field.toml"
+
+[[step]]
+action = "include"
+path = "fragments/recorder-next.toml"
+
+[[step]]
+action = "include"
+path = "fragments/edit-date-field.toml"
+
+[[step]]
+action = "include"
+path = "fragments/recorder-next.toml"
+
+[[step]]
+action = "include"
+path = "fragments/edit-date-field.toml"
+
+[[step]]
+action = "include"
+path = "fragments/recorder-next.toml"
+
+[[step]]
+action = "press"
+control = "recorder.confirm"
+
+[[step]]
+action = "delay"
+guest_ms = 1050
+
+[[step]]
+action = "press"
+control = "recorder.confirm"
+
+[[step]]
+action = "delay"
+guest_ms = 1050
+
+[[step]]
+action = "delay"
+guest_ms = 3000
+
+[[step]]
+action = "expect-settings"
+restored = false
+
+[[step]]
+action = "restart"
+
+[[step]]
+action = "wait"
+until = "boot-ready"
+guest_timeout_ms = 120000
+wall_timeout_s = 600
+
+[[step]]
+action = "expect-settings"
+restored = true
+
+[[step]]
+action = "press"
+control = "recorder.menu"
+
+[[step]]
+action = "delay"
+guest_ms = 1500
+
+[[step]]
+action = "include"
+path = "fragments/recorder-next.toml"
+
+[[step]]
+action = "include"
+path = "fragments/recorder-next.toml"
+
+[[step]]
+action = "include"
+path = "fragments/recorder-next.toml"
+
+[[step]]
+action = "include"
+path = "fragments/recorder-next.toml"
+
+[[step]]
+action = "include"
+path = "fragments/recorder-next.toml"
+
+[[step]]
+action = "include"
+path = "fragments/recorder-next.toml"
+
+[[step]]
+action = "include"
+path = "fragments/recorder-next.toml"
+
+[[step]]
+action = "press"
+control = "recorder.confirm"
+
+[[step]]
+action = "delay"
+guest_ms = 1050
+
+[[step]]
+action = "include"
+path = "fragments/recorder-next.toml"
+
+[[step]]
+action = "include"
+path = "fragments/recorder-next.toml"
+
+[[step]]
+action = "include"
+path = "fragments/recorder-next.toml"
+
+[[step]]
+action = "include"
+path = "fragments/recorder-next.toml"
+
+[[step]]
+action = "include"
+path = "fragments/recorder-next.toml"
+
+[[step]]
+action = "press"
+control = "recorder.confirm"
+
+[[step]]
+action = "delay"
+guest_ms = 1050

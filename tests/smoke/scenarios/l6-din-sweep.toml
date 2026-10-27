@@ -1,0 +1,11 @@
+version = 1
+name = "l6-din-sweep"
+models = ["l6"]
+backends = ["headless"]
+fixture = "prepared"
+main_sha256 = "827c7c5cb2a43cc3a011d4556462b8cb9539242f817ebeed7727d66a36c03799"
+
+[[step]]
+action = "l6-din-sweep"
+guest_timeout_ms = 30000
+wall_timeout_s = 600

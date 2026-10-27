@@ -9,7 +9,8 @@ dispatch. It also provides the reusable checks used by the release workflow.
 The Apple silicon `macos-15` runner uses Xcode 26.3 and the repository's pinned
 Rust toolchain. Official GitHub actions are pinned to commit IDs.
 
-- Rust formatting, all-target workspace checks, and workspace unit tests.
+- Rust formatting, all-target workspace checks, and workspace unit tests, including
+  the shared smoke scenario engine, fixture isolation and process cleanup.
 - The standalone C GPIO indicator decoder test.
 - Swift `L6Kit` tests using simulated devices.
 - A build of QEMU 11.1.2 with the custom board and minimal optional dependencies.
@@ -19,7 +20,7 @@ Rust toolchain. Official GitHub actions are pinned to commit IDs.
 
 The workflows use no manufacturer firmware. Guest execution, native controls,
 and firmware update/patch diagnostics still require local firmware and remain
-manual checks described in [testing](testing.md).
+local checks driven by [the consolidated smoke workflow](testing.md).
 
 QEMU is initialized as a non-recursive submodule. Its unrelated ROM submodules
 are not needed for this board. The builder stages a copy before applying model
