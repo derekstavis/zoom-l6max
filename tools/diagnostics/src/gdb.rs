@@ -19,6 +19,9 @@ impl Gdb {
         let checksum = command.bytes().fold(0u8, u8::wrapping_add);
         self.0
             .write_all(format!("${command}#{checksum:02x}").as_bytes())?;
+        self.receive_packet()
+    }
+    fn receive_packet(&mut self) -> io::Result<String> {
         let mut byte = [0];
         loop {
             self.0.read_exact(&mut byte)?;
@@ -62,6 +65,19 @@ impl Gdb {
             i += 1;
         }
         String::from_utf8(data).map_err(io::Error::other)
+    }
+    /// Interrupt a running target and return its GDB stop reply.
+    pub fn interrupt(&mut self) -> io::Result<String> {
+        self.0.write_all(&[3])?;
+        self.receive_packet()
+    }
+    /// Resume the selected target until a breakpoint/exception, allowing a
+    /// longer wait for firmware boot or a deliberately injected call.
+    pub fn continue_until_stop(&mut self, timeout: Duration) -> io::Result<String> {
+        self.0.set_read_timeout(Some(timeout))?;
+        let result = self.request("c");
+        self.0.set_read_timeout(Some(Duration::from_secs(5)))?;
+        result
     }
     fn ok(&mut self, command: &str) -> io::Result<()> {
         let response = self.request(command)?;

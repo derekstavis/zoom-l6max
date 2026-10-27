@@ -1,0 +1,19 @@
+version = 1
+name = "ui-input-l6"
+models = ["l6"]
+fixture = "prepared"
+backends = ["headless", "gui"]
+
+[[step]]
+action = "wait"
+until = "boot-ready"
+guest_timeout_ms = 600000
+wall_timeout_s = 1800
+
+[[step]]
+action = "include"
+path = "fragments/l6-post-sweep-settle.toml"
+
+[[step]]
+action = "include"
+path = "fragments/l6-gui-controls.toml"

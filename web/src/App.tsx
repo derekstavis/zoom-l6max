@@ -6,7 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Checkbox } from '@/components/ui/checkbox'
 import { Label } from '@/components/ui/label'
 import { Separator } from '@/components/ui/separator'
-import { applyPatches, type PatchOutcome } from '@/lib/wasm'
+import { applyPatches, detectFirmwareModel, type FirmwareModel, type PatchOutcome } from '@/lib/wasm'
 import { PATCHES } from '@/lib/patches'
 
 type Status =
@@ -16,7 +16,7 @@ type Status =
   | { kind: 'done'; outcome: PatchOutcome; fileName: string }
 
 function downloadName(originalName: string): string {
-  const base = originalName.replace(/\.bin$/i, '') || 'L6max'
+  const base = originalName.replace(/\.bin$/i, '') || 'Zoom-L6'
   return `${base}-patched.bin`
 }
 
@@ -35,12 +35,14 @@ export default function App() {
     () => new Set(PATCHES.map((patch) => patch.id)),
   )
   const [file, setFile] = useState<File | null>(null)
+  const [model, setModel] = useState<FirmwareModel | null>(null)
   const [status, setStatus] = useState<Status>({ kind: 'idle' })
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const fileRequest = useRef(0)
 
   const canApply = useMemo(
-    () => file !== null && selected.size > 0 && status.kind !== 'working',
-    [file, selected, status],
+    () => file !== null && model !== null && selected.size > 0 && status.kind !== 'working',
+    [file, model, selected, status],
   )
 
   function togglePatch(id: string, checked: boolean) {
@@ -52,8 +54,26 @@ export default function App() {
     })
   }
 
-  async function handleApply() {
+  async function handleFile(file: File | null) {
+    const request = ++fileRequest.current
+    setFile(file)
+    setModel(null)
+    setStatus({ kind: 'idle' })
     if (!file) return
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer())
+      const detected = await detectFirmwareModel(bytes)
+      if (request !== fileRequest.current) return
+      setModel(detected)
+      setSelected(new Set(PATCHES.filter((patch) => patch.models.includes(detected)).map((patch) => patch.id)))
+    } catch (error) {
+      if (request !== fileRequest.current) return
+      setStatus({ kind: 'error', message: error instanceof Error ? error.message : String(error) })
+    }
+  }
+
+  async function handleApply() {
+    if (!file || !model) return
     setStatus({ kind: 'working' })
     try {
       const bytes = new Uint8Array(await file.arrayBuffer())
@@ -71,11 +91,12 @@ export default function App() {
     <div className="mx-auto flex min-h-svh max-w-2xl flex-col gap-8 px-4 py-10 sm:px-6">
       <header className="flex flex-col gap-3">
         <h1 className="text-3xl font-semibold tracking-tight">
-          Zoom L6max Firmware Patches
+          Zoom L6 / L6max Firmware Patches
         </h1>
         <p className="text-muted-foreground text-sm leading-relaxed">
-          Build a patched update package for the Zoom LiveTrak L6max. Pick the
-          patches you want, upload your own firmware update file, and
+          Build a patched update package for the Zoom LiveTrak L6 or L6max.
+          The firmware model is detected from the uploaded package, and only
+          patches supported by that model can be selected. Upload your own file and
           download the result.{' '}
           <a
             className="underline underline-offset-3 hover:text-foreground"
@@ -91,78 +112,30 @@ export default function App() {
 
       <Card>
         <CardHeader>
-          <CardTitle>1. Choose patches</CardTitle>
-          <CardDescription>
-            Each one is independent; combine any set. See each patch's own
-            README for full write-up, limitations, and how it was verified.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-5">
-          {PATCHES.map((patch, index) => (
-            <div key={patch.id}>
-              {index > 0 && <Separator className="mb-5" />}
-              <div className="flex items-start gap-3">
-                <Checkbox
-                  id={patch.id}
-                  checked={selected.has(patch.id)}
-                  onCheckedChange={(checked) => togglePatch(patch.id, checked === true)}
-                  className="mt-0.5"
-                />
-                <div className="flex flex-col gap-1">
-                  <Label htmlFor={patch.id} className="text-sm font-medium">
-                    {patch.title}
-                  </Label>
-                  <p className="text-muted-foreground text-sm leading-relaxed">
-                    {patch.description}
-                  </p>
-                  {patch.demoGif && (
-                    <img
-                      src={`${import.meta.env.BASE_URL}demos/${patch.demoGif}`}
-                      alt={`${patch.title} demo`}
-                      className="mt-1 w-fit max-w-full rounded-md border"
-                      loading="lazy"
-                    />
-                  )}
-                  {patch.requestCommand && (
-                    <p className="bg-muted text-muted-foreground mt-1 w-fit rounded-md px-2 py-1 text-xs leading-relaxed">
-                      {patch.requestCommand}
-                    </p>
-                  )}
-                  <a
-                    className="text-muted-foreground w-fit text-xs underline underline-offset-3 hover:text-foreground"
-                    href={patch.readmeUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    Read the full write-up
-                  </a>
-                </div>
-              </div>
-            </div>
-          ))}
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>2. Upload your firmware update file</CardTitle>
+          <CardTitle>1. Choose your firmware</CardTitle>
           <CardDescription>
             <code className="text-foreground bg-muted rounded px-1 py-0.5 text-xs">
-              L6max.BIN
+              L6.BIN or L6max.BIN
             </code>{' '}
             from the official Zoom update package — the file you'd otherwise
-            copy straight to an SD card. Only the stock 1.10 firmware is
-            supported.{' '}
+            copy straight to an SD card. Stock 1.10 firmware is supported. Get it from Zoom's{' '}
+            <a
+              className="underline underline-offset-3 hover:text-foreground"
+              href="https://zoomcorp.com/en/us/digital-mixer-multi-track-recorders/digital-mixer-recorder/livetrak-l6-final/l6-support/"
+              target="_blank"
+              rel="noreferrer"
+            >
+              L6 support
+            </a>{' '}
+            or{' '}
             <a
               className="underline underline-offset-3 hover:text-foreground"
               href="https://zoomcorp.com/en/us/digital-mixer-multi-track-recorders/digital-mixer-recorder/livetrak-l6max/l6max-support/"
               target="_blank"
               rel="noreferrer"
             >
-              Don't have it? Get it from Zoom's L6max support page
-              <ExternalLink className="ml-0.5 inline size-3 align-text-top" />
-            </a>
-            .
+              L6max support
+            </a>.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -172,8 +145,7 @@ export default function App() {
             accept=".bin"
             className="hidden"
             onChange={(event) => {
-              setFile(event.target.files?.[0] ?? null)
-              setStatus({ kind: 'idle' })
+              void handleFile(event.target.files?.[0] ?? null)
             }}
           />
           <button
@@ -185,12 +157,75 @@ export default function App() {
             <span className="text-sm font-medium">
               {file ? file.name : 'Click to choose a file'}
             </span>
+            {model && (
+              <span className="text-muted-foreground text-xs">Detected model: {model}</span>
+            )}
             {file && (
               <span className="text-muted-foreground text-xs">
                 {(file.size / 1024).toFixed(0)} KB
               </span>
             )}
           </button>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>2. Choose patches</CardTitle>
+          <CardDescription>
+            Available patches depend on the detected firmware model. Compatible
+            patches can be combined. See each patch's own README for details and
+            limitations.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-5">
+          {PATCHES.map((patch, index) => {
+            const supported = model === null || patch.models.includes(model)
+            return (
+              <div key={patch.id}>
+                {index > 0 && <Separator className="mb-5" />}
+                <div className={`flex items-start gap-3 ${supported ? '' : 'opacity-45'}`}>
+                  <Checkbox
+                    id={patch.id}
+                    checked={selected.has(patch.id)}
+                    disabled={!supported}
+                    onCheckedChange={(checked) => togglePatch(patch.id, checked === true)}
+                    className="mt-0.5"
+                  />
+                  <div className="flex flex-col gap-1">
+                    <Label htmlFor={patch.id} className="text-sm font-medium">
+                      {patch.title}
+                    </Label>
+                    <p className="text-muted-foreground text-sm leading-relaxed">
+                      {patch.description} Supported: {patch.models.join(', ')}.
+                      {!supported && ` Not available for ${model}.`}
+                    </p>
+                    {patch.demoGif && (
+                      <img
+                        src={`${import.meta.env.BASE_URL}demos/${patch.demoGif}`}
+                        alt={`${patch.title} demo`}
+                        className="mt-1 w-fit max-w-full rounded-md border"
+                        loading="lazy"
+                      />
+                    )}
+                    {patch.requestCommand && (
+                      <p className="bg-muted text-muted-foreground mt-1 w-fit rounded-md px-2 py-1 text-xs leading-relaxed">
+                        {patch.requestCommand}
+                      </p>
+                    )}
+                    <a
+                      className="text-muted-foreground w-fit text-xs underline underline-offset-3 hover:text-foreground"
+                      href={patch.readmeUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Read the full write-up
+                    </a>
+                  </div>
+                </div>
+              </div>
+            )
+          })}
         </CardContent>
       </Card>
 

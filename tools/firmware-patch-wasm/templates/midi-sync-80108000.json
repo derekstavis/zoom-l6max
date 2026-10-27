@@ -4,11 +4,13 @@
     {
       "address": "0x8003f7c8",
       "length": 4,
+      "symbol": "midi_in_hook",
       "target": "0x80108000"
     }
   ],
   "knob_dialog_call_sites": [],
   "knob_dialog_entry": null,
+  "model": "L6max",
   "name": "midi-sync",
   "payload_file": "midi-sync-80108000.bin",
   "payload_length": 1179,

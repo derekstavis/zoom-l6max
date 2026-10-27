@@ -1,19 +1,20 @@
 # Read mixer values over MIDI
 
 A MIDI controller — a motorized-fader surface, for example — only finds out
-about settings it's there to see change live. The L6max's stock firmware never
+about settings it's there to see change live. The stock firmware never
 tells a newly connected controller what the mixer's values already were, so
 the controller's faders and knobs start blank or out of sync until someone
 touches every control by hand. This patch adds a request a controller can
 send to get the mixer's entire state in one go.
 
 **To request it:** send Control Change **127** with a value of 64 or higher,
-on the MIDI channel the mixer is already configured to use. The L6max replies
-with its normal per-setting Control Change messages, covering every channel —
-the same messages it already sends whenever a value changes live, so a
-controller doesn't need any special handling to understand them.
-
-The rest of this page documents how the patch is built and verified.
+on the MIDI channel the mixer is already configured to use. The selected
+firmware profile replies with its mapped Control Change messages, so a
+controller can use the same live-change protocol to synchronize its state.
+L6max sends 94 values across its eight strips and global controls. L6 sends 54
+values across its six strips and nine mapped groups. The L6 uses a separate
+hook and payload; see the [L6 implementation notes](l6/README.md). The builder
+detects the model from the MAIN image and selects the matching profile.
 
 ## How it works
 
@@ -39,20 +40,25 @@ apply unchanged. Anything else is passed to the stock handler.
 - `hooks.tsv`: hook address, length and expected byte hash.
 - `tests/cpu_sim.py`: runs the patched hook in a CPU simulator.
 
-The builder is [`firmware-patch`](../../tools/firmware-patch/src/main.rs). See the
+The builder is [`l6patch`](../../docs/development/tools/l6patch.md). See the
 [patch conventions](../README.md).
 
 ## Build
 
-Supported input is the 1.10 main image with SHA-256
-`980d92272c1f84bed200b4d2f83575202f6a00082c928d99b9e8b53af8d44461`.
-From the repository root, with an unpacked package:
+The supported 1.10 MAIN images are L6max
+(`980d92272c1f84bed200b4d2f83575202f6a00082c928d99b9e8b53af8d44461`) and L6
+(`827c7c5cb2a43cc3a011d4556462b8cb9539242f817ebeed7727d66a36c03799`). From
+the repository root, unpack each local package and build the matching profile:
 
 ```sh
 rustup target add thumbv7em-none-eabihf
-cargo run -p firmware-patch -- unpacked firmware-midi-sync-v113 --patch midi-sync
+cargo run -p l6fw -- unpack /path/to/L6max.bin unpacked-l6max
+cargo run -p l6patch -- unpacked-l6max firmware-midi-sync-v113 --patch midi-sync
+# The separate L6 hook and payload are selected from its MAIN reset vector.
+cargo run -p l6fw -- unpack /path/to/L6.BIN unpacked-l6
+cargo run -p l6patch -- unpacked-l6 firmware-midi-sync-l6 --patch midi-sync
 # Both patches in one image:
-cargo run -p firmware-patch -- unpacked firmware-knob-midi-v113 --patch knob-dialog --patch midi-sync
+cargo run -p l6patch -- unpacked-l6max firmware-knob-midi-v113 --patch knob-dialog --patch midi-sync
 ```
 
 The default version marker is `0113` for anything but a knob-dialog-only build
@@ -143,14 +149,19 @@ numbers this yields.
 ## Validation
 
 ```sh
-cargo test -p firmware-patch
+cargo test -p l6patch
 python3 -m pip install unicorn
 python3 patches/midi-sync/tests/cpu_sim.py firmware-midi-sync-v113/main_firmware.bin
-cargo run -p midi-smoke -- --firmware-dir firmware-midi-sync-v113 --volatile
-L6_MIDI_SYNC=1 cargo run -p midi-smoke -- --firmware-dir firmware-midi-sync-v113 --volatile
+cargo run -p l6test -- run --config smoke.local.toml --case host-midi-sync --model l6max
+cargo run -p l6test -- run --config smoke.local.toml --case l6max-direct-midi-sync --model l6max
+python3 patches/midi-sync/tests/cpu_sim_l6.py firmware-midi-sync-l6/main_firmware.bin
+cargo run -p l6test -- run --config smoke.local.toml --case l6-midi-sync --model l6
+cargo run -p l6test -- run --config smoke.local.toml --case l6-direct-midi-sync --model l6
 ```
 
-`cpu_sim.py` executes the real patched hook, veneer and displaced prologue. It
+Configure the model's `prepared` fixture with its stock package and
+`patches = ["midi-sync"]`, plus suitable state if needed. See the
+[testing workflow](../../docs/development/testing.md). `cpu_sim.py` executes the L6max patched hook, veneer and displaced prologue. It
 stubs only the getters, the channel mapper, the stock sender and the stock
 handler body. It checks that a request sends 94 distinct identifiers — the 88
 per-channel values (ten original settings plus MUTE) plus the 6 globals below
@@ -159,26 +170,28 @@ stock handler untouched, that the configured MIDI channel is honoured and
 that out-of-range values are skipped. Run against the unpatched image it
 fails, as it should.
 
-`midi-smoke` with `L6_MIDI_SYNC=1` boots the patched firmware in the emulator
-and sends a live CC 127 request over the real USB Mixer Control port,
-confirming 94 Control Change replies on the configured channel and CC map —
-re-run and reconfirmed (previously 84, before MUTE/EFX TYPE/COMPRESSOR were
-found) against both this patch alone and the three-patch combined build
-(`knob-dialog` + `midi-sync` + `din-mixer-control`). Also reconfirmed on the
-combined build: `din-editor-mixer-smoke` (both with and without
-`L6_DIN_MIXER_CONTROL_FIXED=1`, matching its own documented expectations) and
-the non-sync `midi-smoke` knob check. `patched-update-smoke` (full SD-card update-install flow) was also reconfirmed
-against the combined build. `input-smoke` was not re-run this pass.
+Use the shared driver for live validation. `host-midi-sync` verifies 94
+L6max replies on the configured native host endpoint; `l6max-direct-midi-sync`
+checks the direct USB route. L6 uses `l6-midi-sync` for the paused-guest hook
+path and `l6-direct-midi-sync` for direct USB, with 54 mapped sends/replies.
+The DIN mixer scenarios are `l6max-din-mixer-control` and
+`l6max-din-mixer-control-patched`; their new driver implementations still need
+live qualification. A prior DIN mixer run exercised the combined
+build, but that result has not yet been reproduced by the driver. The
+`patched-update` case separately validates the SD-card update-install flow.
+The two MIDI-sync profiles use different firmware hooks and have separate CPU simulations and
+runtime checks; see the [L6 notes](l6/README.md) for its scope.
 
 ## Limitations
 
-- Run in QEMU, both alone and combined with `knob-dialog` and
-  `din-mixer-control`; not run on an L6max. Emulator timing is not
-  cycle-accurate to real silicon.
-- All 94 of the stock firmware's parameter identifiers are synced — the 10
+- Run in QEMU, both alone and in the documented compatible combinations; not
+  run on physical L6 or L6max hardware. Emulator timing is not cycle-accurate
+  to real silicon.
+- The L6max profile syncs all 94 of its stock parameter identifiers — the 10
   original continuous settings, MUTE (found after the initial release), and
   all 6 button-type globals (CH 5/6 MONO x2, USB 1/2, USB 3/4, EFX TYPE,
-  COMPRESSOR). Full coverage, nothing left unmapped.
+  COMPRESSOR). The L6 profile syncs its 54 enabled CC-map values; its distinct
+  mapping and evidence are listed in the [L6 implementation notes](l6/README.md).
 - The request must arrive on the configured MIDI channel, and the stock
   receive gating applies. Whether `mixerControlViaMidi` gates the parser before
   this handler is not established.
@@ -206,10 +219,9 @@ against the combined build. `input-smoke` was not re-run this pass.
   (both 27) rather than sitting below it, which bounds (but doesn't fully
   rule out) a brief round-robin scheduling delay to audio sampling on that
   path only — recording is still unaffected either way, since the
-  recorder/sampler file I/O task (28) outranks both. See the private
-  research companion for the full task roster and evidence.
+  recorder/sampler file I/O task (28) outranks both.
 - All three new getters (MUTE `0x8000b0c0`, EFX TYPE `0x8000b270`,
-  COMPRESSOR `0x8000b1c0`) decompile to single-instruction, unguarded memory
+  COMPRESSOR `0x8000b1c0`) are single-instruction, unguarded memory
   reads with no locking, no RAM writes and no calls of their own — the same
   shape as the ten getters already in production use, so they add no new
   category of risk, only new addresses of an already-trusted shape.

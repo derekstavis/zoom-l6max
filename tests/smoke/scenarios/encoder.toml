@@ -1,0 +1,20 @@
+version = 1
+name = "encoder"
+models = ["l6", "l6max"]
+fixture = "prepared"
+
+[[step]]
+action = "include"
+path = "fragments/prepared-level.toml"
+
+[[step]]
+action = "encoder"
+channel = 1
+steps = 12
+gesture = "scroll"
+
+[[step]]
+action = "expect-ring"
+channel = 1
+changed = true
+only = true

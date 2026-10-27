@@ -1,5 +1,5 @@
 //! First-run preparation: locate or build QEMU, and make firmware images
-//! available from an `L6max.bin` update package.
+//! available from an L6 or L6max update package.
 //!
 //! Both steps are skipped when the caller supplied the input explicitly, and by
 //! packaged apps (`Options::auto_setup == false`), which carry their own QEMU and
@@ -22,10 +22,15 @@ pub fn existing_qemu() -> Option<PathBuf> {
     .find(|path| path.is_file())
 }
 
-/// Packages looked for when none is given: `L6max.bin`, then `firmware/L6max.bin`,
-/// in `root`.
-pub fn package_candidates(root: &Path) -> [PathBuf; 2] {
-    [root.join("L6max.bin"), root.join("firmware/L6max.bin")]
+/// Packages looked for when none is given, preferring the original L6max
+/// default for backward compatibility while accepting either model.
+pub fn package_candidates(root: &Path) -> [PathBuf; 4] {
+    [
+        root.join("L6max.bin"),
+        root.join("L6.bin"),
+        root.join("firmware/L6max.bin"),
+        root.join("firmware/L6.bin"),
+    ]
 }
 
 fn has_images(directory: &Path) -> bool {
@@ -37,9 +42,9 @@ fn has_images(directory: &Path) -> bool {
 /// Unpack `package` into `cache/<package SHA-256>` once and return that directory.
 pub fn unpack_cached(package: &Path, cache: &Path) -> Result<PathBuf, String> {
     let bytes = fs::read(package).map_err(|e| format!("cannot read {}: {e}", package.display()))?;
-    l6fw::check_layout(&bytes).map_err(|e| {
+    l6fw::model_from_package(&bytes).map_err(|e| {
         format!(
-            "{} is not a supported L6max update package: {e}",
+            "{} is not a supported L6/L6max update package: {e}",
             package.display()
         )
     })?;
@@ -61,9 +66,9 @@ pub fn unpack_cached(package: &Path, cache: &Path) -> Result<PathBuf, String> {
     Ok(directory)
 }
 
-const MISSING_FIRMWARE: &str = "no firmware found. Supply your own L6max 1.10 update package \
-(not distributed with this project; ZOOM publishes it on the L6max support page) by any of: \
-placing L6max.bin in the repository root, `--firmware-package /path/to/L6max.bin`, the \
+const MISSING_FIRMWARE: &str = "no firmware found. Supply your own L6 or L6max update package \
+(not distributed with this project; obtain it from ZOOM) by any of: \
+placing L6.bin or L6max.bin in the repository root, `--firmware-package /path/to/package.bin`, the \
 L6_FIRMWARE environment variable, or `--firmware-dir` with an unpacked package";
 
 impl Options {
@@ -80,7 +85,7 @@ impl Options {
         match &self.qemu {
             // A rebuilt board model must not silently run against an old binary.
             Some(path) if *path == staged && can_build(root) && is_stale(root, path) => {
-                eprintln!("The L6max board model changed; rebuilding QEMU...");
+                eprintln!("The L6/L6max board model changed; rebuilding QEMU...");
                 if let Err(error) = build_locked(&Request {
                     repository: root.to_path_buf(),
                     source: None,
@@ -92,7 +97,7 @@ impl Options {
             Some(_) => {}
             None if can_build(root) => {
                 eprintln!(
-                    "Building QEMU with the L6max board (first run only; this takes several minutes)..."
+                    "Building QEMU with the L6/L6max board (first run only; this takes several minutes)..."
                 );
                 self.qemu = Some(
                     build_locked(&Request {
@@ -157,7 +162,9 @@ mod tests {
     fn package_candidates_are_the_documented_locations() {
         let candidates = package_candidates(Path::new("/repo"));
         assert_eq!(candidates[0], Path::new("/repo/L6max.bin"));
-        assert_eq!(candidates[1], Path::new("/repo/firmware/L6max.bin"));
+        assert_eq!(candidates[1], Path::new("/repo/L6.bin"));
+        assert_eq!(candidates[2], Path::new("/repo/firmware/L6max.bin"));
+        assert_eq!(candidates[3], Path::new("/repo/firmware/L6.bin"));
     }
 
     #[test]

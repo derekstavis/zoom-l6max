@@ -1,0 +1,25 @@
+{
+  "base": "0x800b6af0",
+  "hooks": [
+    {
+      "address": "0x8002f490",
+      "length": 4,
+      "symbol": "midi_in_hook",
+      "target": "0x800b6af0"
+    }
+  ],
+  "knob_dialog_call_sites": [],
+  "knob_dialog_entry": null,
+  "model": "L6",
+  "name": "midi-sync",
+  "payload_file": "midi-sync-l6-800b6af0.bin",
+  "payload_length": 244,
+  "window_byte_total": 4,
+  "windows": [
+    {
+      "firmware_address": "0x8002f490",
+      "length": 4,
+      "payload_offset": 232
+    }
+  ]
+}

@@ -1,4 +1,14 @@
+pub mod button;
 pub mod controls;
+pub mod encoder;
+pub mod indicator_led;
 pub mod knobs;
 pub mod layout;
+pub mod midi_jack;
 pub mod panel;
+pub mod power_button;
+pub mod switch;
+pub mod trs_jack;
+pub mod usb_c_port;
+pub mod vu_meter;
+pub mod xlr_jack;

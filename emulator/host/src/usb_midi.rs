@@ -158,7 +158,7 @@ pub struct MidiBridge<P: HostMidi = NativeMidi> {
     backend: PhantomData<fn() -> P>,
 }
 impl<P: HostMidi + 'static> MidiBridge<P> {
-    pub fn start(usb: Arc<UsbHost>) -> io::Result<Self> {
+    pub fn start(usb: Arc<UsbHost>, port_names: &'static [&'static str; 3]) -> io::Result<Self> {
         let stop = Arc::new(AtomicBool::new(false));
         let status = Arc::new(Mutex::new("Waiting for firmware USB startup".to_owned()));
         let flag = stop.clone();
@@ -167,7 +167,7 @@ impl<P: HostMidi + 'static> MidiBridge<P> {
         let worker = thread::Builder::new()
             .name("l6-usb-midi".into())
             .spawn(move || {
-                if let Err(e) = Self::run(&worker_usb, &flag, &state) {
+                if let Err(e) = Self::run(&worker_usb, port_names, &flag, &state) {
                     if flag.load(Ordering::Acquire) {
                         return;
                     }
@@ -191,7 +191,12 @@ impl<P: HostMidi + 'static> MidiBridge<P> {
     pub fn disconnect(mut self) {
         self.shutdown_usb_on_drop = false;
     }
-    fn run(usb: &UsbHost, stop: &AtomicBool, state: &Mutex<String>) -> io::Result<()> {
+    fn run(
+        usb: &UsbHost,
+        port_names: &[&str; 3],
+        stop: &AtomicBool,
+        state: &Mutex<String>,
+    ) -> io::Result<()> {
         let set = |text: String| *state.lock().unwrap() = text;
         let mut ports: Option<P> = None;
         let mut unsupported = false;
@@ -206,7 +211,7 @@ impl<P: HostMidi + 'static> MidiBridge<P> {
                             set("USB File Transfer mode; MIDI unavailable".into());
                             ports = None;
                         } else if ports.is_none() && !unsupported {
-                            match P::open(&PORT_NAMES) {
+                            match P::open(port_names) {
                                 Ok(opened) => {
                                     ports = Some(opened);
                                     set("Three native MIDI ports connected".into());

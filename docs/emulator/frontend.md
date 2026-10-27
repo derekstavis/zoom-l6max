@@ -1,4 +1,4 @@
-# Native L6max UI
+# Native L6/L6max UI
 
 [Documentation index](../README.md)
 
@@ -19,39 +19,49 @@ the repository root:
 cargo run -p l6max-gui -- /path/to/qemu-system-arm
 ```
 
-The application owns QEMU's lifetime. It uses `L6_QEMU` or the local
-`/private/tmp/l6-qemu-src/build/qemu-system-arm` when no path is supplied.
-Without QEMU it shows the panel only. Optional arguments are
+The application owns QEMU's lifetime. Automatic setup builds the pinned QEMU
+when no executable is supplied. Use `--qemu PATH` or `L6_QEMU` to select an
+existing executable. Optional arguments are
 `--firmware-dir DIR`, `--logs DIR`, `--sd-image FILE`, and
 `--timing paced|adaptive` (default: `paced`).
 Firmware is supplied locally and excluded from Git.
 
-The normal persistent visual UI creates `emulator/state/sd-card.img` on first
-launch and reuses it thereafter. With `--state-dir DIR`, the card is `DIR/sd-card.img`.
-It is a 128 MiB FAT16 card with 16 KiB clusters, the locally supplied
-`L6max.bin` copied to `/L6max.BIN`, and four generated one-second mono
-48 kHz / 16-bit WAV tones in `/SOUND_PAD/PAD1` through `/SOUND_PAD/PAD4`.
-These paths and audio format follow the
-[ZOOM operation manual](https://zoomcorp.com/manuals/l6max-en/).
+The normal persistent visual UI creates a model-matched demo card on first
+launch and reuses it thereafter. The L6max card is `emulator/state/sd-card.img`;
+the L6 card is `emulator/state/sd-card-l6.img`. With `--state-dir DIR`, those
+names are `DIR/sd-card.img` and `DIR/sd-card-l6.img`, respectively.
+It is a 128 MiB FAT16 card with 16 KiB clusters, a copy of the selected local
+firmware package at `/L6.BIN` or `/L6max.BIN` according to its detected model,
+and four generated one-second mono 48 kHz / 16-bit WAV tones in
+`/SOUND_PAD/PAD1` through `/SOUND_PAD/PAD4`.
+Pad 1 also contains `SNARE8.WAV`, a 3.8-second stereo 48 kHz / 32-bit-float
+sample. That format meets the L6max assignment requirement and is supported
+by L6, which converts supported WAV rates to 48 kHz on assignment. See the
+[L6max manual](https://zoomcorp.com/manuals/l6max-en/) and
+[L6 manual](https://zoomcorp.com/manuals/l6-en/).
 Existing cards are never repopulated or overwritten. `--sd-image FILE` selects
 your own card; `--no-sd` starts without a card. Disposable `--volatile` runs and
 headless tools retain explicit SD selection.
 
-Try the samples in **Menu → Sound Pad → Sound Assign**. Audio output is still
-unmodeled; file browsing and assignment exercise the firmware's SD paths.
+Try the samples in **Menu → Sound Pad → Sound Assign**. The generated demo
+tones have been assigned and played through the L6max SAI1 path in the
+headless audio smoke; see [audio](audio.md) for the trace and WAV-backend
+details.
 The original package is version 1.10, so use **Menu → System → Firmware →
 Firmware Update** to try reinstalling it; a newer-version startup prompt is not
 expected. Select **Execute**, hold **Power** for about 3.5 seconds and release.
 When the display goes blank, click **Power** again. The standard persistent visual UI
-automatically enables the replacement installer on power-on. If first-boot
-Date/Time appears, confirm its settings before opening the menu. A freshly
+automatically enables the replacement installer on power-on. On first boot,
+complete Date/Time followed by Battery Type before opening the menu. Persistent
+state retains those settings and the panel RTC across restarts. A freshly
 created card can also show the firmware's “New card detected — Test the card?”
 notification on first insertion.
 
-To create another populated card, including one with a locally patched package:
+To create another populated card, including one with a locally patched L6 or
+L6max package:
 
 ```sh
-cargo run -p sd-image -- /path/to/card.img --demo /path/to/L6max.bin
+cargo run -p l6fs -- card demo /path/to/card.img --firmware-package /path/to/L6max.bin
 cargo run -p l6max-gui -- --sd-image /path/to/card.img
 ```
 
@@ -60,23 +70,37 @@ with `--state-dir DIR`, or use `--volatile` to discard storage on exit. See the
 [nonvolatile storage map](storage.md) for version records,
 settings banks, calibration, and restart validation.
 
-The standard persistent visual UI enables a Rust replacement for the unavailable SD installer;
-headless tools enable it with `--update-bootloader`. It runs
-before QEMU starts. It acts only on a pending update record in persistent NOR,
-reads `L6max.BIN` from the attached SD image, and supports the observed MAIN-only
-package layout. Restart the app with the same state and SD after update
-preparation. It preserves the bootloader region, calibration and settings;
-the actual main firmware performs panel programming. See the
+The standard persistent visual UI enables a Rust replacement for the
+unavailable SD installer for either detected model; headless tools enable it
+with `--update-bootloader`. It runs before QEMU starts. It acts only on a
+pending update record in persistent NOR and reads the model-matched `L6.BIN` or
+`L6max.BIN` from the attached SD image. L6's main and panel images are placed
+into their installed NOR slots and its resource region is written to separate
+persistent resource flash. Restart the app with the same state and SD after
+update preparation. The installer preserves the bootloader region,
+calibration, and settings; the actual main firmware performs panel programming.
+This replacement models the update path for emulator validation; physical
+bootloader behavior remains unverified. See the
 [firmware update map](../firmware/updates.md) for checks and limits.
 
 Use `--usb` to expose the firmware's three USB MIDI ports through CoreMIDI on
 macOS or the ALSA sequencer on Linux. The [SD and USB guide](usb.md) describes card-image
 creation, host file transfers, controller wiring, validation and current limits.
 
-The window starts at 1200×464, fitted to the device body rather than the
-promotional image margins. Resizing
+The initial window follows each model's body proportions: approximately
+942×465 for L6 and 1200×464 for L6max. The L6 ratio comes from the manual's
+419.3×206.8 faceplate outline. This keeps the L6 narrower while
+rendering shared-size hardware at a comparable on-screen scale. Resizing
 scales the panel, LCD, button hit zones, and encoder zones together. macOS
-constrains the content aspect ratio; the minimum content size is 600×232.
+constrains the content aspect ratio; the minimum content size is 600×296 for
+L6 and 600×232 for L6max.
+
+L6 panel positions and control proportions follow the front-panel vector
+drawing in the [official L6 operation manual](https://zoomcorp.com/documents/3263/E_L6.pdf).
+The lower channel knob fields and their horizontal boundary lines follow that
+drawing as well. All L6 1/4-inch TRS channel and output jacks share one size.
+The L6max panel keeps its existing layout rather than being re-derived from
+its manual.
 Status appears in the native title bar. Closing the window quits the app and
 stops/reaps QEMU. Application quit explicitly shuts the guest down.
 
@@ -90,12 +114,14 @@ segment is created with `shm_open` and immediately unlinked; on Linux it uses
 `memfd_create`. The descriptor identifies a kernel memory object. QEMU owns
 guest RAM privately.
 
-Investigation pointed to SPI/eDMA transfers as the display update boundary.
-QEMU consumes those transfers into display controller RAM. Completed transfers
-publish a frame slot and generation notification. The slot stays immutable
-until Rust copies it and acknowledges consumption. When both slots are
-occupied, the producer coalesces pending completed frames. The GPUI frame tick
-drains notifications and paints the newest frame.
+For L6max, investigation pointed to SPI/eDMA transfers as the OLED update
+boundary. QEMU consumes those transfers into display controller RAM. Completed
+transfers publish a frame slot and generation notification. The slot stays
+immutable until Rust copies it and acknowledges consumption. When both slots
+are occupied, the producer coalesces pending completed frames. The GPUI frame
+tick drains notifications and paints the newest frame. L6 has no display:
+QEMU closes its inherited frame descriptor and does not decode its transfers
+as OLED traffic. Its resource-flash path through LPSPI3 at `0x403a0000` remains enabled.
 
 ## Native panel components
 
@@ -115,11 +141,42 @@ or product photograph is bundled. The development profile optimizes
 GPUI and its icon renderer while retaining application debug assertions and
 symbols.
 
-The native composition places the outer body, blue strips, staggered combo
-inputs, recorder enclosure, and LCD opening using shared layout constants.
-Repeated controls use shared dimensions and baselines. A plain EMULATOR label
-replaces manufacturer artwork; control symbols use Lucide and Phosphor icons.
-Native macOS text requires the `font-kit` feature on `gpui_platform`.
+The renderer dispatches to separate `components/panel/l6.rs` and
+`components/panel/l6max.rs` views; their reusable drawing helpers live in
+`components/panel/shared.rs`, alongside the common controls and knobs. The L6
+faceplate has six channels, a channel-strip selector, MIDI, AUX SEND, MASTER,
+and MONITOR sections, with no LCD. The L6max retains its eight-channel layout,
+SUB-OUT section, and recorder LCD. Native macOS text requires the `font-kit`
+feature on `gpui_platform`. Shared socket components use the same rendered
+physical size on both model windows; all L6 channel and output 1/4-inch jacks
+share one diameter.
+
+Both panels can be rendered through GPUI's headless Metal renderer without
+opening an app window. Captures use each model's normal window proportions and
+scale. From the repository
+root, run:
+
+```sh
+cargo run -p l6max-gui --features 'gpui_platform/runtime_shaders,headless-screenshots' -- \
+  --render-panel l6 --output docs/images/l6-panel-headless.png
+cargo run -p l6max-gui --features 'gpui_platform/runtime_shaders,headless-screenshots' -- \
+  --render-panel l6max --output docs/images/l6max-panel-headless.png
+cargo run -p l6max-gui --features 'gpui_platform/runtime_shaders,headless-screenshots' -- \
+  --render-panel l6 --powered-off --output docs/images/l6-panel-powered-off.png
+```
+
+The screenshots below come from those model-specific panel components.
+The L6's removable center wordmark and `32-bit FLOAT` badge stickers are not
+part of the faceplate and are omitted from the rendering.
+
+![Headless-rendered L6 panel](../images/l6-panel-headless.png)
+
+![Headless-rendered L6max panel](../images/l6max-panel-headless.png)
+
+The optional `--powered-off` flag renders the L6 panel with its virtual POWER
+lamp off:
+
+![Headless-rendered L6 with virtual power off](../images/l6-panel-powered-off.png)
 
 ### Indicator surface
 
@@ -136,10 +193,27 @@ encoder target values, or firmware RAM variables drive the indicators.
 The native renderer maps the 72 ring outputs to nine native canvas arcs per knob. Investigation pointed to the main firmware wiring table at
 `0x800c460c` and the nine-output ring function at `0x8000c4f0`. The outputs
 are distributed across commons; a common does not represent a whole knob.
-The renderer also maps mute, Hi-Z, phantom power, channel modes, the blue
+The L6 panel uses that decoder for its six visible channel rings. Fresh-boot
+USB MIDI traces for CC 83–88 each changed only the corresponding decoded ring,
+and isolated L6 panel-input tests changed the matching ring for every encoder.
+These checks validate the ring renderer against L6 firmware output in QEMU;
+physical panel wiring remains uninspected.
+The L6max renderer also maps mute, Hi-Z, phantom power, channel modes, the blue
 control strip, sound pads, Record, TAP, scenes, effect selection, and SIGNAL
-indicators. The [control wiring map](controls.md) records logical
-indices and firmware evidence. SIGNAL uses red priority when both colors are on.
+indicators. The [control wiring map](controls.md) records logical indices and
+firmware evidence. SIGNAL uses red priority when both colors are on. L6 mute
+buttons send their verified events. Their lamp outputs use an L6-specific map
+measured by toggling the stock USB Mixer Control CCs: channels 1–2 use row 4,
+3–4 row 5, and 5–6 row 6, with alternating `0x800` and `0x400` masks. The
+Sequential physical-button target tests and incoming mixer CCs both toggle the
+matching lamp output. The channel-strip renderer places MONO ×2 and USB source
+buttons on their separate upper row, while mute buttons remain on the lower
+row. COMP and shared 48V use their measured row-7 lamps. The L6 channel-mode
+buttons are interactive and show their selected state using L6-specific
+outputs; PAN reuses the pin L6max assigns to SUB-MIX. The UI smoke checks all
+nine mode selections, EFX SEL and its Room indicator; sequential firmware
+tracing maps all five effect indicators to their printed Hall, Room, Spring,
+Delay, and Echo labels.
 
 Dragging a knob upward or right raises its level; downward or left lowers it.
 The first movement locks the drag axis until release. Scrolling also adjusts
@@ -148,8 +222,10 @@ a knob and a closed hand while dragging. Firmware computes the ring output,
 including its mode-dependent pattern.
 
 - Individual PWM brightness levels are not rendered yet.
-- Play/Stop and Bounce illumination, logical LED 32, and indices 60–71
-  have no verified visual assignments.
+- L6 Play/Stop and TAP illumination, L6max Bounce illumination, logical LED 32,
+  and logical indices 60–71 have no verified visual assignments. L6 sound-pad
+  playback lamps are mapped and verified in the [control wiring
+  findings](controls.md#main-gpio-controls).
 - Audio-driven SIGNAL transitions remain untested.
 
 Control bounds come from the shared layout specification. All switches use the
@@ -228,90 +304,73 @@ panel application. Guest-requested chip resets remain local to that chip.
 
 ## CPU consumption
 
-Investigation pointed to the main firmware's FreeRTOS idle task as the dominant
-idle workload. Register samples repeatedly landed at `0x80085150`–`0x8008515c`:
-the loop checks deleted-task cleanup and the idle-priority ready list, and
-requests PendSV when another idle-priority task can run. It does not execute
-`WFI`. The instruction pattern matches the cleanup and ready-list checks in
-[FreeRTOS's idle task](https://github.com/FreeRTOS/FreeRTOS-Kernel/blob/main/tasks.c).
-The panel usually waits at its interrupt-sleep routine (`0x080019b8`),
-but TIM2 still interrupts every 50 µs.
-
-QEMU's adaptive instruction clock adjusts virtual time against wall time; it
-does not impose a host CPU budget. The paced default bounds instruction
-execution and explicitly sleeps when ahead, retaining the same virtual timer
-deadlines. Firmware images are loaded unchanged. See
-[QEMU instruction-count timing](https://www.qemu.org/docs/master/devel/tcg-icount.html).
-
-Compare both modes using the Rust diagnostic harness. It consumes display
-publications, waits 45 seconds for startup, then measures QEMU process CPU
-time over 20 seconds, samples each guest PC, and compares guest acknowledgment
-timestamps with wall time. Run modes separately so they do not compete for CPU:
-
-```sh
-cargo run -p cpu-profile -- --timing paced --logs emulator/logs/cpu-paced
-cargo run -p cpu-profile -- --timing adaptive --logs emulator/logs/cpu-adaptive
-```
-
-The benchmark sends two encoder steps to obtain guest timestamps. CPU readings
-use `ps`; 100% represents one host core. Hardware, QEMU builds, and guest activity
-affect the result.
-
-An idle Date/Time measurement with the local macOS/QEMU build gave 115.0%
-CPU in adaptive mode and 76.7% in paced mode, a 33% reduction. In paced mode,
-20.036 seconds of wall time corresponded to 20.041 seconds of guest time.
-The main PC was inside the identified idle loop in 119 of 125 paced samples.
-
-- Slower fixed settings (`shift=4` and `shift=5`) caused an Error dialog during
-  startup and failed visible button-response validation.
-- Paced timing has been exercised through startup, Date/Time editing, control
-  input, SD update/restart, and popup integration diagnostics. Audio processing
-  remains unmodeled; these tests do not establish accurate hardware cycle costs.
-- Idle-loop acceleration could reduce CPU further, but would require explicit
-  treatment of scheduler semantics and interrupt wakeups.
+The emulator executes firmware on two modeled processors. CPU use depends on
+the selected model, firmware activity and timing mode.
 
 ## Validation
 
-The live integration check saves firmware screenshots and checks QMP pause,
-guest-time release deadlines, exact key packets, visible display changes,
-encoder reports, and Date/Time editing:
+Use [the consolidated `l6test` driver](../development/testing.md) for shared
+headless/GPUI scenarios. Both adapters use the production `PanelFeed` and
+`PanelData` in `l6max-host`; the common `smoke-core` state machine owns assertions.
+The native adapter translates commands to real GPUI hit-region events. Headless
+success covers the common backend for the same binary/fixture/scenario; GPU
+rendering, hit testing and event scheduling still require GUI checks.
+
+Focused panel interaction checks use the TOML driver:
+
+
+The L6 and L6max input scenarios check their model-specific controls, reports,
+display changes, and startup timing:
 
 ```sh
-cargo run -p input-smoke -- --volatile --qemu /path/to/qemu-system-arm --logs emulator/logs/input-smoke
+cargo run --offline --locked -p l6test -- run --case l6-input-sweep --model l6 --config smoke.local.toml
+cargo run --offline --locked -p l6test -- run --case l6max-input-smoke --model l6max --config smoke.local.toml
 ```
 
 Output stays local in the ignored logs directory.
 
-The native UI check dispatches events directly through GPUI's window event
+The shared `panel` scenario dispatches events directly through GPUI's window event
 dispatcher. It uses shared component bounds and the real UI handlers, without moving,
 clicking, or depending on the system pointer. Each gesture is dispatched as one
 batch so physical pointer motion cannot interrupt it. The check completes
 setup with two clicks, tests vertical/horizontal drags and scrolling in both
 directions, and verifies GPIO rings, mute and HIGH LEDs, a persistent dB
 switch, Power GPIO edges, all five ADC knobs in both directions, analog drags,
-and exact firmware input counts:
+and exact firmware input counts on L6max. For L6 it exercises the six rendered
+encoder hit zones and verifies one distinct encoder event per zone. Run it
+through the driver with:
 
 ```sh
-cargo run -p l6max-gui -- --volatile --ui-input-smoke --logs emulator/logs/ui-input-smoke
+cargo run --offline --locked -p l6test -- run --case panel --model l6 --backend gui --config smoke.local.toml
+cargo run --offline --locked -p l6test -- run --case panel --model l6max --backend gui --config smoke.local.toml
 ```
 
-Set `L6_UI_SMOKE_HOLD=1` to retain the successful test window for inspection
-for up to ten minutes.
+The legacy `--ui-input-smoke` flag now returns an error directing callers to
+these supervised driver cases.
 
 The control check exercises all 50 controls through GPIO, captures indicator
 changes, checks mute outputs, and checks firmware press/release packet counts
 for the remaining panel controls:
 
 ```sh
-cargo run -p control-smoke -- --volatile --qemu /path/to/qemu-system-arm --logs emulator/logs/control-smoke
+cargo run --offline --locked -p l6test -- run --case panel --model l6 --backend gui --config smoke.local.toml
+cargo run --offline --locked -p l6test -- run --case panel --model l6max --backend gui --config smoke.local.toml
 ```
 
-The indicator check completes first-boot setup, turns all eight encoders,
-checks that only the corresponding GPIO ring changes, reverses the last turn,
-and checks exact firmware encoder report counts:
+The indicator check detects the model from its firmware. For L6max it completes
+first-boot setup, turns all eight encoders, checks that only the corresponding
+GPIO ring changes, reverses the last turn, and checks exact firmware encoder
+report counts. Use a known L6max state copy and SD image:
 
 ```sh
-cargo run -p indicator-smoke -- --volatile --qemu /path/to/qemu-system-arm --logs emulator/logs/indicator-smoke
+cargo run --offline --locked -p l6test -- run --case indicators --model l6max --config smoke.local.toml
+```
+
+For L6, the same driver case checks six panel encoder reports and raw indicator
+rows without assuming the L6max ring map:
+
+```sh
+cargo run --offline --locked -p l6test -- run --case indicators --model l6 --config smoke.local.toml
 ```
 
 ## Limitations

@@ -1,0 +1,68 @@
+version = 1
+name = "usb-storage"
+models = ["l6max"]
+backends = ["headless"]
+fixture = "prepared"
+
+[[step]]
+action = "include"
+path = "fragments/prepared-home.toml"
+
+[[step]]
+action = "press"
+control = "recorder.menu"
+
+[[step]]
+action = "delay"
+guest_ms = 1500
+
+[[step]]
+action = "press"
+control = "recorder.down"
+
+[[step]]
+action = "delay"
+guest_ms = 1000
+
+[[step]]
+action = "press"
+control = "recorder.down"
+
+[[step]]
+action = "delay"
+guest_ms = 1000
+
+[[step]]
+action = "press"
+control = "recorder.down"
+
+[[step]]
+action = "delay"
+guest_ms = 1000
+
+[[step]]
+action = "press"
+control = "recorder.down"
+
+[[step]]
+action = "delay"
+guest_ms = 1000
+
+[[step]]
+action = "press"
+control = "recorder.down"
+
+[[step]]
+action = "delay"
+guest_ms = 1000
+
+[[step]]
+action = "press"
+control = "recorder.confirm"
+
+[[step]]
+action = "delay"
+guest_ms = 3000
+
+[[step]]
+action = "usb-storage"

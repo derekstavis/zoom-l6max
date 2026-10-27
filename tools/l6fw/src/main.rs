@@ -13,7 +13,7 @@ fn run() -> Result<(), String> {
             repack(Path::new(input), Path::new(output), true)
         }
         _ => Err(
-            "usage: cargo run --bin l6fw -- <unpack SOURCE DIR | repack DIR OUTPUT [--recompute-checksum]>"
+            "usage: cargo run --bin l6fw -- <unpack PACKAGE DIR | repack DIR PACKAGE [--recompute-checksum]> (L6 and L6max are detected from the package header)"
                 .into(),
         ),
     }

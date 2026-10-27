@@ -1,0 +1,32 @@
+[[step]]
+action = "wait"
+until = "boot-ready"
+guest_timeout_ms = 120000
+wall_timeout_s = 600
+
+[[step]]
+models = ["l6max"]
+action = "press"
+control = "recorder.down"
+
+[[step]]
+models = ["l6max"]
+action = "delay"
+guest_ms = 2000
+
+[[step]]
+models = ["l6max"]
+action = "press"
+control = "recorder.confirm"
+
+[[step]]
+models = ["l6max"]
+action = "delay"
+guest_ms = 5000
+
+# The panel sweep can finish before MAIN restores mixer values.
+[[step]]
+action = "wait"
+until = "mixer-ready"
+guest_timeout_ms = 30000
+wall_timeout_s = 180

@@ -1,0 +1,10 @@
+version = 1
+name = "patched-update"
+models = ["l6", "l6max"]
+backends = ["headless"]
+fixture = "patched-update"
+
+[[step]]
+action = "firmware-update"
+guest_timeout_ms = 300000
+wall_timeout_s = 1200

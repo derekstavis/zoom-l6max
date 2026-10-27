@@ -1,0 +1,10 @@
+[[step]]
+action = "delay"
+guest_ms = 5000
+guest_timeout_ms = 10000
+wall_timeout_s = 60
+
+[[step]]
+action = "usb-descriptors"
+guest_timeout_ms = 30000
+wall_timeout_s = 120

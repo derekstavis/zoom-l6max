@@ -1,0 +1,60 @@
+version = 1
+name = "l6max-direct-midi-sync"
+models = ["l6max"]
+backends = ["headless"]
+fixture = "prepared"
+
+[[step]]
+action = "delay"
+guest_ms = 40000
+guest_timeout_ms = 45000
+wall_timeout_s = 900
+
+[[step]]
+action = "press"
+control = "recorder.confirm"
+
+[[step]]
+action = "delay"
+guest_ms = 1950
+
+[[step]]
+action = "press"
+control = "recorder.confirm"
+
+[[step]]
+action = "delay"
+guest_ms = 4950
+
+[[step]]
+action = "direct-usb-midi-round-trip"
+guest_timeout_ms = 15000
+wall_timeout_s = 120
+
+[[step]]
+action = "host-midi-sync"
+guest_timeout_ms = 30000
+wall_timeout_s = 120
+
+# Mixer Control messages use USB MIDI cable 1. Verify the neighboring cables
+# and an unused cable remain isolated from the firmware's channel-1 ring.
+[[step]]
+action = "direct-usb-midi-round-trip"
+cable = 0
+expect_ring_change = false
+guest_timeout_ms = 15000
+wall_timeout_s = 120
+
+[[step]]
+action = "direct-usb-midi-round-trip"
+cable = 2
+expect_ring_change = false
+guest_timeout_ms = 15000
+wall_timeout_s = 120
+
+[[step]]
+action = "direct-usb-midi-round-trip"
+cable = 5
+expect_ring_change = false
+guest_timeout_ms = 15000
+wall_timeout_s = 120

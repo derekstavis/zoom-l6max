@@ -90,8 +90,18 @@ emulator/
   qemu/   # Custom QEMU board and peripheral models
 tools/
   l6fw/   # Package library + unpack/repack binary
-  ...     # One crate per CLI; shared diagnostic helpers in diagnostics/
+  l6test/      # Canonical suite driver, GUI probe, and fixture supervision
+  smoke-core/  # Scenarios and assertions shared by headless and GPUI adapters
+  l6dbg/       # Focused runtime diagnostics
+  l6ctl/       # Local control client for a running emulator
+  l6fs/        # SD image and USB storage commands
+  ...          # Specialized tools; GDB helpers in diagnostics/
 ```
+
+The production `host::panel::PanelFeed` retains completed display pixels and
+assembles `PanelData` for both the GUI and headless scenario session. The
+`smoke-core` state machine owns shared assertions; its native adapter dispatches
+real GPUI input events. See [the testing workflow](../development/testing.md).
 
 The GUI depends on the host library and owns an engine instance. The headless
 binary owns the same engine without creating a window. QEMU remains a child
@@ -101,8 +111,9 @@ communicating processes.
 The host owns QEMU lifetime, sockets, anonymous shared memory, input, LCD frame
 publication, persistence, and USB services. GPUI, UI components, assets, pointer
 gestures, and visual demo defaults live in the GUI crate. Pure package validation
-belongs to `l6fw`; demo card creation belongs to `sd-image`. Both can be built
-without GPUI. Emulator diagnostics use the host library directly.
+belongs to `l6fw`; demo card creation belongs to the `l6fs` CLI over the
+`sd-image` library. These tools can be built without GPUI. Emulator diagnostics
+use the host library directly.
 
 ```sh
 cargo fetch --locked   # once, with network: pinned GPUI Git dependency

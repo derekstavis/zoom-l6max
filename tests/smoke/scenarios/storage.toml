@@ -1,0 +1,45 @@
+version = 1
+name = "storage"
+models = ["l6", "l6max"]
+backends = ["headless"]
+fixture = "prepared"
+
+[[step]]
+action = "include"
+path = "fragments/prepared-home.toml"
+
+[[step]]
+action = "checkpoint"
+name = "home"
+
+[[step]]
+action = "sd-card"
+inserted = false
+
+[[step]]
+action = "delay"
+guest_ms = 3000
+
+[[step]]
+models = ["l6max"]
+action = "expect-display"
+checkpoint = "home"
+changed = true
+
+[[step]]
+action = "sd-card"
+inserted = true
+
+[[step]]
+action = "delay"
+guest_ms = 5000
+
+[[step]]
+models = ["l6max"]
+action = "expect-display"
+checkpoint = "home"
+changed = false
+
+[[step]]
+action = "expect-trace"
+contains = ["CMD00", "CMD08", "CMD02", "CMD03", "CMD09", "CMD07", "CMD17", "l6 SD card detect=0", "l6 SD card detect=1"]

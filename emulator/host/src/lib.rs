@@ -1,4 +1,5 @@
 pub use sd_image as demo_sd;
+pub mod control;
 pub mod din_midi;
 pub mod display;
 pub mod engine;
@@ -21,3 +22,8 @@ pub mod usb_storage;
 
 pub mod paths;
 pub mod setup;
+
+pub mod panel;
+pub mod readiness;
+
+pub mod logging;

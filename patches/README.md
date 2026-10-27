@@ -6,11 +6,11 @@ in ignored output directories.
 
 ## Catalog
 
-| Patch | Target | Purpose | Builder |
+| Patch | Supported models | Purpose | Builder |
 | --- | --- | --- | --- |
-| [knob-dialog](knob-dialog/README.md) | Main firmware | Show channel encoder values using the stock notification renderer | `firmware-patch` |
-| [midi-sync](midi-sync/README.md) | Main firmware | Send the full channel mixer state as Control Change on request | `firmware-patch` |
-| [din-mixer-control](din-mixer-control/README.md) | Main firmware | Let the physical MIDI IN/OUT jacks control the mixer when Mixer Control via MIDI is on, as documented but never implemented | `firmware-patch` |
+| [knob-dialog](knob-dialog/README.md) | L6max 1.10 | Show channel encoder values using the stock notification renderer | `l6patch` |
+| [midi-sync](midi-sync/README.md) | L6max 1.10; L6 1.10 | Send the channel mixer state as Control Change on request | `l6patch` |
+| [din-mixer-control](din-mixer-control/README.md) | L6max 1.10 | Let the physical MIDI IN/OUT jacks control the mixer when Mixer Control via MIDI is on, as documented but never implemented | `l6patch` |
 
 ## Directory layout
 
@@ -23,6 +23,10 @@ patches/
     linker/              # Linker script when injecting compiled code
     hooks.tsv            # Original region hashes/lengths and hook targets
 ```
+
+`midi-sync/l6/` contains the separate L6 1.10 hook, firmware bindings,
+trampoline and linker script. The native builder selects it from the MAIN
+reset vector; the L6max profile remains at the patch root.
 
 Create only the files the patch needs. A change to existing instructions may
 not need a compiled payload or linker script. Keep patch-specific bindings and
@@ -49,10 +53,14 @@ covered by `.gitignore`; never place extracted proprietary firmware in `patches/
 Read any displaced instruction bytes from that local input during compilation;
 commit the veneer logic and validation metadata instead of copied firmware bytes.
 
-The builder supports `knob-dialog` and `midi-sync`, and `--patch` may repeat to
-combine them. It places payloads back to back from `0x80108000` in catalog
-order (each linker script takes its base from `PAYLOAD_BASE`), checks every hook
-region against the input, and refuses overlapping hook regions. Overlap checks do
-not prove independence: before combining another patch, verify shared
-resources (RAM, heap, locks, callbacks) and input hash expectations, and
-document the combination in each patch's README.
+The builder supports `knob-dialog` and `midi-sync` on L6max, and only
+`midi-sync` on L6. If `--patch` is omitted, firmware detection selects
+`knob-dialog` on L6max and `midi-sync` on L6. Explicit `--patch` values remain
+model-checked, and the builder rejects an unsupported selection. `--patch` may
+repeat for compatible profiles. L6max payloads start at `0x80108000`; the L6
+payload starts aligned after the exact supported MAIN image and consumes erased
+`padding_before_secondary` bytes. Each linker script takes its base from
+`PAYLOAD_BASE`. The builder checks hook regions against the input and refuses
+overlapping hooks. Overlap checks do not prove independence: before combining
+another patch, verify shared resources (RAM, heap, locks, callbacks) and input
+hash expectations, and document the combination in each patch's README.

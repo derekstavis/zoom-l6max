@@ -1,0 +1,66 @@
+version = 1
+name = "usb"
+models = ["l6", "l6max"]
+backends = ["headless"]
+fixture = "fresh"
+
+[[step]]
+action = "wait"
+until = "boot-ready"
+guest_timeout_ms = 120000
+wall_timeout_s = 600
+
+# Preserve the original no-card USB probe's startup context; this is not the
+# prepared mixer fixture used by panel tests.
+[[step]]
+models = ["l6"]
+action = "delay"
+guest_ms = 22000
+guest_timeout_ms = 30000
+
+[[step]]
+models = ["l6"]
+action = "press"
+control = "ch4-mono"
+
+[[step]]
+models = ["l6max"]
+action = "press"
+control = "recorder.confirm"
+
+[[step]]
+action = "delay"
+guest_ms = 2000
+
+[[step]]
+models = ["l6"]
+action = "press"
+control = "ch4-mono"
+
+[[step]]
+models = ["l6max"]
+action = "press"
+control = "recorder.confirm"
+
+[[step]]
+action = "delay"
+guest_ms = 5000
+
+[[step]]
+action = "usb-descriptors"
+
+[[step]]
+action = "encoder"
+channel = 1
+steps = 4
+
+[[step]]
+action = "expect-encoder-reports"
+
+[[step]]
+action = "usb-midi"
+value = 32
+
+[[step]]
+action = "delay"
+guest_ms = 1000

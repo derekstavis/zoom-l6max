@@ -188,12 +188,13 @@ factory SysEx selector.
 
 ## Emulator diagnostic
 
-`factory-protocol-smoke` uses the unmodified firmware, emulated USB packets,
-and GPIO button closures. It requires `--volatile`, rejects a supplied SD
-image, and creates its own disposable FAT32 card and persistent state fixture.
-The first boot configures the calendar; the second holds pads 1–3 for factory
-entry. It sends identity, connection, input, calibration-presence, metadata,
-and exit requests. It never sends the calibration-start or routing commands.
+The `factory-protocol` smoke scenario uses the unmodified firmware, emulated
+USB packets, and GPIO button closures. Configure a `factory-protocol/l6max`
+firmware fixture in `smoke.local.toml`; the driver creates an isolated FAT32
+jig card and state directory under the case artifacts. The first boot
+configures the calendar; the second holds pads 1–3 for factory entry. It sends
+identity, connection, input, calibration-presence, metadata, and exit requests.
+It never sends the calibration-start or routing commands.
 
 The QEMU diagnostic verifies the following against actual firmware replies and
 RAM state:
@@ -213,11 +214,17 @@ The fixture checksum/metadata value is not a claim about a physical unit's
 system-information checksum. Calibration and routing packet layouts remain
 static-analysis findings; the diagnostic does not exercise their effects.
 
+```toml
+[[fixture]]
+name = "factory-protocol"
+model = "l6max"
+firmware_package = "/path/to/L6max.bin"
+```
+
 ```sh
-# Run from the repository root.
-cargo run --offline -p factory-protocol-smoke -- \
-  --qemu /private/tmp/l6-qemu-src/build/qemu-system-arm \
-  --volatile --logs emulator/logs/factory-protocol-smoke
+# Run from the repository root after pinning QEMU in smoke.local.toml:
+cargo run --offline --locked -p l6test -- run --case factory-protocol \
+  --model l6max --config smoke.local.toml
 ```
 
 ### Verification limits

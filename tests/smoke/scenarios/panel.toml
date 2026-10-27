@@ -1,0 +1,52 @@
+version = 1
+name = "panel"
+models = ["l6", "l6max"]
+fixture = "prepared"
+
+[[step]]
+action = "include"
+path = "fragments/prepared-level.toml"
+
+[[step]]
+action = "include"
+path = "fragments/controls.toml"
+
+[[step]]
+action = "include"
+path = "fragments/indicators.toml"
+
+[[step]]
+action = "include"
+path = "fragments/buttons.toml"
+
+[[step]]
+models = ["l6max"]
+action = "include"
+path = "fragments/button-reports.toml"
+
+[[step]]
+models = ["l6"]
+action = "include"
+path = "fragments/l6-gui-controls.toml"
+
+[[step]]
+models = ["l6max"]
+action = "press"
+control = "power"
+
+[[step]]
+models = ["l6max"]
+action = "expect-trace-count"
+pattern = "l6 main power input=1"
+count = 1
+
+[[step]]
+models = ["l6max"]
+action = "expect-trace-count"
+pattern = "l6 main power input=0"
+count = 2
+at_least = true
+
+[[step]]
+action = "include"
+path = "fragments/analog-controls.toml"

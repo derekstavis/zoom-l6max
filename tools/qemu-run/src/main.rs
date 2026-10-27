@@ -10,6 +10,8 @@ use std::{
 #[derive(Default)]
 struct Options {
     qemu: Option<PathBuf>,
+    audio_device: Option<String>,
+    firmware_dir: Option<PathBuf>,
     seconds: f64,
     logs: Option<PathBuf>,
     sd_image: Option<PathBuf>,
@@ -134,8 +136,18 @@ fn validate_main_key(key: &str) -> Result<(), String> {
     let (name, interval) = key
         .split_once(':')
         .ok_or("--main-key expects NAME:START_MS:END_MS")?;
-    if !matches!(name, "menu" | "play" | "record") {
-        return Err("--main-key name must be menu, play, or record".into());
+    if !matches!(
+        name,
+        "menu"
+            | "play"
+            | "record"
+            | "tap"
+            | "sound-pad-1"
+            | "sound-pad-2"
+            | "sound-pad-3"
+            | "sound-pad-4"
+    ) {
+        return Err("--main-key name must be menu, play, record, tap, or sound-pad-1..4".into());
     }
     let (start, end) = interval
         .split_once(':')
@@ -148,9 +160,48 @@ fn validate_main_key(key: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn validate_main_key_model(key: &str, model: l6fw::Model) -> Result<(), String> {
+    let name = key
+        .split_once(':')
+        .map(|(name, _)| name)
+        .unwrap_or_default();
+    let supported = match model {
+        l6fw::Model::L6 => matches!(
+            name,
+            "play" | "tap" | "sound-pad-1" | "sound-pad-2" | "sound-pad-3" | "sound-pad-4"
+        ),
+        l6fw::Model::L6max => matches!(name, "menu" | "play" | "record"),
+    };
+    if !supported && model == l6fw::Model::L6 && name == "play" {
+        return Err("play is not mapped to a verified L6 MAIN GPIO".into());
+    }
+    if !supported {
+        return Err(format!(
+            "{name} is not a verified MAIN GPIO key on {model:?}"
+        ));
+    }
+    Ok(())
+}
+
+fn panel_uart_byte_counts(trace: &str, uart: u8) -> (usize, usize) {
+    let prefix = format!("l6 main LPUART{uart} (panel link) ");
+    let accepted_rx = trace.matches(&format!("{prefix}RX accepted ")).count();
+    let discarded_rx = trace
+        .matches(&format!("{prefix}RX discarded (RE=0) "))
+        .count();
+    let rom_rx = trace
+        .matches(&format!("l6 main LPUART{uart} ROM RX "))
+        .count();
+    (
+        accepted_rx + discarded_rx + rom_rx,
+        trace.matches(&format!("{prefix}TX ")).count(),
+    )
+}
+
 fn parse_options() -> Result<Options, String> {
     let mut options = Options {
         seconds: 2.0,
+        audio_device: env::var("L6_AUDIODEV").ok(),
         ..Options::default()
     };
     let mut args = env::args().skip(1);
@@ -162,6 +213,12 @@ fn parse_options() -> Result<Options, String> {
             };
         match flag.as_str() {
             "--qemu" => options.qemu = Some(PathBuf::from(value(&mut args, "--qemu")?)),
+            "--audio-device" => {
+                options.audio_device = Some(value(&mut args, "--audio-device")?);
+            }
+            "--firmware-dir" => {
+                options.firmware_dir = Some(PathBuf::from(value(&mut args, "--firmware-dir")?))
+            }
             "--logs" => options.logs = Some(PathBuf::from(value(&mut args, "--logs")?)),
             "--sd-image" => options.sd_image = Some(PathBuf::from(value(&mut args, "--sd-image")?)),
             "--seconds" => {
@@ -197,6 +254,11 @@ fn parse_options() -> Result<Options, String> {
                     "confirm" => ("panel", "7:4"),
                     "play" => ("main", "play"),
                     "record" => ("main", "record"),
+                    "tap" => ("main", "tap"),
+                    "sound-pad-1" => ("main", "sound-pad-1"),
+                    "sound-pad-2" => ("main", "sound-pad-2"),
+                    "sound-pad-3" => ("main", "sound-pad-3"),
+                    "sound-pad-4" => ("main", "sound-pad-4"),
                     "bounce" => ("panel", "6:4"),
                     _ => return Err(format!("unknown button: {}", parts[0])),
                 };
@@ -209,7 +271,7 @@ fn parse_options() -> Result<Options, String> {
             }
             "--help" | "-h" => {
                 println!(
-                    "Usage: qemu-run --qemu PATH [--seconds N] [--button NAME:START:END] [--panel-key ROW:COL:START:END] [--main-key NAME:START:END] [--probe ADDRESS:SIZE]"
+                    "Usage: qemu-run --qemu PATH [--firmware-dir DIR] [--audio-device 'driver=...,id=...'] [--seconds N] [--button NAME:START:END] [--panel-key ROW:COL:START:END] [--main-key NAME:START:END] [--probe ADDRESS:SIZE]"
                 );
                 std::process::exit(0);
             }
@@ -241,14 +303,38 @@ fn spawn_guest(
     name: &'static str,
     machine: &str,
     firmware: &Path,
+    model: l6fw::Model,
     panel_keys: &[String],
     main_keys: &[String],
     options: &Options,
 ) -> Result<Guest, String> {
+    let audio_id = options
+        .audio_device
+        .as_deref()
+        .map(|spec| {
+            spec.split(',')
+                .find_map(|part| part.strip_prefix("id="))
+                .filter(|id| {
+                    !id.is_empty()
+                        && id
+                            .bytes()
+                            .all(|byte| byte.is_ascii_alphanumeric() || b"_.-".contains(&byte))
+                })
+                .ok_or("--audio-device must contain a valid id= field")
+        })
+        .transpose()?;
+    let machine = if name == "main" {
+        audio_id.map_or_else(
+            || machine.to_owned(),
+            |id| format!("{machine},audiodev={id}"),
+        )
+    } else {
+        machine.to_owned()
+    };
     let mut command = Command::new(qemu);
     command
         .arg("-M")
-        .arg(machine)
+        .arg(&machine)
         .arg("-kernel")
         .arg(firmware)
         .args(["-display", "none", "-monitor", "stdio", "-serial"])
@@ -260,12 +346,27 @@ fn spawn_guest(
         .args(["-d", "in_asm,guest_errors,unimp", "-D"])
         .arg(logs.join(format!("{name}.trace")))
         .current_dir(logs)
+        // The split-process diagnostic has no MAIN image in its standalone
+        // panel guest, so carry the model detected from MAIN into that guest.
+        .env(
+            "L6_MODEL",
+            if model == l6fw::Model::L6 {
+                "l6"
+            } else {
+                "l6max"
+            },
+        )
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::from(
             fs::File::create(logs.join(format!("{name}.stderr")))
                 .map_err(|error| format!("create {name} stderr log: {error}"))?,
         ));
+    if name == "main" {
+        if let Some(spec) = &options.audio_device {
+            command.args(["-audiodev", spec]);
+        }
+    }
     if name == "panel" && !panel_keys.is_empty() {
         command.env("L6_PANEL_KEYS", panel_keys.join(","));
     }
@@ -274,10 +375,16 @@ fn spawn_guest(
             .iter()
             .map(|key| {
                 let (name, interval) = key.split_once(':').ok_or("bad main key")?;
-                let id = match name {
-                    "menu" => "0",
-                    "play" => "1",
-                    "record" => "2",
+                let id = match (model, name) {
+                    (l6fw::Model::L6max, "menu") => "0",
+                    (l6fw::Model::L6max, "play") => "1",
+                    (l6fw::Model::L6max, "record") => "2",
+                    (l6fw::Model::L6, "play") => "4",
+                    (l6fw::Model::L6, "tap") => "48",
+                    (l6fw::Model::L6, "sound-pad-1") => "49",
+                    (l6fw::Model::L6, "sound-pad-2") => "50",
+                    (l6fw::Model::L6, "sound-pad-3") => "51",
+                    (l6fw::Model::L6, "sound-pad-4") => "52",
                     _ => return Err("invalid main key name"),
                 };
                 Ok(format!("{id}:{interval}"))
@@ -368,7 +475,43 @@ fn run() -> Result<(), String> {
         .parent()
         .and_then(Path::parent)
         .ok_or("workspace path missing")?;
-    let firmware = workspace.join("unpacked");
+    let firmware = options
+        .firmware_dir
+        .clone()
+        .unwrap_or_else(|| workspace.join("unpacked"))
+        .canonicalize()
+        .map_err(|error| format!("cannot resolve firmware directory: {error}"))?;
+    let main_firmware = fs::read(firmware.join("main_firmware.bin"))
+        .map_err(|error| format!("cannot read main_firmware.bin: {error}"))?;
+    let model = l6fw::model_from_main(&main_firmware)?;
+    for key in &options.main_keys {
+        validate_main_key_model(key, model)?;
+    }
+    let max_panel_columns = if model == l6fw::Model::L6 { 3 } else { 5 };
+    for key in &options.panel_keys {
+        let values: Vec<u32> = key
+            .split(':')
+            .filter_map(|value| value.parse().ok())
+            .collect();
+        if values
+            .get(1)
+            .is_none_or(|column| *column >= max_panel_columns)
+        {
+            return Err(format!(
+                "panel column for {} supports 0..{} on {}",
+                key,
+                max_panel_columns - 1,
+                if model == l6fw::Model::L6 {
+                    "L6"
+                } else {
+                    "L6max"
+                }
+            ));
+        }
+    }
+    if model == l6fw::Model::L6 && !options.panel_keys.is_empty() {
+        eprintln!("L6 raw panel keys use a 3-column by 8-row matrix");
+    }
     let logs = options
         .logs
         .clone()
@@ -384,6 +527,7 @@ fn run() -> Result<(), String> {
         "main",
         "l6max-main",
         &firmware.join("main_firmware.bin"),
+        model,
         &[],
         &options.main_keys,
         &options,
@@ -402,6 +546,7 @@ fn run() -> Result<(), String> {
         "panel",
         "l6max-panel",
         &firmware.join("secondary_firmware.bin"),
+        model,
         &options.panel_keys,
         &[],
         &options,
@@ -409,6 +554,16 @@ fn run() -> Result<(), String> {
     thread::sleep(Duration::from_secs_f64(options.seconds));
 
     for guest in [&mut main, &mut panel] {
+        if let Some(status) = guest
+            .child
+            .try_wait()
+            .map_err(|error| format!("checking {} QEMU status: {error}", guest.name))?
+        {
+            return Err(format!(
+                "{} QEMU exited before register capture (status {status})",
+                guest.name
+            ));
+        }
         let registers = guest.monitor.command("info registers")?;
         fs::write(logs.join(format!("{}.registers", guest.name)), &registers)
             .map_err(|e| e.to_string())?;
@@ -422,25 +577,30 @@ fn run() -> Result<(), String> {
             .unwrap_or_else(|| "unknown".into());
         println!("{} live PC: {pc}", guest.name);
     }
-    let raw_path = snapshot(&mut main, &logs, 0x80528c24, 1024, "main.framebuffer.bin")?;
-    let raw = fs::read(&raw_path).map_err(|e| e.to_string())?;
-    let lit = write_pgm(&raw, &logs.join("main.framebuffer.pgm"))?;
-    let display_task_seen = fs::read_to_string(logs.join("main.trace"))
-        .unwrap_or_default()
-        .contains("0x80085030:");
-    fs::write(
-        logs.join("main.display-ready"),
-        if display_task_seen && lit > 0 {
-            "yes\n"
-        } else {
-            "no\n"
-        },
-    )
-    .map_err(|e| e.to_string())?;
-    println!(
-        "LCD framebuffer: {lit}/8192 set bits; DisplayDriver task observed: {display_task_seen}; {}",
-        logs.join("main.framebuffer.pgm").display()
-    );
+    if model == l6fw::Model::L6max {
+        let raw_path = snapshot(&mut main, &logs, 0x80528c24, 1024, "main.framebuffer.bin")?;
+        let raw = fs::read(&raw_path).map_err(|e| e.to_string())?;
+        let lit = write_pgm(&raw, &logs.join("main.framebuffer.pgm"))?;
+        let display_task_seen = fs::read_to_string(logs.join("main.trace"))
+            .unwrap_or_default()
+            .contains("0x80085030:");
+        fs::write(
+            logs.join("main.display-ready"),
+            if display_task_seen && lit > 0 {
+                "yes\n"
+            } else {
+                "no\n"
+            },
+        )
+        .map_err(|e| e.to_string())?;
+        println!(
+            "LCD framebuffer: {lit}/8192 set bits; DisplayDriver task observed: {display_task_seen}; {}",
+            logs.join("main.framebuffer.pgm").display()
+        );
+    } else {
+        fs::write(logs.join("main.display-ready"), "unknown\n").map_err(|e| e.to_string())?;
+        println!("LCD framebuffer: unavailable (L6 mapping not confirmed)");
+    }
     for (address, size, panel_probe) in &options.probes {
         let guest = if *panel_probe { &mut panel } else { &mut main };
         let name = if *panel_probe { "panel" } else { "main" };
@@ -449,12 +609,60 @@ fn run() -> Result<(), String> {
         println!("RAM probe: {}", logs.join(filename).display());
     }
     let main_trace = fs::read_to_string(logs.join("main.trace")).unwrap_or_default();
-    let panel_trace = fs::read_to_string(logs.join("panel.trace")).unwrap_or_default();
+    let panel_uart = if model == l6fw::Model::L6 { 7 } else { 1 };
+    let (panel_to_main, main_to_panel) = panel_uart_byte_counts(&main_trace, panel_uart);
     println!(
-        "UART traces: panel TX {}, RX {}; main LPUART RX {}",
-        panel_trace.matches("l6 panel USART1 TX ").count(),
-        panel_trace.matches("l6 panel USART1 RX ").count(),
-        main_trace.matches("l6 main LPUART1 RX ").count()
+        "LPUART{panel_uart} panel link bytes: panel → main {panel_to_main}; main → panel {main_to_panel}"
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{panel_uart_byte_counts, validate_main_key, validate_main_key_model};
+
+    #[test]
+    fn counts_panel_link_bytes_for_both_model_uart_routes() {
+        let trace = concat!(
+            "l6 main LPUART7 (panel link) TX 12\n",
+            "l6 main LPUART7 (panel link) RX accepted 34\n",
+            "l6 main LPUART7 (panel link) RX discarded (RE=0) 56\n",
+            "l6 main LPUART7 ROM RX 78\n",
+            "l6 main LPUART1 (panel link) TX 56\n",
+            "l6 main LPUART1 (panel link) RX accepted 78\n",
+        );
+        assert_eq!(panel_uart_byte_counts(trace, 7), (3, 1));
+        assert_eq!(panel_uart_byte_counts(trace, 1), (1, 1));
+    }
+
+    #[test]
+    fn l6_exposes_verified_main_gpio_keys_and_runtime_play() {
+        for key in ["menu:0:500", "record:0:500"] {
+            validate_main_key(key).unwrap();
+            assert!(validate_main_key_model(key, l6fw::Model::L6).is_err());
+        }
+        assert!(validate_main_key_model("play:0:500", l6fw::Model::L6).is_ok());
+        for key in [
+            "tap:0:500",
+            "sound-pad-1:0:500",
+            "sound-pad-2:0:500",
+            "sound-pad-3:0:500",
+            "sound-pad-4:0:500",
+        ] {
+            validate_main_key(key).unwrap();
+            assert!(validate_main_key_model(key, l6fw::Model::L6).is_ok());
+        }
+    }
+
+    #[test]
+    fn l6max_keeps_all_three_main_gpio_inputs() {
+        for key in ["menu:0:500", "play:0:500", "record:0:500"] {
+            validate_main_key(key).unwrap();
+            assert!(validate_main_key_model(key, l6fw::Model::L6max).is_ok());
+        }
+        for key in ["tap:0:500", "sound-pad-1:0:500"] {
+            validate_main_key(key).unwrap();
+            assert!(validate_main_key_model(key, l6fw::Model::L6max).is_err());
+        }
+    }
 }

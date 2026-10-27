@@ -138,9 +138,13 @@ static void l6_usb_request(L6USB *u)
     uint8_t *data = u->rx + 20;
     if (kind == 1 && size == 0 && ep <= 1) {
         u->connected = ep;
-        u->regs[0x184 / 4] = ep ? 0x08000205 : 0;
+        /* The L6 is a USB B-device: ID stays high, B-session-valid follows
+         * VBUS, and only that input changes when a host cable is attached.
+         * PORTSC.CSC and USBSTS.PCI report the corresponding port event. */
+        u->regs[0x184 / 4] = ep ? 0x08000207 : 0;
         u->regs[0x1a4 / 4] = (u->regs[0x1a4 / 4] & ~0x1f00u) |
-                              (ep ? 0xf00u : 0x1100u) | 0xc0000u;
+                              (ep ? 0x900u : 0x1100u) |
+                              (ep ? 0x80000u : 0x100000u);
         u->regs[0x144 / 4] |= ep ? 0x44 : 4;
         l6_usb_irq(u);
         l6_usb_reply(u, seq, 0, NULL, 0);

@@ -139,14 +139,23 @@ remain unverified.
 
 ## Panel update
 
-`panel_initialize_and_update` (`0x8004ca38`) runs during main application startup.
-It compares the four packaged bytes at NOR `0x1f6ffc` with panel flash
-`0x08003ffc`. Equal versions skip programming even if code bytes differ.
-Validity here only requires the high bit of each version byte to be clear;
-it is not an ASCII-digit check.
+The `panel_initialize_and_update` routine (`0x8004ca38`) contains the
+following ROM update sequence, but no direct call sites were found in the
+current main image. The live boot probe instead reaches a separate path at
+about 350 ms; it also sends `0x7f` and waits for ROM ACK `0x79`. Its current
+emulated panel is already running the application, which consumes and ignores
+that byte while idle. The relationship between these two paths remains
+unresolved.
+
+The routine compares the four packaged bytes at NOR `0x1f6ffc` with
+panel flash `0x08003ffc`. Equal versions skip programming even if code bytes
+differ. Validity here only requires the high bit of each version byte to be
+clear; it is not an ASCII-digit check.
 
 1. Configure UART at 115200 with the ROM-mode framing; drive BOOT high through
    GPIO1.29 and pulse reset through GPIO5.1. Send `0x7f` and expect ACK `0x79`.
+   This GPIO sequence is established for the update routine but has not
+   been observed in the live startup probe.
 2. Read installed version and, when an update is needed, read option bytes at
    `0x1fff7800`. Clear bit 0 of option byte 3 when set, write them back, and
    reenter ROM mode. Its hardware meaning is not assigned here.
@@ -177,13 +186,14 @@ access service.
 
 ## Emulator diagnostic
 
-`firmware-update-smoke` starts with the original firmware and package and creates
+The `firmware-update` smoke scenario starts with the selected firmware and
+package and creates
 fresh 128 MiB FAT16 SD and device state fixtures with 16 KiB clusters. It changes
 MAIN version markers to `0111`, panel version to `0101`, and reserved vector
 slots to distinguish the installed images without changing executable code.
 One fixture retains the old checksum; another recomputes it. All fixture state
-is removed after execution, including failure, and user state/SD arguments are
-rejected.
+is isolated under the case artifact directory; user state/SD arguments are
+rejected. This keeps the generated card and NOR snapshots available for review.
 
 The diagnostic confirms the corrupt package does not trigger an update, the
 valid package selects startup mode 6, Execute completes preparation, and a
@@ -193,6 +203,13 @@ success mode 4, consumes the marker, programs 64 panel blocks, and verifies the
 new panel image. NOR boot/calibration/settings bytes are checked unchanged.
 A further launch without the SD card confirms both installed images persist
 and the panel is not programmed again.
+
+For L6, the same scenario detects the selected MAIN image, boots it to create
+disposable persistent state, then runs the modeled replacement installer with
+an L6 package. It checks MAIN, panel, footer, and resource-flash placement,
+confirms boot and calibration/settings bytes remain unchanged, verifies the
+pending marker clears, and boots the installed firmware. This validates the
+emulator's L6 mapping; physical L6 update acceptance remains unverified.
 
 ### Verification limits
 
@@ -206,10 +223,7 @@ and the panel is not programmed again.
   exercises the successful firmware handoff, not a physical interrupted update.
 
 ```sh
-# Run from the repository root.
-cargo run --offline -p firmware-update-smoke -- \
-  --qemu /private/tmp/l6-qemu-src/build/qemu-system-arm \
-  --volatile --logs emulator/logs/firmware-update-smoke
+cargo run --offline -p l6test -- run --config smoke.local.toml --case firmware-update --model all
 ```
 
 ## Manufacturer bootloader comparison
@@ -258,23 +272,33 @@ The native engine's `--update-bootloader` option runs
 [`update_bootloader.rs`](../../emulator/host/src/update_bootloader.rs) before
 launching QEMU. QEMU continues to load main execution from persistent NOR and
 panel execution from persistent panel flash. The Rust model fills the missing
-SD-to-NOR step; it is not an implementation of NXP ROM code or recovered ZOOM
+SD-to-NOR step; it is not an implementation of NXP ROM code or ZOOM
 bootloader code.
 
 The model acts only when `main-nor.bin` contains `FW UPDT\0`. It exclusively locks
-that existing file, refuses storage held by a live guest, reads the SD image
-without modifying it, and validates the observed MAIN-only section. It copies
-payload `[0x200, 0x1a8200)` into NOR `[0x50000, 0x1f8000)`, including packaged
-panel data and the installed-version footer. It preserves bootloader bytes,
-calibration, settings and the pending record. On validation/media failure it
-leaves the installed payload intact and writes the error record for application
-startup to consume. An existing error record is passed to the application
-without automatically retrying installation.
+that existing file, refuses storage held by a live guest, and reads the SD image
+without modifying it. It detects the installed model from the booted firmware
+and requires the matching `L6.BIN` or `L6max.BIN` package.
+
+For L6max, it validates the observed MAIN-only section and copies payload
+`[0x200, 0x1a8200)` into NOR `[0x50000, 0x1f8000)`, including packaged panel
+data and the installed-version footer. The application consumes the pending
+record during startup. For L6, it validates the split package and places main,
+panel, and package-footer data into their observed NOR slots; the resource
+region is written to separate 4 MiB `resource-nor.bin`. Since the L6
+application does not consume the L6max pending record, the emulator installer
+clears it after successfully writing both L6 flash images. This marker handling
+is an emulator policy; physical L6 installer behavior remains unmapped.
+
+Both paths preserve bootloader bytes and calibration/settings. On
+validation/media failure they leave the installed payload intact and write the
+error record. An existing error record is passed to application startup without
+automatically retrying installation.
 
 SD input supports an unpartitioned FAT volume or the first FAT partition in an
-MBR. The model additionally enforces the known total length, section location,
-MAIN-only flags and consistent trailers. These are explicit model restrictions,
-not claims about extra checks in ZOOM's bootloader.
+MBR. The model additionally enforces the observed package lengths, section
+locations, model headers, flags and consistent trailers. These are explicit
+model restrictions, not claims about extra checks in ZOOM's bootloader.
 
 ```sh
 # Run from the repository root.
@@ -293,6 +317,9 @@ require the explicit flag.
 ### Model limitations
 
 - BOOT-component replacement is unsupported because its installer is missing.
+- The L6 install mapping is emulator-derived from observed package, NOR and
+  resource-flash layouts; it does not establish physical L6 update acceptance
+  or recovery behavior.
 - Boot-ROM execution, signatures/security configuration, installation LED timing,
   and interrupted/power-loss writes are not modeled.
 - Installation uses a bounded host operation before guest execution, rather than

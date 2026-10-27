@@ -1,0 +1,34 @@
+[[step]]
+action = "delay"
+guest_ms = 40000
+guest_timeout_ms = 50000
+wall_timeout_s = 180
+
+[[step]]
+action = "press"
+control = "recorder.confirm"
+
+[[step]]
+action = "delay"
+guest_ms = 1950
+
+[[step]]
+action = "press"
+control = "recorder.confirm"
+
+[[step]]
+action = "delay"
+guest_ms = 4950
+
+[[step]]
+action = "usb-descriptors"
+
+[[step]]
+action = "usb-sysex"
+requests = [
+  { bytes = [240, 126, 0, 6, 1, 247], expect_prefix = [240, 126] },
+  { bytes = [240, 82, 0, 0, 43, 247], expect_prefix = [240, 82, 0, 0, 42], min_reply_bytes = 182 },
+  { bytes = [240, 82, 0, 0, 49, 3, 1, 247], expect_reply = true },
+]
+guest_timeout_ms = 15000
+wall_timeout_s = 120

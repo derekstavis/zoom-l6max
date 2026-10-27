@@ -39,7 +39,7 @@ it is visible.
 - `hooks.tsv`: hook addresses, lengths, expected byte hashes, and entry symbols.
 
 The host build and package integration live in
-[`firmware-patch`](../../tools/firmware-patch/src/main.rs).
+[`l6patch`](../../docs/development/tools/l6patch.md).
 See the [patch conventions](../README.md) before adding another modification.
 
 ## Build and run
@@ -52,7 +52,7 @@ pinned Rust toolchain with `thumbv7em-none-eabihf` installed. Homebrew LLVM at
 
 ```sh
 rustup target add thumbv7em-none-eabihf
-cargo run --offline -p firmware-patch -- unpacked firmware-knob-dialog-recorder-fix-v112 --update-version 0112
+cargo run --offline -p l6patch -- unpacked firmware-knob-dialog-recorder-fix-v112 --update-version 0112
 cargo run --offline -p l6max-gui -- --qemu /path/to/qemu-system-arm --firmware-dir firmware-knob-dialog-recorder-fix-v112 --volatile
 ```
 
@@ -112,8 +112,8 @@ The default patch version is `0112` (1.12), one increment above the initial
 and uses the manual **System → Firmware → Firmware Update** menu:
 
 ```sh
-cargo run --offline -p firmware-patch -- unpacked firmware-knob-dialog-recorder-fix-v112 --update-version 0112
-cargo run --offline -p sd-image -- emulator/state/sd-card-knob-synchronized.img --demo firmware-knob-dialog-recorder-fix-v112/L6max.bin
+cargo run --offline -p l6patch -- unpacked firmware-knob-dialog-recorder-fix-v112 --update-version 0112
+cargo run --offline -p l6fs -- card demo emulator/state/sd-card-knob-synchronized.img --firmware-package firmware-knob-dialog-recorder-fix-v112/L6max.bin
 cargo run --offline -p l6max-gui -- --state-dir emulator/state/knob-synchronized-demo --sd-image emulator/state/sd-card-knob-synchronized.img
 ```
 
@@ -212,16 +212,15 @@ The sidecar lives until reset; popup allocations are still freed at detach.
 ## Validation
 
 ```sh
-cargo test --offline -p firmware-patch
-cargo run --offline -p knob-dialog-smoke -- --qemu /path/to/qemu-system-arm --firmware-dir firmware-knob-dialog-recorder-fix-v112 --volatile --logs emulator/logs/knob-dialog
-cargo run --offline -p popup-concurrency-smoke -- --firmware-dir firmware-knob-dialog-recorder-fix-v112 --volatile --logs emulator/logs/popup-concurrency
+cargo test --offline -p l6patch
+cargo run --offline -p l6test -- run --config smoke.local.toml --case knob-dialog --model l6max
+cargo run --offline -p l6test -- run --config smoke.local.toml --case popup-concurrency --model l6max
 
-# Build the behavioral diagnostic, then install from SD into disposable state.
-cargo build --offline -p knob-dialog-smoke
-cargo run --offline -p patched-update-smoke -- firmware-knob-dialog-recorder-fix-v112/L6max.bin --volatile --logs emulator/logs/patched-sd-update
+cargo run --offline -p l6test -- run --config smoke.local.toml \
+  --case patched-update --model l6max
 ```
 
-The branch-encoding test compares known original Thumb instructions. The QEMU
+The branch-encoding test checks synthetic Thumb instructions. The QEMU
 smoke test uses GPIO encoder/button input, checks all ten mode titles, compares
 notification values with mixer RAM, verifies updates and expiry, verifies
 original resources are restored, and counts 52 UART encoder reports. It checks
@@ -237,7 +236,7 @@ in the original white header band. See the [patch bindings](src/firmware.rs) and
 
 Screenshots come from firmware LCD transfers, without a host UI overlay.
 
-`popup-concurrency-smoke` uses a disposable VM and a local GDB socket. It
+The `popup-concurrency` scenario uses a disposable VM and a local GDB socket. It
 invokes the actual recorder polling callback while busy flag 0 and checks
 that popup pixels, heap binding, active state, and elapsed counter survive. It
 replaces one GUI callback invocation with a stock notification request, forces
@@ -256,13 +255,12 @@ all ten knob modes and 52 exact encoder reports. The forced diagnostic covers
 13 reports, including six observed calls to the original mixer routine while
 the GUI is blocked. Logs and generated binaries remain ignored artifacts.
 
-`patched-update-smoke` requires the original main firmware as its starting
-image and a package with a newer development marker. It validates the actual
-firmware confirmation and GPIO shutdown, invokes the same replacement installer
-used by the emulator, verifies its installed payload and preservation of
-boot/calibration/settings before restarting the application, then runs
-`knob-dialog-smoke` against that
-persistent NOR on another restart. The patch is not substituted through QEMU's
+The `patched-update` driver case requires the original main firmware as its
+starting image and a package with a newer development marker. It validates the
+firmware confirmation and GPIO shutdown, invokes the replacement installer,
+verifies its installed payload and preservation of boot/calibration/settings,
+then runs the typed `knob-dialog` operation against that persistent NOR on
+another restart. The patch is not substituted through QEMU's
 initial firmware image in this test. Its SD and device fixtures are removed
 on completion or failure; display captures remain in the ignored log directory.
 
