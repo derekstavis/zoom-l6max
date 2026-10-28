@@ -2973,6 +2973,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "l6nor"
+version = "0.1.0"
+dependencies = [
+ "l6fw",
+ "libc",
+ "serde",
+ "serde_json",
+ "sha2",
+ "toml 0.8.23",
+]
+
+[[package]]
 name = "l6patch"
 version = "0.1.0"
 dependencies = [
@@ -2992,6 +3004,7 @@ dependencies = [
  "image",
  "l6fw",
  "l6max-host",
+ "l6nor",
  "libc",
  "serde",
  "serde_json",

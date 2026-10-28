@@ -40,6 +40,19 @@ case. `check` validates and snapshots fixtures but does not execute recipes.
 The sample `state-l6max-setup.toml` describes first-boot date/settings setup;
 it does not prepare recorder media or pad assignments.
 
+To start from a configured device without driving its UI, set `state_spec` to
+an [`l6nor` state spec](tools/l6nor.md#state-specs). The runner seeds missing
+MAIN NOR from the fixture firmware and commits the declared settings with the
+firmware's bank protocol. It also writes the declared panel RTC calendar and,
+for L6max, a pre-programmed panel, all into the case's disposable state. No
+extra guest runs. The spec hash and the applied report are recorded in
+`inputs.json`. [`l6max-setup-complete.toml`](../../tests/smoke/states/l6max-setup-complete.toml)
+reproduces the setup recipe's MAIN NOR byte for byte and boots directly to the
+recorder; the `state-spec` case checks this. A spec can edit a copied
+`state_template` and cannot be combined with `state_recipe`. Because a spec is
+rebuilt for every case, volatile cases keep it: they run on the fresh
+spec-built state instead of no state, and skip their setup input.
+
 The driver bypasses GUI demo-media and installer defaults. Headless and GUI
 runs receive the same explicit firmware, timing, card, state and no-audio
 backend. Existing device state and fixture templates are never run in place.
@@ -61,7 +74,7 @@ It has these top-level blocks:
 | Block | Fields | Purpose |
 | --- | --- | --- |
 | top level | `version = 1`, `qemu`, `qemu_sha256` | Pin the exact QEMU executable. `qemu` is resolved relative to this TOML file; the SHA-256 must match before any run. |
-| `[[fixture]]` | `name`, `model`, exactly one of `firmware_dir` / `firmware_package`; optional `patches`, `update_package`, `state_template`, `state_recipe`, `sd_image`, `audio_device`, `gdb`, `timing`, `update_bootloader` | Define local firmware and starting state for a named model fixture. Names may repeat for different models, but `(name, model)` must be unique. |
+| `[[fixture]]` | `name`, `model`, exactly one of `firmware_dir` / `firmware_package`; optional `patches`, `update_package`, `state_template`, `state_recipe`, `state_spec`, `sd_image`, `audio_device`, `gdb`, `timing`, `update_bootloader` | Define local firmware and starting state for a named model fixture. Names may repeat for different models, but `(name, model)` must be unique. |
 | `[legacy."CASE-ID"]` | optional `fixture`, `executable`, `executable_sha256`, `arguments`, `environment` | Configure a legacy executable required by a catalog case. An executable requires a matching hash. `arguments` and environment values support `{firmware_dir}`, `{logs}`, `{qemu}`, and `{package}` substitutions. |
 | `[[expected_failure]]` | `case`, `model`, `step`, `contains`, `reason` | Match a known failure only at the exact scenario step and when its error contains the specified text. A matching failure is XFAIL; an unexpected pass is XPASS. |
 
@@ -75,7 +88,9 @@ Fixture details:
 - Choose at most one of `state_template` and `state_recipe`. A template is
   copied into isolated case state. A recipe is a headless scenario that builds
   state on a separate disposable guest; see the complete
-  [scenario/state-recipe schema](scenario-format.md).
+  [scenario/state-recipe schema](scenario-format.md). `state_spec` declares
+  NOR settings, RTC and panel state without a setup guest, alone or on top of
+  a template; it must name the fixture's model.
 - If `state_template` is omitted, the driver creates fresh isolated state.
   `sd_image` is copied for each case. `audio_device` accepts QEMU audio-device
   syntax and `{logs}` expands to the per-case log directory. `gdb` enables the
@@ -99,7 +114,7 @@ Its top-level `version` is `1`; every `[[case]]` has:
 | `arguments`, `environment` | optional | Arguments and environment for a package or legacy executable. |
 | `needs_configuration` | optional, default `false` | Keep the case BLOCKED until its local executable/configuration prerequisite is supplied. |
 | `gui` | optional, default `false` | Mark a GUI-only catalog case. |
-| `volatile` | optional, default `false` | Discard persistent-state templates for this case; incompatible with `state_recipe`. |
+| `volatile` | optional, default `false` | Discard persistent-state templates for this case and run without persistent state, unless the fixture has a `state_spec`, which is rebuilt for the case; incompatible with `state_recipe`. |
 | `no_sd` | optional, default `false` | Do not attach the fixture's SD image. |
 | `fixture` | optional | Use a fixture name other than the default `prepared`. |
 | `blocked` | optional | Human-readable reason to report this case as BLOCKED. |
@@ -153,11 +168,13 @@ idempotently select LEVEL, verify its lamp, and wait for stable
 panel outputs before capturing per-control baselines. A static OLED
 frame is valid and must not be treated as a stopped guest clock.
 
-Prepared fixtures must match the scenario's explicit setup steps. The current
-L6max sequences select Cancel with Down and then Confirm on the startup SD
-prompt; they are not general Date/Time or arbitrary-menu navigation. Keep fresh
-first-boot fixtures and prepared fixtures separately named. A future screen
-recognizer should replace this remaining setup assumption.
+Prepared fixtures must match the scenario's explicit setup steps. With a
+saved-state template, the L6max sequences select Cancel with Down and then
+Confirm on the startup SD prompt, or Confirm the startup prompts twice; they
+are not general Date/Time or arbitrary-menu navigation. These steps are marked
+`setup_input`. A fixture with a `state_spec` boots straight to the recorder,
+so the driver skips them and records `execution_spec_state` in `inputs.json`.
+Keep fresh first-boot fixtures and prepared fixtures separately named.
 
 ## Results and evidence
 

@@ -88,7 +88,21 @@ including wraparound. Each bank contains a four-byte generation marker and
 `0x17e0` bytes of parameters. The writer erases the inactive bank, programs
 its data at base + 4, writes the valid marker last, then erases the previous
 bank. The model handles write-enable, page programming with NOR's 1-to-0
-semantics, and sector erasure. Individual parameter fields remain to be mapped.
+semantics, and sector erasure.
+
+For L6max 1.10 the payload holds six `0x25a`-byte mixer blocks (scenes 0–3,
+the current mixer, and a scratch block) followed by global settings. These
+include the first-boot `setup_required` flag that gates the Date/Time and
+Battery Type flow. [`l6nor`](../development/tools/l6nor.md) reads and edits
+these fields by name and commits them with the same bank sequence. The field
+layout was found by analyzing firmware execution in the emulator.
+
+L6 1.10 keeps its two settings banks in the external resource NOR at
+`0x3fb000` and `0x3fd000`, with a `0x17c4`-byte payload of five mixer blocks
+(scenes 0–2, current, scratch) and globals. The resource NOR model implements
+reads only, so the emulated L6 firmware loads defaults on every boot and cannot
+save settings. `l6nor` can write an L6 bank into `resource-nor.bin`, which the
+firmware then loads.
 
 The update-marker routines are `0x80035b50` (erase), `0x80035b60` (read and
 compare), and `0x80035b98` (erase and write). Its exact role in boot recovery

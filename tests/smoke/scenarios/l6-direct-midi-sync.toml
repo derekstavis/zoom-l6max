@@ -11,19 +11,24 @@ guest_ms = 40000
 guest_timeout_ms = 45000
 wall_timeout_s = 900
 
+# Mirror of the L6max startup confirmations; a state spec boots without them.
 [[step]]
+setup_input = true
 action = "press"
 control = "ch4-mono"
 
 [[step]]
+setup_input = true
 action = "delay"
 guest_ms = 1950
 
 [[step]]
+setup_input = true
 action = "press"
 control = "ch4-mono"
 
 [[step]]
+setup_input = true
 action = "delay"
 guest_ms = 4950
 

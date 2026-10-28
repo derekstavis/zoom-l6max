@@ -6,7 +6,9 @@ mod scenario;
 mod session;
 mod trace;
 pub use runner::{Progress, Runner};
-pub use scenario::{Action, Gesture, Scenario, Step, control_target, is_switch, model_name};
+pub use scenario::{
+    Action, Gesture, STATE_SPEC_ENV, Scenario, Step, control_target, is_switch, model_name,
+};
 use serde::Serialize;
 pub use session::{Command, Session, run};
 use std::path::PathBuf;

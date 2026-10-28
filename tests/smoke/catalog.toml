@@ -307,6 +307,14 @@ no_sd = true
 wall_timeout_s = 1800
 
 [[case]]
+id = "state-spec"
+suites = ["lifecycle", "full"]
+models = ["l6max"]
+scenario = "scenarios/l6max-state-spec.toml"
+fixture = "spec-setup"
+no_sd = true
+
+[[case]]
 id = "popup-concurrency"
 suites = ["full"]
 models = ["l6max"]
