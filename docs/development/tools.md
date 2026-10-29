@@ -12,6 +12,7 @@ options. Run commands from the repository root unless that page says otherwise.
 | `l6ctl` | Control a running emulator through its local Unix socket | [l6ctl](tools/l6ctl.md) |
 | `l6fs` | Create SD images and access SD files through USB storage | [l6fs](tools/l6fs.md) |
 | `l6fw` | Inspect, unpack and rebuild firmware packages | [l6fw](tools/l6fw.md) |
+| `l6nor` | Inspect and edit MAIN NOR, settings banks, panel RTC and state specs | [l6nor](tools/l6nor.md) |
 | `qemu-run` | Low-level scripted QEMU input, memory probes and timed runs | [qemu-run](tools/qemu-run.md) |
 | `cpu-profile` | Measure CPU use, guest clock, sampled PCs and exceptions | [cpu-profile](tools/cpu-profile.md) |
 

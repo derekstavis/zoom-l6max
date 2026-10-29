@@ -844,7 +844,7 @@ fn main() {
         .smoke_scenario
         .as_ref()
         .map(|path| {
-            smoke_core::Scenario::load(path).and_then(|scenario| {
+            smoke_core::Scenario::load_for_case(path).and_then(|scenario| {
                 if !scenario.backends.iter().any(|b| b == "gui") {
                     return Err("scenario requires the headless backend".into());
                 }

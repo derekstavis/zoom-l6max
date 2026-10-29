@@ -56,11 +56,16 @@ Every `[[step]]` has a required `action` and may also set:
 | `models` | all scenario models | Restrict this step to a subset of the scenario models. |
 | `guest_timeout_ms` | `10000` | Guest-clock deadline for the step. Must be positive. |
 | `wall_timeout_s` | `180` | Host wall-clock deadline for the step. Must be positive. |
+| `setup_input` | `false` | The step is UI input that only brings the device to the scenario's starting state, such as confirming startup prompts. The driver drops it when the case state was built from a fixture `state_spec`. On an `include`, it applies to every included step. |
 
 Each action table adds its action-specific fields below. For composed scenarios,
 `include` takes a path to a TOML fragment containing only `[[step]]` tables.
 `state_recipe` in a fixture points to a normal scenario document; it does not
 introduce a second recipe syntax.
+
+Mark only input whose result a state spec reproduces with `setup_input`. Input
+that is the behavior under test, or that sets runtime-only state (for example
+card-reader mode), stays unmarked.
 
 ## Step operations
 

@@ -196,11 +196,9 @@ impl Runner {
         {
             self.last_report_guest = obs.panel.guest_ms;
         }
-        if self
-            .panel_quiet
-            .is_none_or(|(rows, _)| rows != obs.data.indicators)
-        {
-            self.panel_quiet = Some((obs.data.indicators, obs.panel.guest_ms));
+        let quiet_rows = settling_rows(self.model, obs.data.indicators);
+        if self.panel_quiet.is_none_or(|(rows, _)| rows != quiet_rows) {
+            self.panel_quiet = Some((quiet_rows, obs.panel.guest_ms));
         }
         let ready = self
             .startup
@@ -1058,6 +1056,20 @@ fn save_display(data: &PanelData, logs: &Path, name: &str) -> Result<(), String>
     .map_err(|e| e.to_string())
 }
 
+/// L6max non-ring lamp index of TAP in `indicators::LED_PINS`.
+const L6MAX_TAP_LED: usize = 33;
+/// Indicator rows used to decide that panel output has settled. The L6max
+/// TAP lamp flashes at the effect tempo (about every 500 guest ms at the
+/// default 120 BPM) for as long as the device runs, so it never settles.
+/// It is excluded; every other lamp and ring still has to hold still.
+fn settling_rows(model: Model, mut rows: [u32; 8]) -> [u32; 8] {
+    if model == Model::L6max {
+        let (row, column) = l6max_host::indicators::LED_PINS[L6MAX_TAP_LED];
+        rows[row] &= !(1 << (column ^ 7));
+    }
+    rows
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1681,6 +1693,56 @@ mod tests {
                 .contains("escapes")
         );
         fs::remove_file(root.parent().unwrap().join("outside.toml")).unwrap();
+        fs::remove_dir_all(&runner.logs).unwrap();
+    }
+    #[test]
+    fn l6max_tap_tempo_lamp_does_not_block_panel_settling() {
+        let mut rows = [0x28, 0x1000, 0x40002, 0x8000, 0x110, 4, 1, 0];
+        let blinking = {
+            let mut r = rows;
+            r[1] ^= 0x20000;
+            r
+        };
+        assert_eq!(
+            settling_rows(Model::L6max, rows),
+            settling_rows(Model::L6max, blinking)
+        );
+        assert_ne!(
+            settling_rows(Model::L6, rows),
+            settling_rows(Model::L6, blinking)
+        );
+        rows[1] ^= 0x10000;
+        assert_ne!(
+            settling_rows(Model::L6max, rows),
+            settling_rows(Model::L6max, blinking)
+        );
+    }
+    #[test]
+    fn setup_input_propagates_through_includes_and_is_dropped_for_spec_state() {
+        let runner = test_runner("[[step]]\naction='delay'\nguest_ms=1\n");
+        let root = &runner.logs;
+        fs::write(
+            root.join("fragment.toml"),
+            "[[step]]\naction='delay'\nguest_ms=2\n[[step]]\naction='delay'\nguest_ms=3\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("test.toml"),
+            "version=1\nname='setup'\nmodels=['l6max']\nfixture='prepared'\n[[step]]\nsetup_input=true\naction='include'\npath='fragment.toml'\n[[step]]\naction='delay'\nguest_ms=4\n",
+        )
+        .unwrap();
+        let loaded = Scenario::load(&root.join("test.toml")).unwrap();
+        assert_eq!(
+            loaded
+                .step
+                .iter()
+                .map(|s| s.setup_input)
+                .collect::<Vec<_>>(),
+            [true, true, false]
+        );
+        let kept = loaded.without_setup_input();
+        assert_eq!(kept.step.len(), 1);
+        assert!(matches!(kept.step[0].action, Action::Delay { guest_ms: 4 }));
         fs::remove_dir_all(&runner.logs).unwrap();
     }
     #[test]

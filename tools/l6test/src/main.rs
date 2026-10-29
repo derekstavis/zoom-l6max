@@ -42,6 +42,7 @@ struct Fixture {
     update_package: Option<PathBuf>,
     state_template: Option<PathBuf>,
     state_recipe: Option<PathBuf>,
+    state_spec: Option<PathBuf>,
     sd_image: Option<PathBuf>,
     audio_device: Option<String>,
     #[serde(default)]
@@ -281,18 +282,33 @@ fn load_config(path: &Path) -> Result<Config, String> {
         if fixture.state_template.is_some() && fixture.state_recipe.is_some() {
             return Err("choose state_template or state_recipe, not both".into());
         }
+        if fixture.state_recipe.is_some() && fixture.state_spec.is_some() {
+            return Err("choose state_recipe or state_spec, not both".into());
+        }
         for path in [
             &mut fixture.firmware_dir,
             &mut fixture.firmware_package,
             &mut fixture.update_package,
             &mut fixture.state_template,
             &mut fixture.state_recipe,
+            &mut fixture.state_spec,
             &mut fixture.sd_image,
         ]
         .into_iter()
         .flatten()
         {
             resolve(base, path);
+        }
+        if let Some(path) = &fixture.state_spec {
+            let spec = l6nor::StateSpec::load(path)?;
+            if spec.model != fixture.model {
+                return Err(format!(
+                    "state spec {} is for {}, not the {} fixture",
+                    path.display(),
+                    spec.model,
+                    fixture.model
+                ));
+            }
         }
         if let Some(path) = &fixture.state_recipe {
             let recipe = Scenario::load(path)?;
@@ -403,6 +419,18 @@ fn fixture_options(
         fs::create_dir_all(&state).map_err(|e| e.to_string())?;
         BTreeMap::new()
     };
+    // A spec edits the disposable copy: seed missing NOR from the selected
+    // firmware, commit settings with the firmware's bank protocol, and write
+    // the panel RTC/flash it declares.
+    let state_spec = fixture
+        .state_spec
+        .as_ref()
+        .map(|path| -> Result<Value, String> {
+            let report =
+                l6nor::state::apply(&l6nor::StateSpec::load(path)?, Some(&firmware), &state)?;
+            Ok(json!({"sha256": hash(path)?, "applied": report}))
+        })
+        .transpose()?;
     let audio_device = audio_device_spec(fixture, dir);
     let mut args = vec![
         "--no-auto-setup".into(),
@@ -444,7 +472,7 @@ fn fixture_options(
         args.push("--update-bootloader".into());
     }
     let options = Options::parse_args(args)?;
-    let manifest = json!({"fixture":fixture.name,"model":fixture.model,"firmware":files(&firmware)?,"package_sha256":selected_package.as_ref().map(|p|hash(p)).transpose()?,"patches":fixture.patches,"state_recipe":fixture.state_recipe.as_ref().map(|p|hash(p)).transpose()?,"update_package_sha256":fixture.update_package.as_ref().map(|p|hash(p)).transpose()? ,"state_template":state_hashes,"sd_sha256":sd_hash,"audio_device":audio_device,"timing":fixture.timing,"update_bootloader":fixture.update_bootloader,"qemu_sha256":config.qemu_sha256});
+    let manifest = json!({"fixture":fixture.name,"model":fixture.model,"firmware":files(&firmware)?,"package_sha256":selected_package.as_ref().map(|p|hash(p)).transpose()?,"patches":fixture.patches,"state_recipe":fixture.state_recipe.as_ref().map(|p|hash(p)).transpose()?,"update_package_sha256":fixture.update_package.as_ref().map(|p|hash(p)).transpose()? ,"state_template":state_hashes,"state_spec":state_spec,"sd_sha256":sd_hash,"audio_device":audio_device,"timing":fixture.timing,"update_bootloader":fixture.update_bootloader,"qemu_sha256":config.qemu_sha256});
     Ok((options, manifest))
 }
 fn engine_args(options: &Options) -> Vec<String> {
@@ -558,7 +586,7 @@ fn child_scenario() -> Result<(), String> {
     let mut args = env::args_os().skip(2);
     let path = PathBuf::from(args.next().ok_or("missing scenario")?);
     let options = Options::parse_args(args)?;
-    smoke_core::run(Scenario::load(&path)?, options)
+    smoke_core::run(Scenario::load_for_case(&path)?, options)
 }
 /// Build persistent state by running a semantic headless scenario on an isolated device.
 fn copy_recipe(source: &Path, destination: &Path) -> Result<PathBuf, String> {
@@ -729,13 +757,15 @@ fn run_case(
             if selected_fixture.state_recipe.is_some() {
                 return Err("volatile cases cannot use a state recipe".into());
             }
+            // A spec is rebuilt for every case, so it carries no state between
+            // cases; volatile cases keep it and run on that disposable state.
             selected_fixture.state_template = None;
         }
         if case.no_sd {
             selected_fixture.sd_image = None;
         }
         let (mut options, mut manifest) = fixture_options(config, &selected_fixture, dir)?;
-        if case.volatile {
+        if case.volatile && selected_fixture.state_spec.is_none() {
             options.state_dir = None;
         }
         if case.no_sd {
@@ -749,8 +779,15 @@ fn run_case(
                 return Err("QEMU changed during state preparation".into());
             }
         }
+        // Setup-input steps are skipped when the spec already built their result.
+        let spec_state = selected_fixture.state_spec.is_some();
+        manifest["execution_spec_state"] = json!(spec_state);
         if let Some(path) = &case.scenario {
-            smoke_core::devices::prepare(&Scenario::load(&catalog_dir.join(path))?, &mut options)?;
+            let mut scenario = Scenario::load(&catalog_dir.join(path))?;
+            if spec_state {
+                scenario = scenario.without_setup_input();
+            }
+            smoke_core::devices::prepare(&scenario, &mut options)?;
         }
         manifest["execution_volatile"] = json!(case.volatile);
         manifest["execution_no_sd"] = json!(case.no_sd);
@@ -805,7 +842,11 @@ fn run_case(
         command
             .env("SMOKE_CASE", &case.id)
             .env("SMOKE_MODEL", &fixture.model)
-            .env("SMOKE_BACKEND", backend);
+            .env("SMOKE_BACKEND", backend)
+            .env(
+                smoke_core::STATE_SPEC_ENV,
+                if spec_state { "1" } else { "0" },
+            );
         command.env(
             "RUST_LOG",
             env::var("RUST_LOG").unwrap_or_else(|_| l6max_host::logging::DEFAULT_FILTER.into()),
@@ -1324,6 +1365,7 @@ mod tests {
             update_package: None,
             state_template: None,
             state_recipe: None,
+            state_spec: None,
             sd_image: None,
             audio_device: Some("driver=wav,id=l6-audio,path={logs}/audio.wav".into()),
             gdb: true,
@@ -1414,6 +1456,16 @@ mod tests {
                 .unwrap()
                 .contains("state_template or state_recipe")
         );
+        fs::write(&config, format!("{header}[[fixture]]\nname='prepared'\nmodel='l6'\nfirmware_package='firmware.bin'\nstate_spec='spec.toml'\nstate_recipe='recipe.toml'\n")).unwrap();
+        assert!(
+            load_config(&config)
+                .err()
+                .unwrap()
+                .contains("state_recipe or state_spec")
+        );
+        fs::write(dir.join("spec.toml"), "version=1\nmodel='l6max'\n").unwrap();
+        fs::write(&config, format!("{header}[[fixture]]\nname='prepared'\nmodel='l6'\nfirmware_package='firmware.bin'\nstate_spec='spec.toml'\n")).unwrap();
+        assert!(load_config(&config).err().unwrap().contains("is for l6max"));
         fs::remove_dir_all(dir).unwrap();
     }
     #[test]
@@ -1539,6 +1591,7 @@ mod tests {
             update_package: None,
             state_template: Some(template),
             state_recipe: None,
+            state_spec: None,
             sd_image: None,
             audio_device: None,
             gdb: false,

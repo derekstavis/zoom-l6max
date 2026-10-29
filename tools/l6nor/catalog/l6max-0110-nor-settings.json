@@ -1,0 +1,436 @@
+{
+  "format": "l6nor-settings-v1",
+  "model": "l6max",
+  "system_version": "0110",
+  "main_size": "0x107fe8",
+  "main_sha256": "980d92272c1f84bed200b4d2f83575202f6a00082c928d99b9e8b53af8d44461",
+  "fingerprints": [
+    {
+      "name": "settings-validate",
+      "address": "0x800354c0",
+      "size": "0x7a4",
+      "sha256": "1a30f216a6b88deb383c7bbad0acc7133e9307c14255cd1042e94d5246a9c352"
+    },
+    {
+      "name": "bank-load",
+      "address": "0x80035c98",
+      "size": "0x11a",
+      "sha256": "b8e3de3a2267b0f93f2b26cb22e6cba3985e383abdd00eda207dafd52f06fe43"
+    },
+    {
+      "name": "settings-defaults",
+      "address": "0x80035e70",
+      "size": "0x106",
+      "sha256": "66833756472a6148d7887244125136db530af6cfe6ffe60121b27b389c6cfaa1"
+    },
+    {
+      "name": "bank-store",
+      "address": "0x80036040",
+      "size": "0x138",
+      "sha256": "3936f9d39e6e6c0b848827549416a024faea2cabacc3e7be4ba109505d10929f"
+    },
+    {
+      "name": "mixer-validate",
+      "address": "0x80042328",
+      "size": "0x5cc",
+      "sha256": "0da730c58a208917fbe6ae14122a69494b39b7c99584f2252726dabfa4bcc419"
+    },
+    {
+      "name": "mixer-defaults",
+      "address": "0x80042938",
+      "size": "0x134",
+      "sha256": "25395514c77493f41a6298feba9d354a5547dd94273ecc003bbce70f4ba7e688"
+    },
+    {
+      "name": "startup-setup",
+      "address": "0x8003be30",
+      "size": "0x10a",
+      "sha256": "0a361c2d04cd5a79585ae8f05cb793af6aaed63c139849a0e54be8b6afbcf1a9"
+    }
+  ],
+  "bank": {
+    "device": "main-nor",
+    "slots": [
+      "0x1f9000",
+      "0x1fc000"
+    ],
+    "slot_size": "0x2000",
+    "payload_offset": "0x4",
+    "payload_size": "0x17e0",
+    "markers": [
+      1,
+      2,
+      3
+    ]
+  },
+  "mixer": {
+    "block_size": "0x25a",
+    "blocks": [
+      {
+        "index": 0,
+        "name": "scene-0"
+      },
+      {
+        "index": 1,
+        "name": "scene-1"
+      },
+      {
+        "index": 2,
+        "name": "scene-2"
+      },
+      {
+        "index": 3,
+        "name": "scene-3"
+      },
+      {
+        "index": 4,
+        "name": "current"
+      },
+      {
+        "index": 5,
+        "name": "scratch"
+      }
+    ],
+    "channel_records": 12,
+    "record_size": "0x18",
+    "record_default": "000040404040404040000000000000000000000000000101",
+    "block_tail_defaults": [
+      {
+        "offset": "0x130",
+        "bytes": "32002800320032005a001e00f8012300f8013200"
+      },
+      {
+        "offset": "0x14a",
+        "bytes": "2003060606060606"
+      }
+    ],
+    "record_fields": [
+      {
+        "name": "mute",
+        "offset": "0x0",
+        "kind": "u8",
+        "min": 0,
+        "max": 1
+      },
+      {
+        "name": "eq_gain",
+        "offset": "0x2",
+        "kind": "i8",
+        "count": 3,
+        "stride": 2,
+        "min": 0,
+        "max": 127
+      },
+      {
+        "name": "eq_frequency",
+        "offset": "0x3",
+        "kind": "i8",
+        "count": 3,
+        "stride": 2,
+        "min": 0,
+        "max": 127
+      },
+      {
+        "name": "pan",
+        "offset": "0x8",
+        "kind": "i8",
+        "min": 0,
+        "max": 127
+      },
+      {
+        "name": "submix",
+        "offset": "0x9",
+        "kind": "i8",
+        "min": 0,
+        "max": 127
+      },
+      {
+        "name": "efx",
+        "offset": "0xc",
+        "kind": "i8",
+        "count": 2,
+        "stride": 1,
+        "min": 0,
+        "max": 127
+      },
+      {
+        "name": "aux",
+        "offset": "0xf",
+        "kind": "i8",
+        "count": 2,
+        "stride": 1,
+        "min": 0,
+        "max": 127
+      },
+      {
+        "name": "channel_flag",
+        "offset": "0x15",
+        "kind": "u8",
+        "min": 0,
+        "max": 1
+      },
+      {
+        "name": "aux_pre_post",
+        "offset": "0x16",
+        "kind": "u8",
+        "count": 2,
+        "stride": 1,
+        "min": 0,
+        "max": 1
+      }
+    ],
+    "block_fields": [
+      {
+        "name": "level",
+        "offset": "0x120",
+        "kind": "i8",
+        "count": 12,
+        "stride": 1,
+        "min": 0,
+        "max": 127
+      },
+      {
+        "name": "compressor",
+        "offset": "0x12c",
+        "kind": "u8",
+        "min": 0,
+        "max": 1
+      },
+      {
+        "name": "efx_type",
+        "offset": "0x12e",
+        "kind": "u8",
+        "min": 0,
+        "max": 5
+      },
+      {
+        "name": "efx_param",
+        "offset": "0x130",
+        "kind": "i16",
+        "count": 10,
+        "stride": 2,
+        "min": 0,
+        "max": 16383
+      }
+    ]
+  },
+  "fields": [
+    {
+      "name": "setup_required",
+      "offset": "0xe1c",
+      "kind": "u8",
+      "min": 0,
+      "max": 1,
+      "default": 1
+    },
+    {
+      "name": "saved_scenes",
+      "offset": "0xe20",
+      "kind": "u32",
+      "min": 0,
+      "max": 15,
+      "default": 0
+    },
+    {
+      "name": "auto_power_off",
+      "offset": "0xe24",
+      "kind": "u8",
+      "min": 0,
+      "max": 1,
+      "default": 1
+    },
+    {
+      "name": "recorder_mode",
+      "offset": "0xe25",
+      "kind": "u8",
+      "min": 0,
+      "max": 1,
+      "default": 0
+    },
+    {
+      "name": "mixer_control_via_midi",
+      "offset": "0xe26",
+      "kind": "u8",
+      "min": 0,
+      "max": 1,
+      "default": 0
+    },
+    {
+      "name": "midi_out_mode",
+      "offset": "0xe27",
+      "kind": "u8",
+      "min": 0,
+      "max": 1,
+      "default": 0
+    },
+    {
+      "name": "battery_type",
+      "offset": "0xe28",
+      "kind": "u32",
+      "min": 0,
+      "max": 2,
+      "default": 0
+    },
+    {
+      "name": "unclassified_e2c",
+      "offset": "0xe2c",
+      "kind": "u32",
+      "count": 4,
+      "stride": 4,
+      "min": 0,
+      "max": 1,
+      "default": 0
+    },
+    {
+      "name": "midi_channel",
+      "offset": "0xe3c",
+      "kind": "u8",
+      "min": 0,
+      "max": 15,
+      "default": 0
+    },
+    {
+      "name": "sound_pad_midi_note",
+      "offset": "0xe3d",
+      "kind": "i8",
+      "count": 4,
+      "stride": 1,
+      "min": 0,
+      "max": 127,
+      "default": [
+        60,
+        62,
+        64,
+        65
+      ]
+    },
+    {
+      "name": "midi_cc_number",
+      "offset": "0xe41",
+      "kind": "u8",
+      "count": 94,
+      "stride": 1,
+      "min": 0,
+      "max": 255,
+      "default_hex": "01020304050607080b0c0d0e0f10111215161718191a1b1c2122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f5051525354555657585d5e5f666768696a6d6e71727577"
+    },
+    {
+      "name": "recorder_file_name",
+      "offset": "0xea0",
+      "kind": "bytes",
+      "size": "0x1c"
+    },
+    {
+      "name": "usb_audio_if_mode",
+      "offset": "0xebc",
+      "kind": "u8",
+      "min": 0,
+      "max": 1,
+      "default": 0
+    },
+    {
+      "name": "unclassified_ebd",
+      "offset": "0xebd",
+      "kind": "u8",
+      "min": 0,
+      "max": 2,
+      "default": 2
+    },
+    {
+      "name": "unclassified_ebe",
+      "offset": "0xebe",
+      "kind": "u8",
+      "min": 0,
+      "max": 4,
+      "default": 2
+    },
+    {
+      "name": "usb_mix_minus",
+      "offset": "0xebf",
+      "kind": "u8",
+      "min": 0,
+      "max": 1,
+      "default": 0
+    },
+    {
+      "name": "recorder_state",
+      "offset": "0xec0",
+      "kind": "bytes",
+      "size": "0x808"
+    },
+    {
+      "name": "monitor_point",
+      "offset": "0x16c8",
+      "kind": "u8",
+      "min": 0,
+      "max": 2,
+      "default": 1
+    },
+    {
+      "name": "sub_out_point",
+      "offset": "0x16c9",
+      "kind": "u8",
+      "min": 0,
+      "max": 2,
+      "default": 1
+    },
+    {
+      "name": "last_date_year",
+      "offset": "0x16ca",
+      "kind": "u16",
+      "min": 2000,
+      "max": 2100,
+      "default": 2025
+    },
+    {
+      "name": "last_date_month",
+      "offset": "0x16cc",
+      "kind": "u16",
+      "min": 1,
+      "max": 12,
+      "default": 1
+    },
+    {
+      "name": "last_date_day",
+      "offset": "0x16ce",
+      "kind": "u16",
+      "min": 1,
+      "max": 31,
+      "default": 1
+    },
+    {
+      "name": "last_date_hour",
+      "offset": "0x16d0",
+      "kind": "u16",
+      "min": 0,
+      "max": 23,
+      "default": 0
+    },
+    {
+      "name": "last_date_minute",
+      "offset": "0x16d2",
+      "kind": "u16",
+      "min": 0,
+      "max": 59,
+      "default": 0
+    },
+    {
+      "name": "last_date_second",
+      "offset": "0x16d4",
+      "kind": "u16",
+      "min": 0,
+      "max": 59,
+      "default": 0
+    }
+  ],
+  "volatile_ranges": [
+    {
+      "offset": "0x16e4",
+      "size": "0xf2"
+    },
+    {
+      "offset": "0x17d8",
+      "size": "0x8"
+    }
+  ]
+}

@@ -10,6 +10,7 @@ tracing.workspace = true
 smoke-core = { path = "../smoke-core" }
 l6max-host.workspace = true
 l6fw.workspace = true
+l6nor.workspace = true
 firmware-patch-wasm.workspace = true
 serde = { version = "1", features = ["derive"] }
 serde_json.workspace = true

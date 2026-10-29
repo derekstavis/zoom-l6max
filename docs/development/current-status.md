@@ -39,6 +39,48 @@ both models. Generated knob-dialog fixtures passed the knob-dialog and
 popup-concurrency cases. These results do not establish untested UI, physical wiring or
 audio behavior.
 
+The headless `state-spec` case passed for L6max with stock 1.10 MAIN
+`980d9227…8d44461`, spec `l6max-setup-complete.toml` `d3dedc75…6c36ee485` and an
+external QEMU `1942dc36…02fb8d7e`. Built by `l6nor` without input, the state
+booted to the recorder in 68–71 s of wall time. The same case took 162 s through
+the `state-l6max-setup` recipe. Both runs produced a byte-identical MAIN NOR,
+panel flash and option bytes. A control spec that left `setup_required` set
+failed at the setup-flag check and opened Date/Time.
+
+Scenario steps marked `setup_input` (startup prompt confirmations and the
+L6 `ch4-mono` pair) are skipped on spec-built state. The following ran headless
+with QEMU `8efab2ec…6855f3fbf`, built from this tree's sources, stock MAIN
+images unless noted, and specs `l6max-setup-complete.toml` and
+`l6-settings-defaults.toml`. The baseline is a saved L6max template with presses,
+or for L6 no spec with presses:
+
+| Case | Spec state, presses skipped | Baseline |
+| --- | --- | --- |
+| `state-spec` | PASS, 75 s | — |
+| Quick suite (L6max) | PASS, 89 s | PASS, 99 s |
+| `storage` (L6max) | PASS, 96 s | PASS, 108 s |
+| `power` (L6max) | PASS, 150 s | PASS, 160 s |
+| `l6max-din-mixer-control` | PASS twice, 87 s | PASS, 97 s |
+| L6 `boot` (`midi-sync` patched, spec without a bank) | PASS, 64 s | — |
+| L6 `l6-direct-midi-sync` (`midi-sync` patched, spec without a bank) | PASS, 229 s | PASS, 225 s |
+| L6 `boot` (stock, final spec with `auto_power_off = 0`) | PASS | — |
+| `usb` (both models) | FAIL at USB MIDI receive | Same failure |
+| `l6max-direct-midi-sync` (stock) | FAIL, 3/94 MIDI-sync replies | Same failure |
+| `l6max-direct-midi-sync` (`midi-sync` patched) | FAIL, encoder CC not received | Same failure |
+
+`mixer-ready` and other settle checks ignore only the L6max TAP lamp, which
+flashes at the effect tempo. The DIN mixer check takes its DIN baseline after
+the USB-driven ring has settled; it previously sampled partial ring updates.
+With a loaded L6 settings bank holding `auto_power_off = 1`, the default, the
+emulated L6 waited for two `ch4-mono` presses before its boot LED sweep and
+missed the readiness deadline. With 0 it booted without input, so the L6 spec
+writes a defaults bank with `auto_power_off = 0`. Without any bank the firmware
+did not wait; why the setting gates startup only with a loaded bank is
+unresolved. The L6 settings catalog's default payload matched the firmware's
+defaulted RAM image, and an `l6nor`-written L6 bank was loaded as written. The
+L6 `usb` and patched `l6-direct-midi-sync` cases have not been rerun with the
+final L6 spec.
+
 Prepared L6max fixtures assume the documented SD Cancel/Confirm sequence.
 Boot floors are 18 guest seconds for L6 and 40 for L6max. The driver pins the
 external QEMU executable, but its build-source provenance remains unattested.

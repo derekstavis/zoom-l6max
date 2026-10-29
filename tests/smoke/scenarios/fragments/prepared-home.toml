@@ -4,22 +4,27 @@ until = "boot-ready"
 guest_timeout_ms = 120000
 wall_timeout_s = 600
 
+# L6max startup SD prompt (Cancel). A state spec boots without it.
 [[step]]
+setup_input = true
 models = ["l6max"]
 action = "press"
 control = "recorder.down"
 
 [[step]]
+setup_input = true
 models = ["l6max"]
 action = "delay"
 guest_ms = 2000
 
 [[step]]
+setup_input = true
 models = ["l6max"]
 action = "press"
 control = "recorder.confirm"
 
 [[step]]
+setup_input = true
 models = ["l6max"]
 action = "delay"
 guest_ms = 5000

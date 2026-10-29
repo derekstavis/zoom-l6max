@@ -1,0 +1,13 @@
+# L6 starting state for prepared and fresh fixtures: firmware-default settings
+# with auto power off disabled. With a loaded bank holding auto_power_off = 1,
+# emulated L6 startup waited for two ch4-mono presses before its boot LED
+# sweep; with 0 it booted without input. Scenario setup input is skipped for
+# fixtures that use a spec.
+version = 1
+model = "l6"
+
+[settings]
+base = "defaults"
+
+[settings.values]
+auto_power_off = 0

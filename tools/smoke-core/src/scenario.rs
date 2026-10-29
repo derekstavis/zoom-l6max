@@ -34,6 +34,10 @@ pub struct Scenario {
 pub struct Step {
     #[serde(default)]
     pub models: Vec<String>,
+    /// UI input that only brings the device to the scenario's starting
+    /// state. Skipped when the case state was built from a state spec.
+    #[serde(default)]
+    pub setup_input: bool,
     #[serde(default = "guest_timeout")]
     pub guest_timeout_ms: u32,
     #[serde(default = "wall_timeout")]
@@ -892,7 +896,25 @@ impl Scenario {
         value.validate()?;
         Ok(value)
     }
+    /// Load a scenario for a case process. When the driver built the case
+    /// state from a state spec it sets [`STATE_SPEC_ENV`], and setup-input
+    /// steps are dropped because the state already holds their result.
+    pub fn load_for_case(path: &Path) -> Result<Self, String> {
+        let scenario = Self::load(path)?;
+        Ok(if std::env::var(STATE_SPEC_ENV).as_deref() == Ok("1") {
+            scenario.without_setup_input()
+        } else {
+            scenario
+        })
+    }
+    pub fn without_setup_input(mut self) -> Self {
+        self.step.retain(|step| !step.setup_input);
+        self
+    }
 }
+/// Environment variable the driver sets to `1` for cases whose persistent
+/// state was built from a state spec.
+pub const STATE_SPEC_ENV: &str = "SMOKE_STATE_SPEC";
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Fragment {
@@ -921,6 +943,7 @@ fn expand_steps(
             let mut nested = expand_steps(fragment.step, path.parent().unwrap(), root, stack)?;
             stack.pop();
             for child in &mut nested {
+                child.setup_input |= step.setup_input;
                 if !step.models.is_empty() {
                     if child.models.is_empty() {
                         child.models = step.models.clone();

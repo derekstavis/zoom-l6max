@@ -81,6 +81,8 @@ There are three related TOML inputs:
    Fixture `state_recipe` points to this same scenario format and uses its
    device-preparation operations. The complete list of header, per-step, and
    action blocks is in the [scenario format reference](../scenario-format.md).
+   Fixture `state_spec` instead declares the starting device directly; see
+   [`l6nor` state specs](l6nor.md#state-specs).
 
 Fixture and catalog configuration, scenario headers, and action-specific
 fields are strict. Paths in local configuration are resolved relative to the
