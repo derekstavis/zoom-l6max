@@ -4,7 +4,9 @@ guest_ms = 40000
 guest_timeout_ms = 45000
 wall_timeout_s = 900
 
+# Confirm the startup prompts. A state spec boots without them.
 [[step]]
+setup_input = true
 models = ["l6max"]
 action = "press"
 control = "recorder-function-4"
@@ -12,12 +14,14 @@ guest_timeout_ms = 10000
 wall_timeout_s = 60
 
 [[step]]
+setup_input = true
 action = "delay"
 guest_ms = 2000
 guest_timeout_ms = 5000
 wall_timeout_s = 30
 
 [[step]]
+setup_input = true
 models = ["l6max"]
 action = "press"
 control = "recorder-function-4"

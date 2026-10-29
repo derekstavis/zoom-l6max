@@ -1,0 +1,41 @@
+version = 1
+name = "l6max-state-spec"
+models = ["l6max"]
+backends = ["headless"]
+fixture = "spec-setup"
+main_sha256 = "980d92272c1f84bed200b4d2f83575202f6a00082c928d99b9e8b53af8d44461"
+
+# The fixture's state spec replaces first-boot setup input. Boot must reach
+# the normal UI with the spec's settings loaded and the panel not reprogrammed.
+[[step]]
+action = "wait"
+until = "boot-ready"
+guest_timeout_ms = 120000
+wall_timeout_s = 600
+
+[[step]]
+action = "delay"
+guest_ms = 3000
+
+[[step]]
+action = "checkpoint"
+name = "home"
+
+# Live settings struct: setup_required loaded from the synthesized bank.
+[[step]]
+action = "expect-memory"
+address = 0x804601e0
+bytes = [0]
+
+# Startup UI state: 5 is the Date/Time and Battery Type setup flow.
+[[step]]
+action = "expect-memory"
+address = 0x805dc360
+bytes = [0]
+
+# The firmware read the spec's bank (first commit lands in slot 0x1f9000) and
+# the main firmware did not reprogram the pre-programmed panel.
+[[step]]
+action = "expect-trace"
+contains = ["addr=001f9004 ipcr1=000017e0"]
+absent = ["l6 panel ROM write"]

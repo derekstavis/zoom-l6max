@@ -2410,6 +2410,26 @@ impl State {
             }
             thread::sleep(Duration::from_millis(5));
         };
+        // A ring update spans several panel scan rows, so the first changed
+        // sample can be a partial value. Take the DIN baseline only after the
+        // USB-driven ring has held one value for 200 guest ms.
+        let (mut settled, mut since) = (usb_after, inputs.panel.snapshot().guest_ms);
+        let usb_after = loop {
+            session.poll()?;
+            let now = inputs.panel.snapshot().guest_ms;
+            let current = ring();
+            if current != settled {
+                (settled, since) = (current, now);
+            } else if now.wrapping_sub(since) >= 200 {
+                break settled;
+            }
+            if Instant::now() >= usb_deadline + timeout
+                || now.wrapping_sub(usb_guest_start) > guest_timeout_ms
+            {
+                return Err("USB Mixer Control ring did not settle".into());
+            }
+            thread::sleep(Duration::from_millis(5));
+        };
 
         let din_before = ring();
         din.send(&[0xb0, 0x51, 40]).map_err(std::io::Error::other)?;

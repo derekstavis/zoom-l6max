@@ -18,6 +18,7 @@ firmware-patch-core = { path = "tools/firmware-patch-core" }
 firmware-patch-compile = { path = "tools/firmware-patch-compile" }
 firmware-patch-wasm = { path = "tools/firmware-patch-wasm" }
 sd-image = { path = "tools/sd-image" }
+l6nor = { path = "tools/l6nor" }
 qemu-build = { path = "tools/qemu-build" }
 l6max-diagnostics = { path = "tools/diagnostics" }
 libc = "0.2.189"

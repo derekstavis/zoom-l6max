@@ -1,0 +1,225 @@
+{
+  "format": "l6nor-settings-v1",
+  "model": "l6",
+  "system_version": "0110",
+  "main_size": "0xb5ae4",
+  "main_sha256": "827c7c5cb2a43cc3a011d4556462b8cb9539242f817ebeed7727d66a36c03799",
+  "fingerprints": [
+    {
+      "name": "settings-validate",
+      "address": "0x8002b6f0",
+      "size": "0x524",
+      "sha256": "4c36ee299a9593093e8f1644638103caf76827a14d61c8c5c3c1402e1578aa77"
+    },
+    {
+      "name": "bank-load",
+      "address": "0x8002bc48",
+      "size": "0x11a",
+      "sha256": "e1112997bf8fb3400810072e8037783a75a5cbbab6945923890f6f002bba5915"
+    },
+    {
+      "name": "settings-defaults",
+      "address": "0x8002be20",
+      "size": "0x120",
+      "sha256": "c00db0c0194a8123087e313758cc0a92496529d50f8b0df0cada375fd3040b89"
+    },
+    {
+      "name": "bank-store",
+      "address": "0x8002c028",
+      "size": "0x136",
+      "sha256": "6a4e444230e987aef2d55473b85433dcf2110974175d55176831f7c33657ed1b"
+    },
+    {
+      "name": "mixer-validate",
+      "address": "0x80031a38",
+      "size": "0x544",
+      "sha256": "e760e3f3d288c4cf85e8215b79c0214ada99d21246f053c10484081319195335"
+    },
+    {
+      "name": "mixer-defaults",
+      "address": "0x80031fc0",
+      "size": "0xdc",
+      "sha256": "251e9c7f4af5cfac4670ce06893acf90600f367d6f24aa6bcb4f69e893fdf7a7"
+    }
+  ],
+  "bank": {
+    "device": "resource-nor",
+    "slots": [
+      "0x3fb000",
+      "0x3fd000"
+    ],
+    "slot_size": "0x2000",
+    "payload_offset": "0x4",
+    "payload_size": "0x17c4",
+    "markers": [
+      1,
+      2,
+      3
+    ]
+  },
+  "mixer": {
+    "block_size": "0x306",
+    "blocks": [
+      {
+        "index": 0,
+        "name": "scene-0"
+      },
+      {
+        "index": 1,
+        "name": "scene-1"
+      },
+      {
+        "index": 2,
+        "name": "scene-2"
+      },
+      {
+        "index": 3,
+        "name": "current"
+      },
+      {
+        "index": 4,
+        "name": "scratch"
+      }
+    ],
+    "channel_records": 10,
+    "record_size": "0x15",
+    "record_default": "000040404040404040000000000000000000000101",
+    "block_tail_defaults": [
+      {
+        "offset": "0xe2",
+        "bytes": "32002800320032005a001e00f8012300f8013200"
+      },
+      {
+        "offset": "0xf8",
+        "bytes": "20030606060606"
+      }
+    ],
+    "record_fields": [],
+    "block_fields": []
+  },
+  "fields": [
+    {
+      "name": "saved_scenes",
+      "offset": "0xf20",
+      "kind": "u32",
+      "min": 0,
+      "max": 7,
+      "default": 0
+    },
+    {
+      "name": "auto_power_off",
+      "offset": "0xf24",
+      "kind": "u8",
+      "min": 0,
+      "max": 1,
+      "default": 1
+    },
+    {
+      "name": "unclassified_f25",
+      "offset": "0xf25",
+      "kind": "bytes",
+      "size": "0x10"
+    },
+    {
+      "name": "recorder_mode",
+      "offset": "0xf35",
+      "kind": "u8",
+      "min": 0,
+      "max": 1,
+      "default": 0
+    },
+    {
+      "name": "mixer_control_via_midi",
+      "offset": "0xf36",
+      "kind": "u8",
+      "min": 0,
+      "max": 1,
+      "default": 0
+    },
+    {
+      "name": "midi_out_mode",
+      "offset": "0xf37",
+      "kind": "u8",
+      "min": 0,
+      "max": 1,
+      "default": 0
+    },
+    {
+      "name": "battery_type",
+      "offset": "0xf38",
+      "kind": "u32",
+      "min": 0,
+      "max": 2,
+      "default": 0
+    },
+    {
+      "name": "unclassified_f3c",
+      "offset": "0xf3c",
+      "kind": "u32",
+      "min": 0,
+      "max": 1,
+      "default": 0
+    },
+    {
+      "name": "midi_channel",
+      "offset": "0xf40",
+      "kind": "u8",
+      "min": 0,
+      "max": 15,
+      "default": 0
+    },
+    {
+      "name": "sound_pad_midi_note",
+      "offset": "0xf41",
+      "kind": "i8",
+      "count": 4,
+      "stride": 1,
+      "min": 0,
+      "max": 127,
+      "default": [
+        60,
+        62,
+        64,
+        65
+      ]
+    },
+    {
+      "name": "midi_cc_number",
+      "offset": "0xf45",
+      "kind": "u8",
+      "count": 66,
+      "stride": 1,
+      "min": 0,
+      "max": 255,
+      "default_hex": "0102030405060b0c0d0e0f1015161718191a2122232425262b2c2d2e2f3035363738393a3f4041424344494a4b4c4d4e5354555657585d5e5f6667686d6e71727577"
+    },
+    {
+      "name": "unclassified_f88",
+      "offset": "0xf88",
+      "kind": "bytes",
+      "size": "0x20"
+    },
+    {
+      "name": "unclassified_fa8",
+      "offset": "0xfa8",
+      "kind": "u8",
+      "min": 0,
+      "max": 2,
+      "default": 0
+    }
+  ],
+  "volatile_ranges": [
+    {
+      "offset": "0xfa9",
+      "size": "0x3ff"
+    },
+    {
+      "offset": "0x13a8",
+      "size": "0x400"
+    },
+    {
+      "offset": "0x17a8",
+      "size": "0x1a"
+    }
+  ]
+}

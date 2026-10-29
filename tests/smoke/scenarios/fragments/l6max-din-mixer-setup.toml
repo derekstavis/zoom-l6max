@@ -4,19 +4,24 @@ guest_ms = 40000
 guest_timeout_ms = 50000
 wall_timeout_s = 180
 
+# Confirm the startup prompts. A state spec boots without them.
 [[step]]
+setup_input = true
 action = "press"
 control = "recorder.confirm"
 
 [[step]]
+setup_input = true
 action = "delay"
 guest_ms = 1950
 
 [[step]]
+setup_input = true
 action = "press"
 control = "recorder.confirm"
 
 [[step]]
+setup_input = true
 action = "delay"
 guest_ms = 4950
 

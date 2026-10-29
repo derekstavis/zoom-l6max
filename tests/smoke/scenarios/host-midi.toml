@@ -19,11 +19,14 @@ guest_timeout_ms = 30000
 wall_timeout_s = 900
 
 [[step]]
+setup_input = true
 models = ["l6"]
 action = "press"
 control = "ch4-mono"
 
+# L6max: confirm the startup prompts. A state spec boots without them.
 [[step]]
+setup_input = true
 models = ["l6max"]
 action = "press"
 control = "recorder.confirm"
@@ -34,16 +37,19 @@ action = "delay"
 guest_ms = 2000
 
 [[step]]
+setup_input = true
 models = ["l6max"]
 action = "delay"
 guest_ms = 1950
 
 [[step]]
+setup_input = true
 models = ["l6"]
 action = "press"
 control = "ch4-mono"
 
 [[step]]
+setup_input = true
 models = ["l6max"]
 action = "press"
 control = "recorder.confirm"
@@ -54,6 +60,7 @@ action = "delay"
 guest_ms = 5000
 
 [[step]]
+setup_input = true
 models = ["l6max"]
 action = "delay"
 guest_ms = 4950

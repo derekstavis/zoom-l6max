@@ -1,0 +1,25 @@
+# L6max state after first-boot setup, built without pressing buttons.
+# Equivalent to scenarios/state-l6max-setup.toml: the date editor result is
+# written to the panel RTC, and the settings bank is the firmware default with
+# setup completed (the default Battery Type is kept). The panel is
+# pre-programmed so the first boot skips panel ROM programming.
+version = 1
+model = "l6max"
+
+[settings]
+base = "defaults"
+
+[settings.values]
+setup_required = 0
+# Confirming the Date/Time editor also records the entered date in the bank.
+last_date_year = 2026
+last_date_month = 2
+last_date_day = 2
+last_date_hour = 1
+last_date_minute = 1
+
+[rtc]
+datetime = "2026-02-02T01:01:00"
+
+[panel]
+programmed = true
