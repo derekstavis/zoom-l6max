@@ -98,6 +98,18 @@ gdb = true
 # firmware_package = "/absolute/path/to/stock-L6max-1.10.BIN"
 # state_recipe = "tests/smoke/scenarios/state-l6max-setup.toml"
 
+# Build the same first-boot-complete L6max state directly, without a setup
+# guest: the spec writes NOR settings, the panel RTC and a programmed panel.
+# Also used by the state-spec case. A `prepared` fixture can use the same spec
+# instead of a saved template; scenario steps marked setup_input (startup
+# prompt confirmations) are then skipped. For L6, use
+# tests/smoke/states/l6-settings-defaults.toml.
+# [[fixture]]
+# name = "spec-setup"
+# model = "l6max"
+# firmware_package = "/absolute/path/to/stock-L6max-1.10.BIN"
+# state_spec = "tests/smoke/states/l6max-setup-complete.toml"
+
 # The patched DIN mixer-control qualification boots this L6max firmware after
 # enabling Mixer Control via MIDI through the editor SysEx session.
 # [[fixture]]

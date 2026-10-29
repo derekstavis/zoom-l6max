@@ -19,11 +19,14 @@ guest_ms = 22000
 guest_timeout_ms = 30000
 
 [[step]]
+setup_input = true
 models = ["l6"]
 action = "press"
 control = "ch4-mono"
 
+# L6max: complete first-boot setup. A state spec boots without it.
 [[step]]
+setup_input = true
 models = ["l6max"]
 action = "press"
 control = "recorder.confirm"
@@ -33,11 +36,13 @@ action = "delay"
 guest_ms = 2000
 
 [[step]]
+setup_input = true
 models = ["l6"]
 action = "press"
 control = "ch4-mono"
 
 [[step]]
+setup_input = true
 models = ["l6max"]
 action = "press"
 control = "recorder.confirm"
