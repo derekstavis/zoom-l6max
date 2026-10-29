@@ -127,7 +127,7 @@ Scenarios default to `backends = ["headless", "gui"]`. Typed device steps requir
 | --- | --- | --- |
 | `sd-card` | `inserted` | QMP removal or insertion of the case's copied card |
 | `usb-descriptors` | — | Validate device/configuration descriptors and SET_CONFIGURATION |
-| `usb-midi` | `value` | Capture valid USB MIDI IN after physical encoder input and send a model-mapped channel-1 CC |
+| `usb-midi` | `value` | Require the preceding encoder input's model-mapped channel-1 CC on USB MIDI IN, then send that CC with `value` |
 | `host-midi-round-trip` | — | Verify host MIDI input/output delivery through the configured host MIDI backend |
 | `direct-usb-midi-round-trip` | optional `cable` (0–15), `expect_ring_change` (defaults to true) | Check the encoder report and channel-1 mixer CC on a selected USB MIDI cable; set `expect_ring_change = false` to verify other cables are ignored |
 | `l6-din-usb-forwarding` | — | Verify L6 DIN-to-USB forwarding behavior |

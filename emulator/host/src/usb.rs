@@ -4,8 +4,11 @@ use std::{
     io::{self, Read, Write},
     net::Shutdown,
     os::unix::net::UnixStream,
-    sync::Mutex,
-    thread,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+    thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
 const MAGIC: u32 = 0x4c365553;
@@ -24,10 +27,15 @@ fn context(error: io::Error, operation: &str) -> io::Error {
     }
 }
 pub struct UsbHost {
-    socket: Mutex<UnixStream>,
-    sequence: Mutex<u32>,
+    wire: Arc<Wire>,
     control_lock: Mutex<()>,
     shutdown_socket: UnixStream,
+    pumps: Mutex<Vec<(u8, InPump)>>,
+}
+/// The token socket, shared with IN pumps so they do not own the host.
+struct Wire {
+    socket: Mutex<UnixStream>,
+    sequence: Mutex<u32>,
 }
 impl UsbHost {
     pub fn new(socket: UnixStream) -> io::Result<Self> {
@@ -35,14 +43,32 @@ impl UsbHost {
         socket.set_write_timeout(Some(Duration::from_secs(3)))?;
         Ok(Self {
             shutdown_socket: socket.try_clone()?,
-            socket: Mutex::new(socket),
-            sequence: Mutex::new(0),
+            wire: Arc::new(Wire {
+                socket: Mutex::new(socket),
+                sequence: Mutex::new(0),
+            }),
             control_lock: Mutex::new(()),
+            pumps: Mutex::new(Vec::new()),
         })
     }
     pub fn shutdown(&self) {
+        // Close the socket first so a pump blocked on a reply exits at once.
         let _ = self.shutdown_socket.shutdown(Shutdown::Both);
+        self.pumps.lock().unwrap().clear();
     }
+    fn request(&self, kind: u32, endpoint: u32, length: usize, data: &[u8]) -> io::Result<Vec<u8>> {
+        self.wire.request(kind, endpoint, length, data)
+    }
+    /// Poll `endpoint` continuously from now on, as a configured host does;
+    /// [`Self::try_receive`] then returns the queued transactions.
+    fn start_in_pump(&self, endpoint: u8) -> io::Result<()> {
+        let mut pumps = self.pumps.lock().unwrap();
+        pumps.retain(|(pumped, _)| *pumped != endpoint);
+        pumps.push((endpoint, InPump::start(self.wire.clone(), endpoint)?));
+        Ok(())
+    }
+}
+impl Wire {
     fn request(&self, kind: u32, endpoint: u32, length: usize, data: &[u8]) -> io::Result<Vec<u8>> {
         if length > MAX {
             return Err(io::Error::new(
@@ -84,7 +110,14 @@ impl UsbHost {
             }
         }
     }
+}
+impl UsbHost {
+    /// Attach or detach the cable. Detaching stops host polling; the next
+    /// enumeration restarts it.
     pub fn connect(&self, connected: bool) -> io::Result<()> {
+        if !connected {
+            self.pumps.lock().unwrap().clear();
+        }
         self.request(1, connected as u32, 0, &[]).map(|_| ())
     }
     fn token(&self, kind: u32, endpoint: u8, length: usize, data: &[u8]) -> io::Result<Vec<u8>> {
@@ -98,11 +131,33 @@ impl UsbHost {
             }
         }
     }
+    /// Whether the device answers tokens: attached, with firmware's
+    /// controller running. Probes an endpoint the device does not implement,
+    /// so no firmware buffer is touched.
+    pub fn controller_running(&self) -> io::Result<bool> {
+        match self.request(3, 0x8f, 0, &[]) {
+            Err(error) if error.raw_os_error() == Some(libc::ENODEV) => Ok(false),
+            Err(error) if error.raw_os_error() == Some(libc::EAGAIN) => Ok(true),
+            Err(error) => Err(error),
+            Ok(_) => Ok(true),
+        }
+    }
     pub fn receive(&self, endpoint: u8, length: usize) -> io::Result<Vec<u8>> {
         self.token(3, endpoint | 0x80, length, &[])
     }
     /// One IN transaction. An unprimed endpoint returns EAGAIN without waiting.
+    /// An endpoint the host is already polling returns its oldest queued
+    /// transaction instead, or EAGAIN when none is waiting.
     pub fn try_receive(&self, endpoint: u8, length: usize) -> io::Result<Vec<u8>> {
+        if let Some((_, pump)) = self
+            .pumps
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(pumped, _)| *pumped == endpoint)
+        {
+            return pump.try_receive();
+        }
         self.request(3, (endpoint | 0x80) as u32, length, &[])
     }
     pub fn send(&self, endpoint: u8, data: &[u8]) -> io::Result<()> {
@@ -234,6 +289,11 @@ impl UsbHost {
         let config = Configuration::parse(&bytes)?;
         self.control_with_retry([0, 9, config.value, 0, 0, 0, 0, 0])
             .map_err(|e| context(e, "set USB configuration"))?;
+        // A configured host polls MIDI IN continuously; firmware may abandon
+        // a transfer that is not collected promptly.
+        if let Some(midi) = config.midi {
+            self.start_in_pump(midi.input)?;
+        }
         Ok((device, bytes, config))
     }
 
@@ -288,6 +348,86 @@ impl UsbHost {
                 }
                 Err(error) => return Err(context(error, "get USB device descriptor")),
             }
+        }
+    }
+}
+
+/// Polls one bulk IN endpoint continuously, as a real host does once a
+/// device is configured, and queues every transaction it returns. Firmware
+/// flushes an IN transfer that the host does not collect within about 100 ms.
+struct InPump {
+    state: Arc<Mutex<PumpState>>,
+    stop: Arc<AtomicBool>,
+    worker: Option<JoinHandle<()>>,
+}
+#[derive(Default)]
+struct PumpState {
+    transactions: std::collections::VecDeque<Vec<u8>>,
+    error: Option<(io::ErrorKind, Option<i32>, String)>,
+}
+/// Queued transactions beyond which the pump reports an overflow rather than
+/// discarding data.
+const PUMP_LIMIT: usize = 4096;
+impl InPump {
+    fn start(wire: Arc<Wire>, endpoint: u8) -> io::Result<Self> {
+        let state = Arc::new(Mutex::new(PumpState::default()));
+        let stop = Arc::new(AtomicBool::new(false));
+        let (worker_state, worker_stop) = (state.clone(), stop.clone());
+        let worker = thread::Builder::new()
+            .name(format!("usb-in-{endpoint}"))
+            .spawn(move || {
+                while !worker_stop.load(Ordering::Relaxed) {
+                    match wire.request(3, (endpoint | 0x80) as u32, MAX, &[]) {
+                        Ok(bytes) if bytes.is_empty() => {}
+                        Ok(bytes) => {
+                            let mut state = worker_state.lock().unwrap();
+                            if state.transactions.len() >= PUMP_LIMIT {
+                                state.error = Some((
+                                    io::ErrorKind::OutOfMemory,
+                                    None,
+                                    format!("USB IN endpoint {endpoint} queue overflowed"),
+                                ));
+                                return;
+                            }
+                            state.transactions.push_back(bytes);
+                            continue;
+                        }
+                        Err(error) if error.raw_os_error() == Some(libc::EAGAIN) => {}
+                        Err(error) => {
+                            worker_state.lock().unwrap().error =
+                                Some((error.kind(), error.raw_os_error(), error.to_string()));
+                            return;
+                        }
+                    }
+                    thread::sleep(Duration::from_millis(1));
+                }
+            })?;
+        Ok(Self {
+            state,
+            stop,
+            worker: Some(worker),
+        })
+    }
+    /// The oldest queued IN transaction. EAGAIN means none is waiting, like an
+    /// unprimed endpoint; a failure that stopped the pump is returned once
+    /// the queue is drained.
+    fn try_receive(&self) -> io::Result<Vec<u8>> {
+        let mut state = self.state.lock().unwrap();
+        if let Some(bytes) = state.transactions.pop_front() {
+            return Ok(bytes);
+        }
+        Err(match &state.error {
+            Some((_, Some(code), _)) => io::Error::from_raw_os_error(*code),
+            Some((kind, None, message)) => io::Error::new(*kind, message.clone()),
+            None => io::Error::from_raw_os_error(libc::EAGAIN),
+        })
+    }
+}
+impl Drop for InPump {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
         }
     }
 }
@@ -503,6 +643,55 @@ mod tests {
             [18, 1, 0, 2, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]
         );
         server.join().unwrap();
+    }
+    #[test]
+    fn in_pump_collects_data_sent_while_no_consumer_is_reading() {
+        let (socket, mut peer) = UnixStream::pair().unwrap();
+        let server = thread::spawn(move || {
+            let mut polls = 0;
+            loop {
+                let mut request = [0; 20];
+                if peer.read_exact(&mut request).is_err() {
+                    return polls;
+                }
+                polls += 1;
+                let sequence = u32::from_le_bytes(request[8..12].try_into().unwrap());
+                // Firmware primes one transfer on the fifth poll, then NAKs.
+                let (status, data): (i32, &[u8]) = if polls == 5 {
+                    (0, &[0x1b, 0xb0, 0x51, 32])
+                } else {
+                    (-libc::EAGAIN, &[])
+                };
+                let mut reply = Vec::new();
+                for value in [
+                    MAGIC,
+                    0x80000000,
+                    sequence,
+                    status as u32,
+                    data.len() as u32,
+                ] {
+                    reply.extend(value.to_le_bytes());
+                }
+                reply.extend(data);
+                peer.write_all(&reply).unwrap();
+            }
+        });
+        let usb = UsbHost::new(socket).unwrap();
+        usb.start_in_pump(4).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let received = loop {
+            match usb.try_receive(4, 512) {
+                Ok(bytes) => break bytes,
+                Err(error) if error.raw_os_error() == Some(libc::EAGAIN) => {
+                    assert!(Instant::now() < deadline);
+                    thread::sleep(Duration::from_millis(5));
+                }
+                Err(error) => panic!("{error}"),
+            }
+        };
+        assert_eq!(received, [0x1b, 0xb0, 0x51, 32]);
+        usb.shutdown();
+        assert!(server.join().unwrap() >= 5);
     }
     #[test]
     fn enumeration_control_retries_transient_status_stage_eagain() {

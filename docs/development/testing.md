@@ -147,6 +147,13 @@ grant sandbox permissions; the calling environment must provide them.
 | `--suite lifecycle` | Shared power/restart and fresh L6max persistence |
 | `--suite full` | Registered scenarios and remaining specialized legacy cases; missing prerequisites produce BLOCKED |
 
+Cases run concurrently, up to `--jobs N` at once (by default a quarter of
+the host's cores, between 1 and 4). Scenario waits use guest time, so
+concurrency lengthens wall time. Keep N well below the core count; an
+oversubscribed host can exceed wall limits. GUI cases, native host-MIDI
+scenarios and external executables run alone. `--jobs 1` runs cases
+sequentially.
+
 Add `--model l6` or `--model l6max` to focus a run. `--backend both` runs
 identical shared scenarios through headless and GPUI adapters on separate
 copies of the same fixture. Legacy cases execute their declared backend only;
@@ -160,9 +167,12 @@ source as unattested. A source checkout hash alone never identifies that binary.
 It never auto-selects, rebuilds or falls back to a different QEMU.
 
 Boot readiness requires the model's six or eight rings to reach
-all-lit and settle for one guest second. The existing validated guest-time floors
-remain 18 seconds for L6 and 40 seconds for L6max; L6max also needs display pixels.
-These are setup safeguards pending semantic screen recognizers. Shared control
+all-lit and settle for one guest second; L6max also needs display pixels.
+For template and fresh state, the validated guest-time floors remain 18 seconds
+for L6 and 40 seconds for L6max. They are setup safeguards pending semantic
+screen recognizers. Spec-built state boots straight to its home screen, so
+it skips the floors; L6max then also requires one guest second without a new
+display frame. The L6max sweep ends near 5 guest seconds. Shared control
 scenarios then wait for three guest seconds of stable restored panel output and
 idempotently select LEVEL, verify its lamp, and wait for stable
 panel outputs before capturing per-control baselines. A static OLED

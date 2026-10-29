@@ -39,7 +39,7 @@ struct SceneSaveState {
 impl Observation {
     fn summary(&self) -> Value {
         json!({"guest_ms": self.panel.guest_ms, "rings": rings(self.data.indicators), "rows": self.data.indicators,
-            "main": {"sent":self.main.sent,"applied":self.main.applied,"released":self.main.released,"frames":self.main.frame_ready},
+            "main": {"sent":self.main.sent,"applied":self.main.applied,"released":self.main.released,"frames":self.main.frame_ready,"frame_guest_ms":self.main.frame_guest_ms},
             "panel": {"sent":self.panel.sent,"applied":self.panel.applied,"released":self.panel.released}, "encoder_reports":self.reports,"trace_counts":self.traces})
     }
 }
@@ -120,6 +120,7 @@ impl Runner {
             }
         }
         fs::create_dir_all(&logs).map_err(|e| e.to_string())?;
+        let no_setup_screens = scenario.spec_state;
         Ok(Self {
             scenario,
             model,
@@ -130,7 +131,7 @@ impl Runner {
             dispatched: false,
             baseline: None,
             last_command: None,
-            startup: Default::default(),
+            startup: BootReadiness::new(no_setup_screens),
             trace,
             history: Default::default(),
             completed: vec![],
@@ -544,8 +545,13 @@ impl Runner {
                 }
                 Action::Wait { until } => {
                     if until == "boot-ready" {
+                        // Without the setup floor, L6max also needs its screen
+                        // to have held one frame for a guest second.
+                        let display_settled = !self.scenario.spec_state
+                            || obs.panel.guest_ms.wrapping_sub(obs.main.frame_guest_ms) >= 1000;
                         ready
-                            && (self.model == Model::L6 || obs.data.display.iter().any(|b| *b != 0))
+                            && (self.model == Model::L6
+                                || (obs.data.display.iter().any(|b| *b != 0) && display_settled))
                     } else {
                         let stable = self.panel_quiet.is_some_and(|(_, since)| {
                             obs.panel.guest_ms.wrapping_sub(since)
@@ -952,7 +958,7 @@ impl Runner {
     pub fn guest_restarted(&mut self, logs: &Path) {
         self.trace.restart();
         self.trace_path = logs.join("engine.trace");
-        self.startup = Default::default();
+        self.startup = BootReadiness::new(self.scenario.spec_state);
         self.entered = None;
         self.panel_quiet = None;
         self.ring_quiet = None;

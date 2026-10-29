@@ -1033,6 +1033,40 @@ fn wait_l6_input(
     }
 }
 
+fn guest_now(session: &Session) -> u32 {
+    session
+        .engine
+        .inputs
+        .as_ref()
+        .map_or(0, |inputs| inputs.panel.snapshot().guest_ms)
+}
+
+/// Attach the cable and wait, under the step's deadlines, until firmware runs
+/// its device controller. Firmware starts it after boot (about 22 guest s on
+/// L6; about 4 s on L6max, or 42 s with the cable attached at power-on), and
+/// the device model refuses tokens with ENODEV until then.
+fn wait_usb_controller(
+    session: &Session,
+    usb: &l6max_host::usb::UsbHost,
+    guest_timeout_ms: u32,
+    wall_timeout_s: u64,
+) -> Result<(), String> {
+    usb.connect(true).map_err(|error| error.to_string())?;
+    let start = guest_now(session);
+    let ceiling = Instant::now() + Duration::from_secs(wall_timeout_s);
+    while !usb
+        .controller_running()
+        .map_err(|error| error.to_string())?
+    {
+        if Instant::now() >= ceiling || guest_now(session).wrapping_sub(start) > guest_timeout_ms {
+            return Err("USB device controller did not start".into());
+        }
+        session.poll()?;
+        thread::sleep(Duration::from_millis(25));
+    }
+    Ok(())
+}
+
 fn wait_guest_duration(
     session: &Session,
     duration_ms: u32,
@@ -3258,6 +3292,7 @@ impl State {
                     .usb
                     .as_ref()
                     .ok_or("USB backend unavailable")?;
+                wait_usb_controller(session, usb, guest_timeout_ms, wall_timeout_s)?;
                 let (descriptor, config, configuration) = usb.enumerate_with_descriptors()?;
                 self.midi = configuration.midi;
                 fs::write(options.logs.join("usb-device.bin"), &descriptor)?;
@@ -3294,9 +3329,10 @@ impl State {
                     session.poll()?;
                     match usb.try_receive(endpoints.input, 16384) {
                         Ok(bytes) => {
+                            // The preceding encoder step's channel-1 CC.
                             let matching = l6max_host::usb_midi::decode(&bytes)?
                                 .iter()
-                                .any(|(_, msg)| !msg.is_empty());
+                                .any(|(_, msg)| msg.starts_with(&[0xb0, cc]));
                             midi.extend_from_slice(&bytes);
                             fs::write(options.logs.join("usb-midi.bin"), &midi)?;
                             if matching {
@@ -3646,7 +3682,7 @@ impl State {
                     .snapshot()
                     .guest_ms;
                 qmp.resume()?;
-                let mut hits = Vec::new();
+                let mut hits: Vec<Value> = Vec::new();
                 while hits.len() < points.len() {
                     session.poll()?;
                     if Instant::now() > deadline
@@ -3661,7 +3697,15 @@ impl State {
                             .wrapping_sub(start)
                             > guest_timeout_ms
                     {
-                        return Err("audio callback deadline exceeded".into());
+                        let missing: Vec<_> = points
+                            .iter()
+                            .map(|(_, name)| *name)
+                            .filter(|name| !hits.iter().any(|hit| hit["callback"] == *name))
+                            .collect();
+                        return Err(format!(
+                            "audio callback deadline exceeded; not reached: {missing:?}"
+                        )
+                        .into());
                     }
                     if !qmp.query_status()?.running {
                         let pc = debugger.read_register(15)? & !1;

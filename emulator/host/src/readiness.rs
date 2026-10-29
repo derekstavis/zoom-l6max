@@ -7,8 +7,18 @@ pub struct BootReadiness {
     pub all_lit_seen: bool,
     candidate: Option<[u32; 8]>,
     stable_since: u32,
+    /// State built from a state spec boots straight to its home screen, so
+    /// there are no first-boot setup screens for the guest-time floor to
+    /// wait out; the settled sweep alone establishes readiness.
+    pub no_setup_screens: bool,
 }
 impl BootReadiness {
+    pub fn new(no_setup_screens: bool) -> Self {
+        Self {
+            no_setup_screens,
+            ..Default::default()
+        }
+    }
     pub fn observe(&mut self, model: Model, guest_ms: u32, rows: [u32; 8]) -> bool {
         let count = if model == Model::L6 { 6 } else { 8 };
         let current = rings(rows);
@@ -23,7 +33,11 @@ impl BootReadiness {
         }
         // Preserve the validated setup floors until the firmware setup screens
         // have semantic recognizers. Wall time never substitutes for this clock.
-        let floor = if model == Model::L6 { 18_000 } else { 40_000 };
+        let floor = match (self.no_setup_screens, model) {
+            (true, _) => 0,
+            (false, Model::L6) => 18_000,
+            (false, Model::L6max) => 40_000,
+        };
         guest_ms >= floor
             && self.candidate.is_some()
             && guest_ms.wrapping_sub(self.stable_since) >= 1_000
@@ -59,5 +73,17 @@ mod tests {
         assert!(boot.observe(Model::L6, 22_000, [0; 8]));
         assert!(!boot.observe(Model::L6, 22_100, rows(1)));
         assert!(boot.observe(Model::L6, 23_100, rows(1)));
+    }
+    #[test]
+    fn state_without_setup_screens_needs_only_the_settled_sweep() {
+        let mut floor = BootReadiness::default();
+        let mut spec = BootReadiness::new(true);
+        for boot in [&mut floor, &mut spec] {
+            assert!(!boot.observe(Model::L6max, 3_200, rows(8)));
+            assert!(!boot.observe(Model::L6max, 5_400, [0; 8]));
+        }
+        assert!(!floor.observe(Model::L6max, 6_400, [0; 8]));
+        assert!(spec.observe(Model::L6max, 6_400, [0; 8]));
+        assert!(floor.observe(Model::L6max, 40_000, [0; 8]));
     }
 }

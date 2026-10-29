@@ -11,7 +11,10 @@ guest_timeout_ms = 120000
 wall_timeout_s = 600
 
 # Preserve the original no-card USB probe's startup context; this is not the
-# prepared mixer fixture used by panel tests.
+# prepared mixer fixture used by panel tests. L6 needs this wait on spec-built
+# state too: enumerated when its controller starts (about 22 guest s), it does
+# not prime MIDI IN or send the encoder CC. The firmware signal for MIDI
+# readiness is not identified.
 [[step]]
 models = ["l6"]
 action = "delay"
@@ -32,6 +35,7 @@ action = "press"
 control = "recorder.confirm"
 
 [[step]]
+setup_input = true
 action = "delay"
 guest_ms = 2000
 
@@ -48,11 +52,15 @@ action = "press"
 control = "recorder.confirm"
 
 [[step]]
+setup_input = true
 action = "delay"
 guest_ms = 5000
 
+# Waits for firmware to start its USB controller after boot.
 [[step]]
 action = "usb-descriptors"
+guest_timeout_ms = 60000
+wall_timeout_s = 300
 
 [[step]]
 action = "encoder"

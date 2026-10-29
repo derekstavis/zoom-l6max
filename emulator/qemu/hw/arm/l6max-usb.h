@@ -18,6 +18,7 @@ typedef struct L6USB {
     bool connected;
     QEMUTimer *sof_timer;
     unsigned log_count;
+    uint8_t in_reason[16]; /* last logged IN-token outcome per endpoint */
 } L6USB;
 
 static void l6_usb_read_host(void *opaque);
@@ -63,6 +64,20 @@ static bool l6_usb_dma(L6USB *u, uint32_t addr, void *data, unsigned size, bool 
     return (write ? address_space_write(u->as, addr, MEMTXATTRS_UNSPECIFIED, data, size)
                   : address_space_read(u->as, addr, MEMTXATTRS_UNSPECIFIED, data, size)) == MEMTX_OK;
 }
+/* Log why a data-endpoint IN token is NAKed, once per change of reason, so a
+ * host poll loop shows whether firmware ever primed the endpoint. */
+static void l6_usb_in_reason(L6USB *u, unsigned n, bool in, uint8_t reason)
+{
+    static const char *const names[] = {
+        "data", "stalled", "not primed", "no dTD", "dTD inactive",
+    };
+    if (!in || n == 0 || n >= 16 || u->in_reason[n] == reason + 1) {
+        return;
+    }
+    u->in_reason[n] = reason + 1;
+    qemu_log_mask(LOG_GUEST_ERROR, "l6_usb_in ep=%u %s at %" PRId64 " ms\n", n,
+                  names[reason], qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL));
+}
 static void l6_usb_token(L6USB *u, uint32_t seq, uint32_t ep,
                          uint8_t *payload, unsigned size, bool in)
 {
@@ -71,23 +86,31 @@ static void l6_usb_token(L6USB *u, uint32_t seq, uint32_t ep,
     uint32_t qh_addr = (u->regs[0x158 / 4] & ~0x7ffu) + (2 * n + in) * 64;
     uint8_t qh[64], td[32];
     if (n < 8 && (u->regs[(0x1c0 + 4 * n) / 4] & (in ? 0x10000u : 1u))) {
+        l6_usb_in_reason(u, n, in, 1);
         l6_usb_reply(u, seq, -EPIPE, NULL, 0); return;
     }
     if (n >= 8 || !(u->regs[0x1b8 / 4] & bit)) {
+        l6_usb_in_reason(u, n, in, 2);
         l6_usb_reply(u, seq, -EAGAIN, NULL, 0); return;
     }
     if (!l6_usb_dma(u, qh_addr, qh, sizeof(qh), false)) {
         l6_usb_reply(u, seq, -EFAULT, NULL, 0); return;
     }
     uint32_t addr = ldl_le_p(qh + 8);
-    if (addr & 1) { l6_usb_reply(u, seq, -EAGAIN, NULL, 0); return; }
+    if (addr & 1) {
+        l6_usb_in_reason(u, n, in, 3);
+        l6_usb_reply(u, seq, -EAGAIN, NULL, 0); return;
+    }
     addr &= ~0x1fu;
     if (!l6_usb_dma(u, addr, td, sizeof(td), false)) {
         l6_usb_reply(u, seq, -EFAULT, NULL, 0); return;
     }
     uint32_t token = ldl_le_p(td + 4);
     unsigned length = (token >> 16) & 0x7fff;
-    if (!(token & 0x80)) { l6_usb_reply(u, seq, -EAGAIN, NULL, 0); return; }
+    if (!(token & 0x80)) {
+        l6_usb_in_reason(u, n, in, 4);
+        l6_usb_reply(u, seq, -EAGAIN, NULL, 0); return;
+    }
     /* A socket transaction consumes one complete dTD or one short OUT stage.
      * Full-packet partial dTDs require buffer-offset tracking, so reject them.
      */
@@ -129,6 +152,7 @@ static void l6_usb_token(L6USB *u, uint32_t seq, uint32_t ep,
     u->regs[0x1bc / 4] |= bit;
     if (token & 0x8000) { u->regs[0x144 / 4] |= 1; }
     l6_usb_irq(u);
+    l6_usb_in_reason(u, n, in, 0);
     l6_usb_reply(u, seq, 0, in ? payload : NULL, in ? count : 0);
 }
 static void l6_usb_request(L6USB *u)
@@ -155,6 +179,8 @@ static void l6_usb_request(L6USB *u)
         u->regs[0x1b8 / 4] &= ~0x10001u;
         u->regs[0x1c0 / 4] &= ~0x10001u; /* SETUP clears EP0 stalls */
         if (l6_usb_dma(u, qh + 40, data, 8, true)) {
+            qemu_log_mask(LOG_GUEST_ERROR, "l6_usb_setup %02x %02x at %" PRId64 " ms\n",
+                          data[0], data[1], qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL));
             u->regs[0x1ac / 4] |= 1;
             u->regs[0x144 / 4] |= 1;
             l6_usb_irq(u);
@@ -215,7 +241,14 @@ static void l6_usb_write(void *opaque, hwaddr offset, uint64_t value, unsigned s
 {
     L6USB *u = opaque;
     uint32_t *r = &u->regs[offset / 4];
-    if (u->fd >= 0 && u->log_count++ < 4096) {
+    /* The per-millisecond SOF interrupt rewrites these status registers
+     * without changing them; logging those would exhaust the budget before
+     * enumeration and endpoint priming are reached. */
+    bool routine = ((offset == 0x144 || offset == 0x1ac || offset == 0x1bc) &&
+                    !(value & *r & ~0x80u)) ||
+                   (offset == 0x1a4 && !(value & 0x7f0000u) &&
+                    (value & 0x7f0000ffu) == (*r & 0x7f0000ffu));
+    if (u->fd >= 0 && !routine && u->log_count++ < 4096) {
         qemu_log_mask(LOG_GUEST_ERROR, "l6_usb_write offset=0x%03" HWADDR_PRIx " value=0x%08" PRIx64 "\n", offset, value);
     }
     if (offset == 0x140 && (value & 2)) {

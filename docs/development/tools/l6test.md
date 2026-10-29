@@ -24,6 +24,11 @@ cargo run --offline --locked -p l6test -- run --config smoke.local.toml --suite 
 - `--output NEW_DIRECTORY` chooses an artifact directory. It must not already
   exist. By default the driver creates a unique directory under `/tmp`.
 - `--no-build` uses existing emulator binaries instead of building them.
+- `--jobs N` runs up to N cases at once. The default is a quarter of the host's
+  cores, between 1 and 4. Each case has its own process group, state, card,
+  sockets and artifact directory. GUI cases, scenarios that publish native
+  host MIDI ports and external executables run alone. Shareable cases run
+  first. `--jobs 1` restores strictly sequential execution.
 
 Copy the [example fixture file](../../../tests/smoke/fixtures.example.toml) to
 `smoke.local.toml`, pin the QEMU binary’s SHA-256, and provide firmware and

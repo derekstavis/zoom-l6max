@@ -10,6 +10,8 @@ name = "prepared"
 model = "l6"
 firmware_package = "/absolute/path/to/L6.BIN"
 state_template = "/absolute/path/to/known-l6-state"
+# An empty card suffices for storage cases:
+# cargo run --offline --locked -p l6fs -- card create l6-card.img --size-mib 128
 sd_image = "/absolute/path/to/l6-card.img"
 timing = "paced"
 

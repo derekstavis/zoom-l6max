@@ -13,8 +13,23 @@ read their results.
   unqualified: the L6 headless quick case also observed channel 2 at `0x003`
   while waiting for `0x001` after reversal. Do not mask these failures with
   longer delays or exemptions.
-- Fresh USB enumeration succeeds, but the USB MIDI IN sequence is unreliable
-  for both models. The L6 host MIDI endpoint readiness remains unresolved.
+- L6 USB MIDI IN needs the `usb` scenario's 22 s wait on spec-built state.
+  Enumerated when its controller starts (about 22 guest seconds), the L6 does
+  not prime MIDI IN or send the encoder CC.
+- L6 boot intermittently stalls: after 5–10 guest seconds MAIN sends a
+  panel-link frame only every 1.2–1.3 guest seconds, and the encoder sweep does
+  not complete within 120 s. Observed in 1 of 11 cold boots with the USB cable
+  attached at power-on, and in 2 of 3 `power` restarts with the generated L6
+  demo card (sound-pad samples) attached; 0 of 3 with an empty card.
+- L6max `storage` fails with the prepared card `ceca7b3c…cd4e27`: after
+  removal and reinsertion the top status bar differs from the home checkpoint,
+  also when the case starts after 40 guest seconds.
+- In the emulator, L6 sound-pad lamps light only when the USB cable is
+  attached at power-on. With the generated demo card, pads 1–3 light at about
+  32.5, 35.9 and 39.2 guest seconds and pad 4 does not; ejecting the card
+  leaves them lit, and the guest clock stops about 7 s after reinsertion.
+- On L6, `select-mode` waits while firmware restores the LEVEL and Hall lamps,
+  several seconds after the rings.
 - L6 DIN sweep and DIN-to-USB forwarding remain unqualified: the former did
   not produce the expected indicator change, and the latter did not reach its
   probe in the fresh-boot run. L6 event dispatch also times out waiting for
@@ -30,6 +45,29 @@ read their results.
 - The L6 MAIN GPIO event assertions, L6 USB startup probe, L6max sound-pad
   key-bit assertions, L6max direct USB cable-isolation steps, and L6max
   DIN/editor scenarios need live qualification.
+
+## Current results
+
+Headless, `--jobs 4`, QEMU `dd5cb794…77f0f4d4` built from this tree, stock
+MAIN images L6 `827c7c5c…c03799` and L6max `980d9227…8d44461`, specs
+`l6-settings-defaults.toml` `23b7f60e…8e630e3` and `l6max-setup-complete.toml`
+`d3dedc75…6c36ee485`, prepared cards L6 `72748162…49ef67d3` (empty FAT32) and
+L6max `ceca7b3c…cd4e27`:
+
+| Selection | Result |
+| --- | --- |
+| `--suite quick` | PASS |
+| `--case boot` | PASS; L6max ready at about 6 guest seconds |
+| `--suite lifecycle` | PASS (L6 `power` 3 of 3 with the empty card) |
+| `--suite devices` | PASS except L6max `storage` (above) |
+
+USB MIDI IN: firmware flushes an IN transfer the host does not collect within
+about 100 guest ms. `UsbHost` polls a configured MIDI interface's IN endpoint
+continuously and queues what it receives. `usb-midi` requires the model's
+channel-1 encoder CC. Firmware starts its USB device controller at about 22
+guest seconds on L6, and on L6max at about 4 s, or 42 s with the cable attached
+at power-on. `usb-descriptors` waits for it. L6max rejects SYNCHRONIZE CACHE as
+an invalid opcode; the USB storage client treats that as nothing to flush.
 
 The shared panel, audio, storage, power and USB cases run through the same
 driver. L6max panel checks and both models' audio callback, SD and power cases
@@ -64,7 +102,7 @@ or for L6 no spec with presses:
 | L6 `boot` (`midi-sync` patched, spec without a bank) | PASS, 64 s | — |
 | L6 `l6-direct-midi-sync` (`midi-sync` patched, spec without a bank) | PASS, 229 s | PASS, 225 s |
 | L6 `boot` (stock, final spec with `auto_power_off = 0`) | PASS | — |
-| `usb` (both models) | FAIL at USB MIDI receive | Same failure |
+| `usb` (both models) | PASS with the current driver (see Current results) | — |
 | `l6max-direct-midi-sync` (stock) | FAIL, 3/94 MIDI-sync replies | Same failure |
 | `l6max-direct-midi-sync` (`midi-sync` patched) | FAIL, encoder CC not received | Same failure |
 
@@ -82,5 +120,6 @@ L6 `usb` and patched `l6-direct-midi-sync` cases have not been rerun with the
 final L6 spec.
 
 Prepared L6max fixtures assume the documented SD Cancel/Confirm sequence.
-Boot floors are 18 guest seconds for L6 and 40 for L6max. The driver pins the
+Boot floors are 18 guest seconds for L6 and 40 for L6max on template and
+fresh state; spec-built state skips them. The driver pins the
 external QEMU executable, but its build-source provenance remains unattested.
