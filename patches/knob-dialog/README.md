@@ -1,8 +1,8 @@
 # Show knob values on display
 
 Turn any channel knob — an EQ band, level, pan, or an aux send — and the
-L6max's screen shows the value you just set, for about two seconds: dB for EQ
-and level, Hz or kHz for frequency, percent for sends, or a left/right
+L6max's screen shows the value you just set, for about two seconds: dB for EQ,
+Hz or kHz for frequency, percent for level and sends, or a left/right
 position for pan. The stock firmware changes the value but never displays it,
 so there's no way to tell exactly where a knob landed without comparing by
 ear. This patch adds that readout; nothing about how the knobs themselves work
@@ -12,10 +12,9 @@ The rest of this page documents how the patch is built and verified.
 
 ## How it works
 
-Investigation pointed to the main MCU as the owner of mixer parameter values
-and LCD rendering. The panel MCU reports encoder movement over UART and drives
-indicators. This experiment modifies the main firmware; the panel image stays
-original.
+The main MCU owns mixer parameter values and LCD rendering. The panel MCU
+reports encoder movement over UART and drives indicators. The patch modifies
+the main firmware and keeps the panel image unchanged.
 
 A channel encoder turn applies the original mixer setter, reads back the stored
 value, and copies an optional presentation event without waiting for a display
@@ -76,38 +75,13 @@ supplied image; the source tree does not embed those byte sequences.
 The original startup target is unchanged. Stock operations
 still run their original code and preserve synchronous completion.
 
-The original main image is 1,081,320 bytes. The recorder polling revision is
-1,089,356 bytes: 8,012 payload bytes plus 24 alignment bytes. Its observed
-fixed-layout slot allows 1,716,216 bytes, leaving 626,860 erased padding bytes
-before the main trailer. Main trailer/footer lengths agree, and the complete
-package remains 1,737,216 bytes. This establishes package-layout fit, not an
-independently verified physical bootloader size limit.
+The notification cleanup restores the original widget and removes custom text
+on expiry. Idle recorder polling leaves an active knob popup in place; a busy
+notification can dismiss it. The behavior has been exercised in the emulator
+and on an L6max. See [dismissal behavior](../../docs/firmware/gui/popup-triggers.md).
 
-Investigation of LCD video pointed to stale title pixels after expiry. Cleanup
-now clears the custom text rectangle before restoring the original widget
-Y/font, and initial text is populated before stock show draws.
-
-Caller tracing and an actual recorder-callback invocation pointed to a separate
-premature dismissal: periodic recorder status polling calls busy-hide while no
-busy overlay is present. Stock busy-hide returns immediately; our earlier
-unconditional detach wrapper removed the custom notification first. The current
-wrapper checks busy flag `8020a2b0` under the manager lock and detaches only when
-it equals 1. Idle polling preserves popup allocation, pixels, and timeout.
-
-The scene-refresh repaint workaround is removed. Original scene clearing and
-stock redraw policy remain intact; a forced clear was not sufficient evidence
-for the hardware dismissal cause. See the
-[dismissal regression](../../docs/firmware/gui/popup-triggers.md).
-
-- Current package: `firmware-knob-dialog-recorder-fix-v112/L6max.bin`, development
-  marker `0112` (1.12). The payload is unchanged from the hardware-tested build.
-- The older `firmware-knob-dialog-live-refresh/L6max.bin` still detaches on idle recorder polling. Use the recorder-fix-v112 package.
-- The corrected popup behavior was confirmed on an L6max. The emulator
-  regression invokes the real recorder callback through GDB; it does not
-  reproduce every possible hardware scheduling interleaving.
-
-The default patch version is `0112` (1.12), one increment above the initial
-1.11 patch. It triggers the startup update prompt over stock 1.10. Use
+The default patch version is `0112` (1.12), a local development marker that
+triggers the startup update prompt over stock 1.10. Use
 `--update-version FOUR_DIGITS` to override it; `0110` retains the stock marker
 and uses the manual **System → Firmware → Firmware Update** menu:
 

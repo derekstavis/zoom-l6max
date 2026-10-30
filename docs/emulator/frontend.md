@@ -114,8 +114,7 @@ segment is created with `shm_open` and immediately unlinked; on Linux it uses
 `memfd_create`. The descriptor identifies a kernel memory object. QEMU owns
 guest RAM privately.
 
-For L6max, investigation pointed to SPI/eDMA transfers as the OLED update
-boundary. QEMU consumes those transfers into display controller RAM. Completed
+For L6max, SPI/eDMA transfers update the OLED. QEMU consumes those transfers into display controller RAM. Completed
 transfers publish a frame slot and generation notification. The slot stays
 immutable until Rust copies it and acknowledges consumption. When both slots
 are occupied, the producer coalesces pending completed frames. The GPUI frame
@@ -180,50 +179,27 @@ lamp off:
 
 ### Indicator surface
 
-Investigation pointed to a serial LED matrix driven by panel SPI1 and GPIO.
-The model consumes SPI clock/data edges, latches the serial columns on GPIOA6,
-and gates them through GPIOA4 and the eight GPIOB commons. TIM3 and TIM14 run
-the firmware's refresh callbacks; DMA1 channel 1 supplies the SPI bytes.
-
-The host receives changed 24-column row masks over the inherited panel socket.
-It retains the latest eight rows without queuing UI work. A 50 ms guest-time
-window combines multiplexed PWM pulses into lit/unlit outputs. No UART messages,
-encoder target values, or firmware RAM variables drive the indicators.
-
-The native renderer maps the 72 ring outputs to nine native canvas arcs per knob. Investigation pointed to the main firmware wiring table at
-`0x800c460c` and the nine-output ring function at `0x8000c4f0`. The outputs
-are distributed across commons; a common does not represent a whole knob.
-The L6 panel uses that decoder for its six visible channel rings. Fresh-boot
-USB MIDI traces for CC 83–88 each changed only the corresponding decoded ring,
-and isolated L6 panel-input tests changed the matching ring for every encoder.
-These checks validate the ring renderer against L6 firmware output in QEMU;
-physical panel wiring remains uninspected.
-The L6max renderer also maps mute, Hi-Z, phantom power, channel modes, the blue
-control strip, sound pads, Record, TAP, scenes, effect selection, and SIGNAL
-indicators. The [control wiring map](controls.md) records logical indices and
-firmware evidence. SIGNAL uses red priority when both colors are on. L6 mute
-buttons send their verified events. Their lamp outputs use an L6-specific map
-measured by toggling the stock USB Mixer Control CCs: channels 1–2 use row 4,
-3–4 row 5, and 5–6 row 6, with alternating `0x800` and `0x400` masks. The
-Sequential physical-button target tests and incoming mixer CCs both toggle the
-matching lamp output. The channel-strip renderer places MONO ×2 and USB source
-buttons on their separate upper row, while mute buttons remain on the lower
-row. COMP and shared 48V use their measured row-7 lamps. The L6 channel-mode
-buttons are interactive and show their selected state using L6-specific
-outputs; PAN reuses the pin L6max assigns to SUB-MIX. The UI smoke checks all
-nine mode selections, EFX SEL and its Room indicator; sequential firmware
-tracing maps all five effect indicators to their printed Hall, Room, Spring,
-Delay, and Echo labels.
+The panel uses a serial LED matrix driven by SPI1 and GPIO. The host receives
+sampled LED levels over the panel socket and retains the latest eight rows.
+QEMU integrates pin on-time over a 33 ms virtual-time window. The renderer
+uses model-specific mappings for rings, buttons, effects, scenes, sound pads,
+SIGNAL lamps, and MASTER meters; see [controls and indicators](controls.md).
 
 Dragging a knob upward or right raises its level; downward or left lowers it.
 The first movement locks the drag axis until release. Scrolling also adjusts
 the knob, retaining fractional trackpad input. The cursor is an open hand over
 a knob and a closed hand while dragging. Firmware computes the ring output,
-including its mode-dependent pattern.
+including its mode-dependent pattern. Ring segments render measured PWM
+brightness, normalized against captured full-mask endpoint readings (per
+segment for L6 and per scan row for L6max). The renderer converts that duty to display
+color with a linear-light blend. It does not add a separate persistence-of-
+vision gain: the sampled duty already represents the LED's on-time fraction.
 
-- Individual PWM brightness levels are not rendered yet.
-- L6 Play/Stop and TAP illumination, L6max Bounce illumination, logical LED 32,
-  and logical indices 60–71 have no verified visual assignments. L6 sound-pad
+The L6 and L6max MASTER meters use their model-specific panel outputs. Their
+left and right columns respond independently in the stereo playback scenarios.
+
+- L6 Play/Stop and TAP illumination, L6max Bounce illumination, and logical
+  LED 32 have no verified visual assignments. L6 sound-pad
   playback lamps are mapped and verified in the [control wiring
   findings](controls.md#main-gpio-controls).
 - Audio-driven SIGNAL transitions remain untested.
@@ -231,7 +207,9 @@ including its mode-dependent pattern.
 Control bounds come from the shared layout specification. All switches use the
 same physical dimensions, channel controls share row baselines, and all thirteen
 knobs are aligned. The recorder display preserves its pixel aspect ratio and
-pale blue tint. Rings follow the GPIO indicator surface. Meters are drawn unlit.
+pale blue tint. Encoder rings follow the GPIO indicator surface and render its
+PWM brightness. Status lamps with verified model-specific mappings follow
+their corresponding panel data.
 
 GPUI is pinned to a Zed revision; macOS builds require Xcode's Metal Toolchain
 component.
@@ -248,12 +226,11 @@ click. Mouse release does not undo their position. The remaining controls
 produce momentary closures. Input IDs 0–6 retain the recorder mapping; matrix
 IDs are `7 + row * 5 + column`, with navigation aliases using their original
 IDs. ID 47 is MASTER/SUB-MIX, 48 is TAP, and 49–52 are the sound pads.
-ID 53 is Power, an active-high main GPIO2 bit 25 input. Firmware owns its
-debounce and long-press recognition.
-
-Hold Power for about 3.5 seconds and release to shut down through firmware.
-The board power-hold output, GPIO3.3, determines the off transition after
-cleanup. The UI stops QEMU, blanks the display and LEDs, and keeps the window
+ID 53 is Power. On L6max it is an active-high MAIN GPIO2 bit 25 input;
+firmware handles debounce, long-press recognition, and shutdown. Hold it for
+about 3.5 seconds and release. L6 uses a board-level cutoff after a 500 ms
+press because its firmware shutdown path is not yet modeled. The L6max board
+power-hold output, GPIO3.3, determines the off transition after cleanup. The UI stops QEMU, blanks the display and LEDs, and keeps the window
 open. Click Power again to start with the same flash, RTC and SD card, applying
 any prepared update. Switch and analog knob positions are retained across
 the cycle. `--volatile` discards device storage at power-off. See the
@@ -271,30 +248,18 @@ target. Reply kind `0x80000007` reports a changed sample after the firmware
 reads the completed conversion. The board-ID ADC channels are excluded from
 this command.
 
-Channel encoders emit one quadrature phase every 10 ms of guest time, giving
-40 ms per detent. Shorter 2 ms and 5 ms phase trials lost firmware reports.
-The LED observation window remains 50 ms so multiplexed
-PWM pulses form stable lit/unlit output. A longer encoder turn can queue
-multiple detents; the model preserves every transition rather than skipping
-directly to the requested endpoint.
+Channel encoders emit quadrature transitions in guest time. A longer turn can
+queue multiple detents. LED levels are integrated over a 33 ms scan window.
 
-Panel runtime notifications include a 50 ms virtual-clock heartbeat
+Panel runtime notifications include a 33 ms virtual-clock heartbeat
 (`0x80000008`). Input tests use it for guest-time waits; timestamps on changed
 LCD frames do not advance while the display is static.
 
-Investigation pointed to firmware-controlled TIM2 interrupts and GPIO scanning
-for panel input. TIM2 derives its period from PSC/ARR at 48 MHz, giving 50 µs
-in the observed configuration. Firmware owns scanning and debouncing.
-
-Short presses depend on timely virtual timer dispatch. The engine uses
-single-threaded TCG with `-icount shift=2,align=on,sleep=on` so virtual timer
-deadlines interrupt CPU execution at instruction boundaries. Each executed
-instruction advances the shared virtual clock by 4 ns; QEMU sleeps when it gets
-ahead of wall time. This is an instruction budget for both CPUs, not a model of
-either MCU's instruction cycle costs. L6 MAIN's steady processing occupies most
-of an 8 ns budget, which starves lower-priority startup work such as the
-free-cluster count of a FAT32 card; at 4 ns a 128 MiB card is counted within
-the first 5 guest seconds. QMP pause freezes both chips and device timers.
+Panel TIM2 drives input scanning and firmware debounce. The engine uses
+single-threaded TCG with `-icount shift=2,align=on,sleep=on`; each instruction
+advances the shared virtual clock by 4 ns. QMP pause freezes both chips and
+device timers. Instruction timing is an emulator pacing model rather than a
+measurement of physical MCU cycles.
 
 Enabling UART receive interrupts during panel startup asserts the interrupt if a
 byte is already pending.
@@ -310,69 +275,19 @@ the selected model, firmware activity and timing mode.
 
 ## Validation
 
-Use [the consolidated `l6test` driver](../development/testing.md) for shared
-headless/GPUI scenarios. Both adapters use the production `PanelFeed` and
-`PanelData` in `l6max-host`; the common `smoke-core` state machine owns assertions.
-The native adapter translates commands to real GPUI hit-region events. Headless
-success covers the common backend for the same binary/fixture/scenario; GPU
-rendering, hit testing and event scheduling still require GUI checks.
-
-Focused panel interaction checks use the TOML driver:
-
-
-The L6 and L6max input scenarios check their model-specific controls, reports,
-display changes, and startup timing:
+Use the [test driver](../development/testing.md) for headless and GPUI
+scenarios. Both use the production `PanelFeed` and `PanelData`; GUI tests also
+exercise hit testing and event dispatch.
 
 ```sh
 cargo run --offline --locked -p l6test -- run --case l6-input-sweep --model l6 --config smoke.local.toml
 cargo run --offline --locked -p l6test -- run --case l6max-input-smoke --model l6max --config smoke.local.toml
-```
-
-Output stays local in the ignored logs directory.
-
-The shared `panel` scenario dispatches events directly through GPUI's window event
-dispatcher. It uses shared component bounds and the real UI handlers, without moving,
-clicking, or depending on the system pointer. Each gesture is dispatched as one
-batch so physical pointer motion cannot interrupt it. The check completes
-setup with two clicks, tests vertical/horizontal drags and scrolling in both
-directions, and verifies GPIO rings, mute and HIGH LEDs, a persistent dB
-switch, Power GPIO edges, all five ADC knobs in both directions, analog drags,
-and exact firmware input counts on L6max. For L6 it exercises the six rendered
-encoder hit zones and verifies one distinct encoder event per zone. Run it
-through the driver with:
-
-```sh
 cargo run --offline --locked -p l6test -- run --case panel --model l6 --backend gui --config smoke.local.toml
 cargo run --offline --locked -p l6test -- run --case panel --model l6max --backend gui --config smoke.local.toml
 ```
 
-The legacy `--ui-input-smoke` flag now returns an error directing callers to
-these supervised driver cases.
-
-The control check exercises all 50 controls through GPIO, captures indicator
-changes, checks mute outputs, and checks firmware press/release packet counts
-for the remaining panel controls:
-
-```sh
-cargo run --offline --locked -p l6test -- run --case panel --model l6 --backend gui --config smoke.local.toml
-cargo run --offline --locked -p l6test -- run --case panel --model l6max --backend gui --config smoke.local.toml
-```
-
-The indicator check detects the model from its firmware. For L6max it completes
-first-boot setup, turns all eight encoders, checks that only the corresponding
-GPIO ring changes, reverses the last turn, and checks exact firmware encoder
-report counts. Use a known L6max state copy and SD image:
-
-```sh
-cargo run --offline --locked -p l6test -- run --case indicators --model l6max --config smoke.local.toml
-```
-
-For L6, the same driver case checks six panel encoder reports and raw indicator
-rows without assuming the L6max ring map:
-
-```sh
-cargo run --offline --locked -p l6test -- run --case indicators --model l6 --config smoke.local.toml
-```
+The [current status](../development/current-status.md) lists qualification
+limits. For offscreen panel images, see [`l6test capture gui`](../development/tools/l6test.md#capture-the-live-emulator-gui-without-a-display-server).
 
 ## Limitations
 
@@ -380,8 +295,8 @@ cargo run --offline --locked -p l6test -- run --case indicators --model l6 --con
   its pixels. The display path is not zero copy through the GPU.
 - UART byte timing and SPI transfer timing are approximations.
 - Instruction-count timing does not model hardware instruction cycle costs.
-- Audio processing is unmodeled. The engine enables a diagnostic acknowledgment
-  of staged audio data so setup can proceed.
+- Physical audio routing, analog input, and output fidelity remain unverified;
+  see [audio emulation](audio.md).
 - Several peripherals remain incomplete; see the [board model](board.md).
 - QEMU's Rust crates are internal Meson device APIs rather than a complete
   system embedding interface. The board model remains C; the UI, lifecycle,

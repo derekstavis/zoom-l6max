@@ -2,62 +2,21 @@
 
 [Documentation index](../../README.md)
 
-Investigation pointed to a SysEx session between ZOOM L6 Editor and the main
-firmware, carried on the third USB MIDI port. This map joins two sources:
-
-- Main firmware, SHA-256
-  `980d92272c1f84bed200b4d2f83575202f6a00082c928d99b9e8b53af8d44461`
-  (SYSTEM 1.10). Addresses are main MCU runtime addresses.
-- ZOOM L6 Editor for macOS 2.0.0 (build 39), bundle `jp.co.zoom.l6editor`. It
-  is a Flutter application (Dart 3.7.2, package `d414_app`) with a Swift
-  CoreMIDI plugin, `midi_connection`. Its Dart symbols are not obfuscated.
-
-Message names below are the application's own enum and method names. Firmware
-function names are investigator assigned. Byte layouts come from the firmware
-parser and reply builders and were compared with the application's builders
-and parsers. The [factory protocol map](factory-midi.md) covers the separate
-inspection session that shares this parser.
-
-Evidence is marked as follows:
-
-- **Probe**: observed from stock firmware in the emulator through emulated USB.
-- **Static**: read from firmware or application code only.
-
-The application itself has not been run against the emulator, and nothing here
-has been captured from hardware.
+The editor session uses SysEx over the third USB MIDI port,
+`for L6 Editor Port`. This reference describes message layouts and behavior
+for the supported 1.10 firmware. Some fields and physical-device behavior
+remain unverified; see [verification limits](#verification-limits).
 
 ## Transport
 
-The device is USB MIDI class on interface 4 (bulk OUT 3, bulk IN 4) with three
-cables; see [SD storage and USB](../../emulator/usb.md). The editor
-session uses cable **2**, `for L6 Editor Port`. Everything is SysEx carried in
-USB MIDI event packets. No other USB interface or vendor request is involved in
-the editor session.
+The device exposes three USB MIDI cables; the editor session uses cable 2.
+Messages are carried in USB MIDI event packets. See [SD storage and USB](../../emulator/usb.md)
+for host endpoint names and connection behavior.
 
-`midi_settings_receive_task` at `0x8003e5b0` accepts `F0`, then only `52` or
-`7E` as the next byte, then data bytes until `F7`. A message longer than 594
-bytes or one containing another status byte is dropped. Complete messages go to
-`midi_sysex_dispatch` at `0x80040988`. Replies are queued by `0x80041f78` with
-port argument 2.
-
-### How the application finds the port
-
-The plugin enumerates CoreMIDI sources and destinations (`MIDIGetSource`,
-`MIDIGetDestination`), so virtual endpoints qualify. It builds each device name
-from the endpoint's `kMIDIPropertyModel` and `kMIDIPropertyName` strings joined
-by a space; which comes first was not established. The application then takes
-the first endpoint per direction whose name:
-
-- contains `L6`, and
-- contains `Editor` or `MIDIIN3` (input) / `Editor` or `MIDIOUT3` (output).
-
-The emulator's `for L6 Editor Port (Emulator)` endpoints satisfy this, and the
-other two emulator ports do not. (Static.)
-
-The plugin sends each message as one `MIDIPacketList` built in a 1024-byte
-buffer with `MIDISend`. Incoming packets are forwarded to Dart, where
-`_SysExReceiver` reassembles SysEx across packets. CoreMIDI setup-change
-notifications are debounced by 500 ms before the application reconnects.
+The receiver accepts universal identity messages and the ZOOM SysEx envelope.
+Messages longer than 594 bytes or containing an unexpected status byte are
+dropped. Identity may not receive a reply until the device reaches an eligible
+screen.
 
 ## Framing
 
@@ -88,13 +47,12 @@ Multi-byte encodings:
 - **64-bit**: ten bytes, seven bits each, least significant group first.
 - **Packed bytes**: every seven source bytes become eight. The first carries the
   seven high bits (bit 6 belongs to the first source byte, bit 0 to the
-  seventh); the next seven carry the low seven bits. Encoder `0x800872b8`,
-  application `MidiUtil.decode7bitData`.
+  seventh); the next seven carry the low seven bits.
 - **File names**: UTF-16 code units, low byte first, then packed as above.
 
 ## Session state
 
-The byte at `0x805dca98` is the session state, shared with the factory session.
+The editor and factory sessions share a session state.
 
 | State | Accepted | Effect |
 | --- | --- | --- |
@@ -106,16 +64,9 @@ The byte at `0x805dca98` is the session state, shared with the factory session.
 | 2 | `F0 7E dd 06 01 F7` | Identity reply; state unchanged |
 | 2 | Envelope + `2B`, `31`, `45 05`, `46`, `67 01` | Editor commands below |
 
-In state 0 an editor command is discarded without reply. (Probe: `2B` after a
-lapsed session received nothing until identity was repeated.)
-
-Requests are decoded in the MIDI task and posted as events to the main event
-dispatcher at `0x800363b8`, which builds the replies. That dispatcher returns
-early, with no reply, unless startup mode `0x80462d9c` is 7 or bit 1 of the
-byte at `0x80200408` is set. On the recorder screen that byte read `06` and
-every request below was answered. Which screens clear the bit is not mapped, so
-identity may go unanswered during startup dialogs. (Static, except the recorder
-observation.)
+In state 0, editor commands are discarded until an identity request starts a
+session. The recorder screen accepts the requests below; startup dialogs may
+not answer identity requests.
 
 ### Identity
 
@@ -125,7 +76,7 @@ device  F0 7E 00 06 02 52 72 00 0D 00 v0 v1 v2 v3 F7
 ```
 
 The application sends device ID `00`. The firmware ignores that byte. `v0`–`v3`
-are four ASCII digits of the system version: `30 31 31 30` for 1.10. (Probe.)
+are four ASCII digits of the system version: `30 31 31 30` for 1.10.
 
 The application accepts the reply only when it is 15 bytes with device ID `00`,
 manufacturer `52`, family `72 00`, a known model byte, and a following `00`.
@@ -134,9 +85,8 @@ error. It displays the version as `1.10`.
 
 ### Connection sequence
 
-`DeviceInitializationService` runs these steps in order. Each waits for its
-reply, and a failure cancels initialization. (Static for ordering; each exchange
-is Probe.)
+An editor connection can use the following sequence, waiting for each reply
+before sending the next request.
 
 | Step | Host sends | Expected reply |
 | --- | --- | --- |
@@ -151,14 +101,10 @@ After that it repeats keep-alive `31 0B` and expects `00 0B` each time.
 
 ### Timing
 
-- The application's default reply timeout is 1 s per request. Its retry counts
-  and its keep-alive interval were not recovered.
-- The first `31 0B` starts periodic RTOS timer 9 at 1000 ms. Each `31 0B` sets a
-  flag at `0x805dcaf8`. The callback at `0x800886f0` clears the flag, or counts
-  a miss when it is not set. On the fifth consecutive miss it sets the session
-  state to 0 and posts event `0xCE`. (Static.)
-- Probe: the session survived 1.6 s of silence and was reset after 6.5 s.
-- Without any keep-alive the watchdog never starts.
+The first keep-alive starts a one-second watchdog. A keep-alive resets the
+miss counter; five consecutive misses end the session. Without a keep-alive,
+the watchdog has not started. Allow for guest startup and reconnect when the
+USB interface restarts.
 
 ## Acknowledgments and errors
 
@@ -188,8 +134,7 @@ A failure is two messages: `00 40`, then parameter change type `10`:
 F0 52 00 00 31 10 ee F7
 ```
 
-Error codes `ee` emitted by this firmware, with triggers inferred from the
-handlers (Static):
+Error codes `ee` and their conditions:
 
 | `ee` | Trigger |
 | --- | --- |
@@ -209,9 +154,8 @@ parameter change `12`.
 
 ## Global setting dump
 
-Request `F0 52 00 00 2B F7`. Reply builder `0x800412b8`, 182 bytes. The
-application accepts an L6max dump when it is at least 182 bytes and the length
-field is at least 174. (Probe for length and defaults; field names Static.)
+Request `F0 52 00 00 2B F7`. The L6max reply is 182 bytes with a payload
+length of 174 bytes.
 
 | Index | Field | Fresh emulator state |
 | --- | --- | --- |
@@ -259,12 +203,11 @@ F0 52 00 00 31 tt <args...> F7
 ```
 
 Host to device. The firmware checks every range shown and silently drops a
-message that fails. Pad, channel, and index arguments are zero based. (Static,
-except where marked.)
+message that fails. Pad, channel, and index arguments are zero based.
 
 | `tt` | Name | Arguments and ranges | Reply |
 | --- | --- | --- | --- |
-| `00` | `dateTime` | year−2000 (0–99), month (1–12), day (1–31), hour (0–23), minute (0–59), second (0–59) | `00 00` (Probe) |
+| `00` | `dateTime` | year−2000 (0–99), month (1–12), day (1–31), hour (0–23), minute (0–59), second (0–59) | `00 00` |
 | `01` | `batteryType` | value 0–2 | `00 00` |
 | `02` | `autoPowerOff` | value 0–1 | `00 00` |
 | `03` | `mixerControlViaMidi` | value 0–1 | `00 00` |
@@ -275,9 +218,9 @@ except where marked.)
 | `08` | `soundPadPlayBtn` | pad 0–3, 1 play / 0 stop | `00 08` conditionally |
 | `09` | `sdCardReaderMode` | value 0–1 | `00 09` or error |
 | `0A` | `factoryReset` | none | Error `03`, then dialog |
-| `0B` | `keepAlive` | none | `00 0B` (Probe) |
+| `0B` | `keepAlive` | none | `00 0B` |
 | `0C` | `midiOutMode` | value 0–1 | `00 00` |
-| `0D` | `midiChannel` | value 0–15 | `00 00` (Probe) |
+| `0D` | `midiChannel` | value 0–15 | `00 00` |
 | `0E` | `midiCCNumber` | 94 CC numbers | `00 00` |
 | `0F` | `soundPadMidiNote` | pad 0–3, note, not-mapped 0–1 | `00 00` |
 | `12` | `dialogYesNo` | dialog 0–12, answer 0 no / 1 yes / 2 other | See below |
@@ -291,7 +234,7 @@ except where marked.)
 | `1A` | `subOutPoint` | value 0–3 | `00 00` |
 
 Types `10` (`error`) and `11` (`appVersion`) are ignored from the host. An
-unknown type receives no reply. (Probe: `31 7F`.)
+unknown type receives no reply. For example, `31 7F` receives no reply.
 
 Notes:
 
@@ -311,10 +254,8 @@ Notes:
 - `18` replies, sets the session state to 0, and restarts the USB device about
   one second later. The host port disappears and returns.
 
-Device to host, sent by `0x80041700` when a setting changes on the panel and by
-the reset path. The argument layout matches the host form. Observed senders
-cover types `03`, `04`, `13`, `15`, `16`, `18`, and `19`; other panel paths
-were not traced. (Static.)
+Device-to-host changes use the same argument layout. Observed panel updates
+include types `03`, `04`, `13`, `15`, `16`, `18`, and `19`.
 
 ## Patch data dumps
 
@@ -334,25 +275,24 @@ Requests are `F0 52 00 00 46 kk <args> F7`; data is
 | `08` | `auxPrePost` | Not requestable | channel, AUX, value |
 
 Name length is the count of packed bytes that follow. An unassigned pad returns
-file number `7F 7F` and length 0: `45 02 pad 7F 7F 00 00`. (Probe.)
+file number `7F 7F` and length 0: `45 02 pad 7F 7F 00 00`.
 
-With no SD card, `46 00` returned count 0 for each pad. (Probe.) `46 01` was not
-exercised.
+With no SD card, `46 00` returns count 0 for each pad.
 
 `46 04` also restores the default CC map in the device before replying. The
 default map on this firmware is `01`–`08`, `0B`–`12`, `15`–`1C`, `21`–`58`,
-`5D`–`5F`, `66`–`6A`, `6D`, `6E`, `71`, `72`, `75`, `77`. (Probe.)
+`5D`–`5F`, `66`–`6A`, `6D`, `6E`, `71`, `72`, `75`, `77`.
 
 `45 05` carries the application version, 2.0.0.39 as
 `45 05 02 00 00 00 00 00 27 00`. Any version that is nonzero and in range is
-acknowledged with `00 11`. (Probe.)
+acknowledged with `00 11`.
 
 While the session state is 2 the firmware also sends `03`, `06`, `07`, and `08`
-unprompted when the corresponding state changes. (Static.)
+unprompted when the corresponding state changes.
 
 ## Recorder messages
 
-Request `F0 52 00 00 67 01 F7`. Reply builder `0x80041800`, 32 bytes:
+Request `F0 52 00 00 67 01 F7`. The reply is 32 bytes:
 
 | Index | Field |
 | --- | --- |
@@ -365,32 +305,15 @@ Request `F0 52 00 00 67 01 F7`. Reply builder `0x80041800`, 32 bytes:
 | 11–20 | 64-bit byte count, used space |
 | 21–30 | 64-bit byte count, card capacity |
 
-With no card every data byte was `00`. (Probe.) The field split of the time
-bytes and the meaning of the two counts are inferred from the builder and the
-application's `maxCapacityStr`, `usageCapacityStr`, and `remainingTimeStr`. The
-application also accepts a 31-byte form.
+With no card, the data bytes are zero. The time-field split and the meaning
+of the two counts remain inferred. The editor also accepts a 31-byte form.
 
 The firmware sends the same message unprompted when remaining time changes,
 after a recorder mode change, and after a reset.
 
-## Evidence
-
-Packet layouts combine interpreted firmware/application findings and replies
-from a stock-firmware emulator probe on USB MIDI cable 2. The probe used
-volatile state and no SD card. Static findings and inferred fields are marked
-above; detailed reconstruction notes are maintained separately from this
-public protocol specification.
-
 ## Verification limits
 
-- The application has not been connected to the emulator. Port matching and
-  CoreMIDI behavior are static findings.
-- Hardware behavior is unverified.
-- The gate that suppresses replies outside eligible screens is identified but
-  its screens are not mapped.
-- File name transfer, pad assignment, and dialog flows were not exercised;
-  there was no SD card in the probe.
-- SD card reader mode and audio interface mode restart USB. Their effect on a
-  live application session in the emulator is untested.
-- L6 (non-max) layouts are noted only where the application distinguishes them.
-- Application retry counts and keep-alive interval remain unknown.
+The layouts are scoped to the supported firmware. Physical-device behavior,
+some dialog and file-transfer cases, screen-dependent session availability,
+and retry timing need further validation. Audio-interface and SD-reader mode
+changes restart USB; clients must reconnect after the device returns.

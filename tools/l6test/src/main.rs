@@ -1,5 +1,7 @@
 //! Reproducible suite driver. All guest runners are supervised child processes.
+mod gui_capture;
 mod gui_probe;
+mod pad_state;
 mod screen_gif;
 
 use l6max_host::engine::Options;
@@ -44,6 +46,8 @@ struct Fixture {
     state_recipe: Option<PathBuf>,
     state_spec: Option<PathBuf>,
     sd_image: Option<PathBuf>,
+    #[serde(default)]
+    sound_pad: Vec<pad_state::SoundPad>,
     audio_device: Option<String>,
     #[serde(default)]
     gdb: bool,
@@ -296,6 +300,10 @@ fn load_config(path: &Path) -> Result<Config, String> {
         if !fixture.patches.is_empty() && fixture.firmware_package.is_none() {
             return Err("patches require a stock firmware_package".into());
         }
+        pad_state::validate(&fixture.sound_pad)?;
+        if !fixture.sound_pad.is_empty() && fixture.sd_image.is_none() {
+            return Err("sound_pad requires an sd_image fixture".into());
+        }
         if fixture.state_template.is_some() && fixture.state_recipe.is_some() {
             return Err("choose state_template or state_recipe, not both".into());
         }
@@ -470,6 +478,9 @@ fn fixture_options(
     let sd_hash = if let Some(card) = &fixture.sd_image {
         let target = dir.join("card.img");
         fs::copy(card, &target).map_err(|e| e.to_string())?;
+        if !fixture.sound_pad.is_empty() {
+            pad_state::apply(&target, &fixture.model, &fixture.sound_pad)?;
+        }
         args.extend(["--sd-image".into(), target.clone().into_os_string()]);
         Some(hash(&target)?)
     } else {
@@ -489,7 +500,7 @@ fn fixture_options(
         args.push("--update-bootloader".into());
     }
     let options = Options::parse_args(args)?;
-    let manifest = json!({"fixture":fixture.name,"model":fixture.model,"firmware":files(&firmware)?,"package_sha256":selected_package.as_ref().map(|p|hash(p)).transpose()?,"patches":fixture.patches,"state_recipe":fixture.state_recipe.as_ref().map(|p|hash(p)).transpose()?,"update_package_sha256":fixture.update_package.as_ref().map(|p|hash(p)).transpose()? ,"state_template":state_hashes,"state_spec":state_spec,"sd_sha256":sd_hash,"audio_device":audio_device,"timing":fixture.timing,"update_bootloader":fixture.update_bootloader,"qemu_sha256":config.qemu_sha256});
+    let manifest = json!({"fixture":fixture.name,"model":fixture.model,"firmware":files(&firmware)?,"package_sha256":selected_package.as_ref().map(|p|hash(p)).transpose()?,"patches":fixture.patches,"state_recipe":fixture.state_recipe.as_ref().map(|p|hash(p)).transpose()?,"update_package_sha256":fixture.update_package.as_ref().map(|p|hash(p)).transpose()? ,"state_template":state_hashes,"state_spec":state_spec,"sd_sha256":sd_hash,"sound_pad":if fixture.sd_image.is_some() { json!(fixture.sound_pad) } else { json!([]) },"audio_device":audio_device,"timing":fixture.timing,"update_bootloader":fixture.update_bootloader,"qemu_sha256":config.qemu_sha256});
     Ok((options, manifest))
 }
 fn engine_args(options: &Options) -> Vec<String> {
@@ -1445,6 +1456,13 @@ fn main() {
         }
         return;
     }
+    if cli_args.len() >= 2 && cli_args[0] == "capture" && cli_args[1] == "gui" {
+        if let Err(error) = gui_capture::run(cli_args[2..].to_vec()) {
+            tracing::error!(event="gui_capture_failed",%error,"GPUI GUI capture failed");
+            std::process::exit(1);
+        }
+        return;
+    }
     unsafe {
         libc::signal(libc::SIGINT, interrupt as *const () as libc::sighandler_t);
         libc::signal(libc::SIGTERM, interrupt as *const () as libc::sighandler_t);
@@ -1488,6 +1506,7 @@ mod tests {
             state_recipe: None,
             state_spec: None,
             sd_image: None,
+            sound_pad: vec![],
             audio_device: Some("driver=wav,id=l6-audio,path={logs}/audio.wav".into()),
             gdb: true,
             timing: "paced".into(),
@@ -1714,6 +1733,7 @@ mod tests {
             state_recipe: None,
             state_spec: None,
             sd_image: None,
+            sound_pad: vec![],
             audio_device: None,
             gdb: false,
             timing: "paced".into(),

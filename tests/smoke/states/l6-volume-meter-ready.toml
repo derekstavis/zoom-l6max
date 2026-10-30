@@ -1,0 +1,13 @@
+# L6 playback state for the isolated MASTER meter case.
+# The SD image supplies the saved Pad 1 assignment and sweep WAV.
+version = 1
+model = "l6"
+
+[settings]
+base = "defaults"
+
+[settings.values]
+auto_power_off = 0
+
+[rtc]
+datetime = "2026-10-30T12:00:00"

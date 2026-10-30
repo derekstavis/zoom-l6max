@@ -23,6 +23,53 @@ const SCREWS: [(f32, f32); 8] = [
     (322.0, 314.0),
 ];
 
+// Full-scale ring PWM by common row, averaged from repeated samples across
+// the complete L6max 1.10 LEVEL sweep with all eight rings at 127. The row
+// scan produces slightly different maximum duty; fractional PWM remains
+// proportional below each measured endpoint.
+const RING_FULL_SCALE_BY_ROW: [u8; 8] = [41, 42, 41, 41, 41, 41, 40, 41];
+
+fn ring_brightness(indicator_levels: [[u8; 24]; 8]) -> [[u8; 9]; 8] {
+    indicators::RING_PINS.map(|pins| {
+        pins.map(|(row, column)| {
+            let measured = u16::from(indicator_levels[row][(column ^ 7) as usize]);
+            let full_scale = u16::from(RING_FULL_SCALE_BY_ROW[row]);
+            ((measured * 255 + full_scale / 2) / full_scale).min(255) as u8
+        })
+    })
+}
+
+#[cfg(test)]
+mod pwm_tests {
+    use super::{RING_FULL_SCALE_BY_ROW, ring_brightness};
+
+    #[test]
+    fn l6max_full_scale_calibration_matches_each_scanned_row() {
+        let levels = std::array::from_fn(|row| [RING_FULL_SCALE_BY_ROW[row]; 24]);
+        assert_eq!(ring_brightness(levels), [[255; 9]; 8]);
+    }
+
+    #[test]
+    fn l6max_pwm_calibration_is_monotonic_and_clamps_for_every_row() {
+        for row in 0..8 {
+            let mut previous = 0;
+            for measured in 0..=255 {
+                let mut levels = [[0; 24]; 8];
+                levels[row] = [measured; 24];
+                let rings = ring_brightness(levels);
+                for (ring, pins) in super::indicators::RING_PINS.iter().enumerate() {
+                    for (segment, &(pin_row, _)) in pins.iter().enumerate() {
+                        if pin_row == row {
+                            assert!(rings[ring][segment] >= previous);
+                            previous = rings[ring][segment];
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn channel_divider(x: f32, y: f32, height: f32, s: f32, layout: &Layout) -> Div {
     let mut gaps = Vec::new();
     let mut reserve = |r: Region, horizontal_clearance: f32| {
@@ -135,13 +182,15 @@ pub fn panel(
     layout: &Layout,
     scale: f32,
     rows: [u32; 8],
+    indicator_levels: [[u8; 24]; 8],
     switches: [bool; 54],
     analog: [u16; 5],
     interactions: &super::PanelInteractions,
 ) -> Div {
     let s = scale;
     let leds = indicators::leds(rows);
-    let rings = indicators::rings(rows);
+    let [left_level, right_level] = indicators::l6max_master_meter_levels(indicator_levels);
+    let rings = ring_brightness(indicator_levels);
     let mut panel = div()
         .relative()
         .size_full()
@@ -450,10 +499,10 @@ pub fn panel(
                 column_step: 9.63,
                 row_step: 15.33,
                 appearance: super::vu_meter::SHARED_APPEARANCE,
-                active_fill: 0x424549,
+                active_fill: 0xe7ee39,
             },
-            left_level: None,
-            right_level: None,
+            left_level: Some(left_level),
+            right_level: Some(right_level),
         }),
     ));
     for x in [984.0, 1054.0] {
@@ -596,7 +645,7 @@ pub fn panel(
     }
     for (i, region) in layout.knobs.iter().enumerate() {
         let visual = if i < 8 {
-            EncoderWithLeds::new(region.width * s, EncoderLedLevel::Segments(rings[i] as u16))
+            EncoderWithLeds::new(region.width * s, EncoderLedLevel::Levels(rings[i]))
                 .with_input(interactions.encoder_input(i))
                 .into_any_element()
         } else {

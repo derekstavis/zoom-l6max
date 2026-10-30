@@ -91,6 +91,16 @@ environment = { L6_AUDIO_SAMPLE_TRACE = "1" }
 wall_timeout_s = 1800
 
 [[case]]
+id = "l6max-volume-meter-sweep"
+suites = []
+models = ["l6max"]
+scenario = "scenarios/l6max-volume-meter-sweep.toml"
+fixture = "volume-meter"
+needs_configuration = true
+environment = { L6_AUDIO_SAMPLE_TRACE = "1" }
+wall_timeout_s = 1800
+
+[[case]]
 id = "l6max-ui-pad-assignments"
 suites = ["full"]
 models = ["l6max"]
@@ -432,3 +442,32 @@ id = "switches"
 suites = []
 models = ["l6max"]
 scenario = "scenarios/switches.toml"
+
+[[case]]
+id = "l6max-channel-signal-pwm"
+suites = []
+models = ["l6max"]
+scenario = "scenarios/l6max-channel-signal-pwm.toml"
+fixture = "signal-pwm"
+volatile = true
+no_sd = true
+wall_timeout_s = 900
+
+[[case]]
+id = "l6-level-meter-pwm"
+suites = []
+models = ["l6"]
+scenario = "scenarios/l6-level-meter-pwm.toml"
+fixture = "l6-meter-pwm"
+volatile = true
+no_sd = true
+wall_timeout_s = 1800
+
+[[case]]
+id = "l6-volume-meter-playback"
+suites = []
+models = ["l6"]
+scenario = "scenarios/l6-volume-meter-playback.toml"
+fixture = "l6-volume-meter"
+environment = { L6_AUDIO_SAMPLE_TRACE = "1" }
+wall_timeout_s = 900
