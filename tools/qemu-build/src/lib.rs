@@ -16,6 +16,8 @@ const MESON_ENTRY: &str = "arm_common_ss.add(files('l6max.c'))";
 const BOARD_SOURCES: &[&str] = &[
     "l6max.c",
     "l6-profile.h",
+    "l6-panel-gpio.h",
+    "l6-panel-timer.h",
     "l6max-display.h",
     "l6max-indicators.h",
     "l6max-usb.h",

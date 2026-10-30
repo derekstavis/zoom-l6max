@@ -67,6 +67,14 @@ jobs:
         run: |
           cc -std=c11 -Wall -Wextra -Werror emulator/qemu/tests/indicators.c -o "$RUNNER_TEMP/l6-indicators"
           "$RUNNER_TEMP/l6-indicators"
+      - name: Test STM32 panel GPIO data registers
+        run: |
+          cc -std=c11 -Wall -Wextra -Werror emulator/qemu/tests/panel-gpio.c -o "$RUNNER_TEMP/l6-panel-gpio"
+          "$RUNNER_TEMP/l6-panel-gpio"
+      - name: Test STM32 panel timer status
+        run: |
+          cc -std=c11 -Wall -Wextra -Werror emulator/qemu/tests/panel-timer.c -o "$RUNNER_TEMP/l6-panel-timer"
+          "$RUNNER_TEMP/l6-panel-timer"
       - name: Test RT SAI register and FIFO model
         run: |
           cc -std=c11 -Wall -Wextra -Werror emulator/qemu/tests/sai.c -o "$RUNNER_TEMP/l6-sai"
@@ -79,6 +87,8 @@ jobs:
         run: |
           export PYTHON="$(brew --prefix python@3.14)/bin/python3.14"
           cargo run --locked -p qemu-build -- --minimal
+      - name: Test panel flash and timer MMIO
+        run: python3 emulator/qemu/tests/panel-qtest.py emulator/qemu/build-source/build/qemu-system-arm
       - name: Package and verify app
         env:
           RELEASE_BUILD: ${{ inputs.release || false }}

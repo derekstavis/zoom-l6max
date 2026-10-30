@@ -7,6 +7,15 @@ with separate address spaces and a shared virtual clock. QEMU's Cortex-M0
 stands in for the panel's Cortex-M0+. Internal UART links the chips, and the
 main firmware can program, verify, and restart the panel's executable flash.
 
+The panel MCU is reported as STM32G031C4T6 on both L6 and L6max. ST lists
+16 KiB flash and 8 KiB SRAM for that part. The QEMU panel maps 16 KiB
+flash and 8 KiB SRAM, and limits ROM updater flash access to 16 KiB. Its
+persistent flash image remains 64 KiB for state compatibility; only its first
+16 KiB are visible to the guest. See the [ST datasheet](https://www.st.com/resource/en/datasheet/stm32g031c6.pdf),
+[RM0444](https://www.st.com/resource/en/reference_manual/rm0444-stm32g0x1-advanced-armbased-32bit-mcus-stmicroelectronics.pdf),
+and the [panel manual audit](panel-manual-audit.md) for register-level findings
+and remaining work.
+
 The L6 MAIN processor is an i.MX RT1041. The L6max processor has not been
 identified; the two profiles share the emulated CPU topology without assuming
 identical physical silicon. For L6 peripheral semantics, use the RT1040
@@ -36,7 +45,7 @@ but its controller register maps differ from RT1041; see the
 | USDHC / SD | `imx-usdhc`, SDHCI, and QEMU SD bus | Existing controller and card infrastructure is already used by the board. |
 | USB OTG | Generic QEMU USB device framework | The board supplies an RT device-controller adapter for USB MIDI and storage. |
 | GPIO | i.MX GPIO controller and generic GPIO lines | Reuse GPIO primitives where register compatibility holds; board-specific pins and wiring remain profile data. |
-| LPUART | `imx.serial` (IMX31 UART) and STM32 LPUART models | Neither is an RT1041 LPUART register model. Keep the RT LPUART register behavior and firmware-specific UART routing in the board layer; use QEMU chardevs for byte-stream transport. The panel's STM32 USART already uses QEMU's STM32L4x5 USART model. |
+| LPUART | `imx.serial` (IMX31 UART) and STM32 LPUART models | Neither is an RT1041 LPUART register model. Keep the RT LPUART register behavior and firmware-specific UART routing in the board layer; use QEMU chardevs for byte-stream transport. The panel uses QEMU's STM32L4x5 USART as an approximation for the exercised registers, not as a complete STM32G031 USART model. |
 | Cortex-M7 / NVIC | QEMU `armv7m` device and ARM CPU models | The board reuses these CPU/NVIC blocks for both MAIN images, with profile-specific IRQ counts and priority bits. |
 | ADC, FlexSPI and clock control | Generic QEMU infrastructure | Board adapters model the exercised register and timing paths. |
 

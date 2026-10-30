@@ -41,6 +41,8 @@
 #include "l6max-indicators.h"
 #include "l6max-usb.h"
 #include "l6-profile.h"
+#include "l6-panel-gpio.h"
+#include "l6-panel-timer.h"
 #include "l6-sai.h"
 #include "l6-edma.h"
 #include "l6-ccm-analog.h"
@@ -299,6 +301,7 @@ typedef struct L6MainGPIOAdapter {
 typedef struct L6ChipState {
     ARMv7MState armv7m;
     MemoryRegion flash;
+    MemoryRegion panel_flash_window;
     MemoryRegion flash_alias;
     MemoryRegion itcm;
     MemoryRegion main_high_ram;
@@ -1178,6 +1181,24 @@ static void l6_panel_store(L6ChipState *s, hwaddr offset, uint32_t value)
                         GUINT_TO_POINTER(value));
 }
 
+static void l6_panel_timer_irq(L6ChipState *s, hwaddr base, unsigned irq)
+{
+    qemu_set_irq(qdev_get_gpio_in(DEVICE(&s->armv7m), irq),
+                 l6_panel_timer_irq_level(l6_panel_reg(s, base + 0x10),
+                                          l6_panel_reg(s, base + 0x0c)));
+}
+
+static void l6_panel_timer_reset(L6ChipState *s)
+{
+    static const hwaddr bases[] = { 0, 0x400, 0x2000 };
+    static const unsigned irqs[] = { 15, 16, 19 };
+    for (unsigned i = 0; i < ARRAY_SIZE(bases); i++) {
+        l6_panel_store(s, bases[i] + 0x0c, 0);
+        l6_panel_store(s, bases[i] + 0x10, 0);
+        l6_panel_timer_irq(s, bases[i], irqs[i]);
+    }
+}
+
 /* External indicator matrix: 24 serial columns, eight one-hot commons.
  * These outputs come from the peripheral pins, never UART or guest variables. */
 static void l6_indicator_tick(void *opaque)
@@ -1240,16 +1261,17 @@ static void l6_panel_tim3_tick(void *opaque)
     if (!(cr1 & 1) || s->cpu_held) {
         return;
     }
-    l6_panel_store(s, 0x410, l6_panel_reg(s, 0x410) | 1);
-    if (cr1 & 8) { /* one-pulse mode */
+    uint32_t status = l6_panel_reg(s, 0x410);
+    l6_panel_timer_update(&cr1, &status, false);
+    l6_panel_store(s, 0x410, status);
+    l6_panel_timer_irq(s, 0x400, 16);
+    if (!(cr1 & 1)) { /* one-pulse mode */
         l6_panel_store(s, 0x400, cr1 & ~1u);
     } else {
         timer_mod(s->panel_tim3, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
                   l6_panel_tim3_period(s));
     }
-    if (l6_panel_reg(s, 0x40c) & 1) {
-        qemu_irq_pulse(qdev_get_gpio_in(DEVICE(&s->armv7m), 16));
-    }
+
 }
 
 static int64_t l6_panel_tim14_period(L6ChipState *s)
@@ -1267,16 +1289,17 @@ static void l6_panel_tim14_tick(void *opaque)
     if (!(cr1 & 1) || s->cpu_held) {
         return;
     }
-    l6_panel_store(s, 0x2010, l6_panel_reg(s, 0x2010) | 1);
-    if (cr1 & 8) {
+    uint32_t status = l6_panel_reg(s, 0x2010);
+    l6_panel_timer_update(&cr1, &status, false);
+    l6_panel_store(s, 0x2010, status);
+    l6_panel_timer_irq(s, 0x2000, 19);
+    if (!(cr1 & 1)) {
         l6_panel_store(s, 0x2000, cr1 & ~1u);
     } else {
         timer_mod(s->panel_tim14, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
                   l6_panel_tim14_period(s));
     }
-    if (l6_panel_reg(s, 0x200c) & 1) {
-        qemu_irq_pulse(qdev_get_gpio_in(DEVICE(&s->armv7m), 19));
-    }
+
 }
 
 static void l6_panel_spi_dma_tick(void *opaque)
@@ -1328,7 +1351,12 @@ static void l6_panel_tim2_tick(void *opaque)
     if (!(cr1 & 1) || s->cpu_held) {
         return;
     }
-    if (dier & 1) {
+    gpointer sr_key = GUINT_TO_POINTER((0x0010 >> 2) + 1);
+    uint32_t sr = GPOINTER_TO_UINT(g_hash_table_lookup(s->registers, sr_key));
+    bool update = l6_panel_timer_update(&cr1, &sr, false);
+    l6_panel_store(s, 0, cr1);
+    l6_panel_store(s, 0x10, sr);
+    if (update && (dier & 1)) {
         if (s->input_trace &&
             qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL) < s->input_trace_until) {
             qemu_log_mask(LOG_UNIMP,
@@ -1336,12 +1364,12 @@ static void l6_panel_tim2_tick(void *opaque)
                           qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL),
                           l6_panel_tim2_period(s));
         }
-        gpointer sr_key = GUINT_TO_POINTER((0x0010 >> 2) + 1);
-        uint32_t sr = GPOINTER_TO_UINT(g_hash_table_lookup(s->registers, sr_key));
-        g_hash_table_insert(s->registers, sr_key, GUINT_TO_POINTER(sr | 1));
-        qemu_irq_pulse(qdev_get_gpio_in(DEVICE(&s->armv7m), 15));
     }
-    timer_mod(s->panel_tim2, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + l6_panel_tim2_period(s));
+    l6_panel_timer_irq(s, 0, 15);
+    if (cr1 & 1) {
+        timer_mod(s->panel_tim2, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
+                  l6_panel_tim2_period(s));
+    }
 }
 
 static int l6_main_uart_can_receive(void *opaque)
@@ -1606,6 +1634,7 @@ static void l6_local_reset_request(void *opaque, int n, int level)
         timer_del(chip->panel_tim14);
         timer_del(chip->panel_spi_dma);
         timer_del(chip->indicator_timer);
+        l6_panel_timer_reset(chip);
         memset(&chip->indicators, 0, sizeof(chip->indicators));
         memset(chip->indicators.published, 0xff,
                sizeof(chip->indicators.published));
@@ -1641,6 +1670,7 @@ static void l6_update_panel_boot(L6ChipState *main)
     timer_del(panel->panel_tim14);
     timer_del(panel->panel_spi_dma);
     timer_del(panel->indicator_timer);
+    l6_panel_timer_reset(panel);
     l6_panel_store(panel, 0x400, 0);
     l6_panel_store(panel, 0x2000, 0);
     l6_panel_store(panel, 0x20008, 0);
@@ -1965,7 +1995,7 @@ static void l6_rom_write_byte(L6ChipState *s, uint8_t byte)
                 for (unsigned i = 0; i < count; i++) {
                     uint32_t address = s->rom_address + i;
                     l6_rom_reply_byte(s,
-                        address >= 0x08000000 && address < 0x08010000 ?
+                        address >= 0x08000000 && address < 0x08004000 ?
                         l6_rom_flash(s)[address - 0x08000000] :
                         address >= 0x1fff7800 && address < 0x1fff7804 ?
                         s->rom_option[address - 0x1fff7800] : 0xff);
@@ -1990,7 +2020,7 @@ static void l6_rom_write_byte(L6ChipState *s, uint8_t byte)
                 checksum ^= s->rom_input[i];
             }
             bool flash_range = s->rom_address >= 0x08000000 &&
-                (uint64_t)s->rom_address + count <= 0x08010000;
+                (uint64_t)s->rom_address + count <= 0x08004000;
             bool option_range = s->rom_address == 0x1fff7800 && count == 4;
             if (checksum != s->rom_input[count + 1] ||
                 (count & 3) || (!flash_range && !option_range)) {
@@ -2050,14 +2080,14 @@ static void l6_rom_write_byte(L6ChipState *s, uint8_t byte)
             if (checksum != 0) {
                 l6_rom_reply_byte(s, 0x1f);
             } else if (pages == 0xffff) {
-                l6_rom_erase_flash(s, 0, sizeof(s->rom_flash));
+                l6_rom_erase_flash(s, 0, 0x4000);
                 qemu_log_mask(LOG_UNIMP, "l6 panel ROM mass erase\n");
                 l6_rom_reply_byte(s, 0x79);
             } else if (pages < 128) {
                 for (unsigned i = 0; i <= pages; i++) {
                     unsigned page = ((unsigned)s->rom_input[2 + 2 * i] << 8) |
                                      s->rom_input[3 + 2 * i];
-                    if (page < sizeof(s->rom_flash) / 2048) {
+                    if (page < 0x4000 / 2048) {
                         l6_rom_erase_flash(s, page * 2048, 2048);
                     }
                 }
@@ -2402,7 +2432,7 @@ static uint64_t l6_mmio_read(void *opaque, hwaddr offset, unsigned size)
                 }
             }
         }
-        return idr;
+        return l6_panel_gpio_idr(idr);
     }
     if (offset == 0x0c4024 && size == 4) {
         /* Reading ADC1 R0 acknowledges the completed conversion. */
@@ -3227,13 +3257,18 @@ static void l6_mmio_write(void *opaque, hwaddr offset,
     if (s->panel && offset >= 0x10000000 && offset < 0x10001800) {
         hwaddr base = offset & ~0x3ff;
         unsigned reg = offset & 0x3ff;
-        if (reg >= 0x14 && reg < 0x1c) {
+        if ((reg >= 0x14 && reg < 0x1c) ||
+            (reg >= 0x28 && reg < 0x2c)) {
             uint32_t old = l6_panel_reg(s, base + 0x14);
             uint32_t next = old;
             if ((reg & ~3u) == 0x18) {
                 uint32_t bits = (uint32_t)value << shift;
-                next = (old & ~(bits >> 16)) | (bits & 0xffff);
+                next = l6_panel_gpio_bsrr(old, bits);
                 word = 0; /* BSRR is a command register, not output storage. */
+            } else if ((reg & ~3u) == 0x28) {
+                uint32_t bits = (uint32_t)value << shift;
+                next = l6_panel_gpio_brr(old, bits);
+                word = 0; /* BRR is write-only. */
             } else {
                 next = word & 0xffff;
             }
@@ -3482,8 +3517,47 @@ static void l6_mmio_write(void *opaque, hwaddr offset,
             timer_del(s->panel_tim2);
         }
     }
+    if (s->panel && ((offset & ~3u) == 0x10 ||
+                     (offset & ~3u) == 0x410 ||
+                     (offset & ~3u) == 0x2010)) {
+        /* TIMx_SR flags clear on zero; ones leave existing flags unchanged. */
+        word = l6_panel_timer_clear_status(previous_word, word, mask);
+    }
     if (!sai && store_word) {
         g_hash_table_insert(s->registers, key, GUINT_TO_POINTER(word));
+    }
+    if (s->panel) {
+        static const hwaddr timer_bases[] = { 0, 0x400, 0x2000 };
+        static const unsigned timer_irqs[] = { 15, 16, 19 };
+        QEMUTimer *timers[] = { s->panel_tim2, s->panel_tim3, s->panel_tim14 };
+        for (unsigned i = 0; i < ARRAY_SIZE(timer_bases); i++) {
+            hwaddr base = timer_bases[i];
+            hwaddr reg = offset & ~3u;
+            if (reg == base + 0x14) {
+                /* UG is self-clearing and resets the counter and prescaler. */
+                if (((uint32_t)value << shift) & 1u) {
+                    uint32_t cr1 = l6_panel_reg(s, base);
+                    uint32_t status = l6_panel_reg(s, base + 0x10);
+                    uint32_t counter = (i != 2 && (cr1 & (1u << 4))) ?
+                                       l6_panel_reg(s, base + 0x2c) : 0;
+                    l6_panel_store(s, base + 0x24, counter);
+                    l6_panel_timer_update(&cr1, &status, true);
+                    l6_panel_store(s, base, cr1);
+                    l6_panel_store(s, base + 0x10, status);
+                    timer_del(timers[i]);
+                    if ((cr1 & 1) && !s->cpu_held) {
+                        int64_t period = i == 0 ? l6_panel_tim2_period(s) :
+                                         i == 1 ? l6_panel_tim3_period(s) :
+                                                  l6_panel_tim14_period(s);
+                        timer_mod(timers[i], qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + period);
+                    }
+                }
+                l6_panel_store(s, base + 0x14, 0);
+                l6_panel_timer_irq(s, base, timer_irqs[i]);
+            } else if (reg == base + 0x0c || reg == base + 0x10) {
+                l6_panel_timer_irq(s, base, timer_irqs[i]);
+            }
+        }
     }
     if (s->panel && ((offset >= 0x2800 && offset < 0x2860) || offset == 0x2105c)) {
         if (offset == 0x2800 || offset == 0x2804 || offset == 0x280c) {
@@ -4234,7 +4308,10 @@ static void l6_chip_init(MachineState *machine, L6ChipState *s, bool panel,
                          const L6BoardProfile *profile)
 {
     hwaddr flash_base = panel ? 0x08000000 : profile->main_flash_base;
+    /* Keep the 64 KiB panel backing for existing state files, but only map
+     * the STM32G031C4T6's 16 KiB physical flash into the guest. */
     uint64_t flash_size = panel ? 0x10000 : 0x200000;
+    uint64_t flash_map_size = panel ? 0x4000 : flash_size;
     DeviceState *cpu;
 
     g_autofree char *flash_name = g_strdup_printf("%s.flash", prefix);
@@ -4604,12 +4681,15 @@ static void l6_chip_init(MachineState *machine, L6ChipState *s, bool panel,
 
     memory_region_init_rom(&s->flash, NULL, flash_name,
                            flash_size, &error_fatal);
-    memory_region_add_subregion(system_memory, flash_base, &s->flash);
     if (panel) {
+        memory_region_init_alias(&s->panel_flash_window, NULL,
+                                 "panel.flash-window", &s->flash, 0, flash_map_size);
+        memory_region_add_subregion(system_memory, flash_base, &s->panel_flash_window);
         memory_region_init_alias(&s->flash_alias, NULL,
-                                 boot_alias_name, &s->flash, 0, flash_size);
+                                 boot_alias_name, &s->flash, 0, flash_map_size);
         memory_region_add_subregion(system_memory, 0, &s->flash_alias);
     } else {
+        memory_region_add_subregion(system_memory, flash_base, &s->flash);
         memory_region_init_ram(&s->itcm, NULL, itcm_name, 0x100000,
                                &error_fatal);
         memory_region_add_subregion(system_memory, 0, &s->itcm);
@@ -4627,7 +4707,7 @@ static void l6_chip_init(MachineState *machine, L6ChipState *s, bool panel,
     }
 
     l6_make_ram(system_memory, &s->sram, sram_name, 0x20000000,
-                panel ? 0x10000 : 0x200000);
+                panel ? 0x2000 : 0x200000);
     if (!panel) {
         l6_make_ram(system_memory, &s->dtcm, dtcm_name, 0x20200000, 0x100000);
         const char *shared_ram_fd = g_getenv("L6_EXTERNAL_RAM_FD");
@@ -4731,7 +4811,6 @@ static void l6_chip_init(MachineState *machine, L6ChipState *s, bool panel,
         sysbus_connect_irq(SYS_BUS_DEVICE(s->panel_usart1), 0,
                            qdev_get_gpio_in(DEVICE(&s->armv7m), 27));
     }
-    g_autofree char *persistent_kernel = NULL;
     if (panel && g_getenv("L6_STATE_DIR")) {
         g_autofree char *contents = NULL;
         gsize size;
@@ -4765,12 +4844,15 @@ static void l6_chip_init(MachineState *machine, L6ChipState *s, bool panel,
                     l6_storage_flush(s->persistent_panel, 0x10000);
                 }
             }
-            persistent_kernel = g_build_filename(g_getenv("L6_STATE_DIR"), "panel-flash.bin", NULL);
-            kernel_filename = persistent_kernel;
         }
     }
-    armv7m_load_kernel(s->armv7m.cpu, panel ? kernel_filename : NULL,
-                       flash_base, flash_size);
+    armv7m_load_kernel(s->armv7m.cpu,
+                       panel && !s->persistent_panel ? kernel_filename : NULL,
+                       flash_base, flash_map_size);
+    if (panel && s->persistent_panel) {
+        rom_add_blob_fixed_as("l6-panel-installed", s->persistent_panel,
+                              flash_map_size, flash_base, CPU(s->armv7m.cpu)->as);
+    }
     if (!panel) {
         rom_add_blob_fixed_as("l6-main-installed", s->nor_flash + 0x50000,
                              0x1a2ff8, flash_base, CPU(s->armv7m.cpu)->as);
