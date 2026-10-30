@@ -22,7 +22,7 @@ const MAX: usize = 16384;
 /// and treat a startup race as a fatal error instead of retrying it.
 fn context(error: io::Error, operation: &str) -> io::Error {
     match error.raw_os_error() {
-        Some(libc::ENODEV) | Some(libc::EAGAIN) => error,
+        Some(libc::ENODEV) | Some(libc::EAGAIN) | Some(libc::ECONNRESET) => error,
         _ => io::Error::new(error.kind(), format!("{operation}: {error}")),
     }
 }
@@ -252,12 +252,7 @@ impl UsbHost {
         let deadline = Instant::now() + Duration::from_secs(30);
         loop {
             match self.control_once_raw(setup, deadline) {
-                Err(error)
-                    if matches!(
-                        error.raw_os_error(),
-                        Some(libc::ENODEV) | Some(libc::EAGAIN)
-                    ) && Instant::now() < deadline =>
-                {
+                Err(error) if retry_transfer(&error) && Instant::now() < deadline => {
                     thread::sleep(Duration::from_millis(25));
                 }
                 result => return result,
@@ -272,10 +267,10 @@ impl UsbHost {
 
     /// Enumerate through the production retry path, retaining wire evidence.
     pub fn enumerate_with_descriptors(&self) -> io::Result<(Vec<u8>, Vec<u8>, Configuration)> {
+        // A SETUP that firmware discards while handling the bus reset is
+        // reported as ECONNRESET and resent.
         self.connect(true)
             .map_err(|e| context(e, "connect USB device"))?;
-        // Give the guest USB task time to handle bus reset before SETUP.
-        thread::sleep(Duration::from_millis(500));
         let device = self.device_descriptor()?;
         if device.len() != 18 || device[..2] != [18, 1] {
             return Err(io::Error::new(
@@ -319,12 +314,7 @@ impl UsbHost {
                                 format!("short USB device descriptor: {} bytes", descriptor.len()),
                             ));
                         }
-                        Err(error)
-                            if matches!(
-                                error.raw_os_error(),
-                                Some(libc::ENODEV) | Some(libc::EAGAIN)
-                            ) && Instant::now() < deadline =>
-                        {
+                        Err(error) if retry_transfer(&error) && Instant::now() < deadline => {
                             // The setup packet can be accepted before the
                             // firmware primes EP0's IN dTD. Retry the whole
                             // control transfer until the device controller is
@@ -336,12 +326,7 @@ impl UsbHost {
                         }
                     }
                 }
-                Err(error)
-                    if matches!(
-                        error.raw_os_error(),
-                        Some(libc::ENODEV) | Some(libc::EAGAIN)
-                    ) && Instant::now() < deadline =>
-                {
+                Err(error) if retry_transfer(&error) && Instant::now() < deadline => {
                     // The controller can reject SETUP until the firmware has
                     // enabled its device role after VBUS.
                     thread::sleep(Duration::from_millis(25));
@@ -430,6 +415,17 @@ impl Drop for InPump {
             let _ = worker.join();
         }
     }
+}
+
+/// A control transfer that may succeed when restarted with a new SETUP:
+/// ENODEV until firmware runs its controller, EAGAIN while EP0 is unprimed
+/// (bounded by the caller's deadline), and ECONNRESET when the device model
+/// saw firmware discard the pending SETUP by flushing endpoints or resetting.
+fn retry_transfer(error: &io::Error) -> bool {
+    matches!(
+        error.raw_os_error(),
+        Some(libc::ENODEV) | Some(libc::EAGAIN) | Some(libc::ECONNRESET)
+    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

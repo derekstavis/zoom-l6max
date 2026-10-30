@@ -286,17 +286,18 @@ Investigation pointed to firmware-controlled TIM2 interrupts and GPIO scanning
 for panel input. TIM2 derives its period from PSC/ARR at 48 MHz, giving 50 µs
 in the observed configuration. Firmware owns scanning and debouncing.
 
-Timer tracing identified late host-clock dispatch as a cause of missed short
-presses. The engine uses single-threaded TCG with
-`-icount shift=3,align=on,sleep=on` so virtual timer deadlines interrupt CPU
-execution at instruction boundaries. Each executed instruction advances the
-shared virtual clock by 8 ns; QEMU sleeps when it gets ahead of wall time.
-This is an instruction budget for both CPUs, not a model of either MCU's
-instruction cycle costs. QMP pause freezes both chips and device timers.
+Short presses depend on timely virtual timer dispatch. The engine uses
+single-threaded TCG with `-icount shift=2,align=on,sleep=on` so virtual timer
+deadlines interrupt CPU execution at instruction boundaries. Each executed
+instruction advances the shared virtual clock by 4 ns; QEMU sleeps when it gets
+ahead of wall time. This is an instruction budget for both CPUs, not a model of
+either MCU's instruction cycle costs. L6 MAIN's steady processing occupies most
+of an 8 ns budget, which starves lower-priority startup work such as the
+free-cluster count of a FAT32 card; at 4 ns a 128 MiB card is counted within
+the first 5 guest seconds. QMP pause freezes both chips and device timers.
 
-Investigation also identified a pending UART receive condition during panel
-startup. Enabling receive interrupts must assert the interrupt if a byte is
-already pending. The model implements this transition.
+Enabling UART receive interrupts during panel startup asserts the interrupt if a
+byte is already pending.
 
 Both CPUs share panel flash programming and reset state. The modeled ROM
 update protocol writes executable panel flash, verifies it, and restarts the

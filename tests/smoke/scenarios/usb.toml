@@ -10,17 +10,6 @@ until = "boot-ready"
 guest_timeout_ms = 120000
 wall_timeout_s = 600
 
-# Preserve the original no-card USB probe's startup context; this is not the
-# prepared mixer fixture used by panel tests. L6 needs this wait on spec-built
-# state too: enumerated when its controller starts (about 22 guest s), it does
-# not prime MIDI IN or send the encoder CC. The firmware signal for MIDI
-# readiness is not identified.
-[[step]]
-models = ["l6"]
-action = "delay"
-guest_ms = 22000
-guest_timeout_ms = 30000
-
 [[step]]
 setup_input = true
 models = ["l6"]

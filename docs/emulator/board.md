@@ -202,7 +202,7 @@ a separate inherited socket. See the [native UI architecture](frontend.md)
 for ownership and transport details.
 
 The engine uses single-threaded TCG with
-`-icount shift=3,align=on,sleep=on` to enforce virtual timer deadlines and pace
+`-icount shift=2,align=on,sleep=on` to enforce virtual timer deadlines and pace
 execution against wall time. `--timing adaptive` selects the previous automatic
 instruction clock. See [CPU consumption](frontend.md#cpu-consumption)
 for the idle-loop findings and comparison harness. Panel TIM2 derives its period from the firmware's

@@ -71,10 +71,10 @@ card-reader mode), stays unmarked.
 
 | Action | Fields | Meaning |
 | --- | --- | --- |
-| `wait` | `until = "boot-ready"`, `"mixer-ready"` or `"panel-settled"` | Boot waits for the full LED sweep and L6max pixels; prepared mixer readiness requires nonzero values on every visible ring and three guest seconds of stable output; settling waits for one guest second of unchanged output |
+| `wait` | `until = "boot-ready"`, `"mixer-ready"` or `"panel-settled"` | Boot waits for the full LED sweep, then an L6 mode lamp or L6max pixels; prepared mixer readiness requires nonzero values on every visible ring and, on L6, a lit mode lamp; settling waits for one guest second of unchanged output |
 | `delay` | `guest_ms` | Wait on guest time, not host time |
 | `include` | `path` | Expand a strict `[[step]]` fragment relative to its containing file; paths stay inside the scenario directory, cycles/depth are checked |
-| `select-mode` | `mode` | Wait for three guest seconds of stable panel output, then select a mode only if it is not already selected |
+| `select-mode` | `mode` | Pass if the mode lamp is lit; otherwise wait for one guest second of stable panel output and press the mode button |
 | `switch` | `control`, `enabled` | Set a latching switch using its real GUI toggle or one headless electrical edge |
 | `checkpoint` | `name` | Save display/rings and PNG/ASCII evidence under a unique simple name |
 | `expect-display` | `checkpoint`, `changed` | Compare retained pixels with the checkpoint; scoped to L6max |

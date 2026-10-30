@@ -59,7 +59,10 @@ backend. Existing device state and fixture templates are never run in place.
 The config may contain proprietary local paths and stays ignored. Add `fresh`
 fixtures for both models to run the USB no-card probe; L6max persistence also
 uses `fresh`. These cases reproduce explicit first-boot sequences. Prepared
-mixer/card fixtures are used by the panel, SD and USB-storage cases.
+mixer/card fixtures are used by the panel, SD and USB-storage cases. Use an
+empty prepared card: after reinsertion, a card holding a recorder project shows
+a new project named from the guest clock, which the L6max `storage` display
+check rejects.
 The factory-protocol scenario requires a `factory-protocol/l6max` firmware
 fixture, but creates its own disposable FAT jig card and state under the case
 artifact directory. The generated card and state hashes are recorded in
@@ -167,15 +170,16 @@ source as unattested. A source checkout hash alone never identifies that binary.
 It never auto-selects, rebuilds or falls back to a different QEMU.
 
 Boot readiness requires the model's six or eight rings to reach
-all-lit and settle for one guest second; L6max also needs display pixels.
-For template and fresh state, the validated guest-time floors remain 18 seconds
-for L6 and 40 seconds for L6max. They are setup safeguards pending semantic
-screen recognizers. Spec-built state boots straight to its home screen, so
-it skips the floors; L6max then also requires one guest second without a new
-display frame. The L6max sweep ends near 5 guest seconds. Shared control
-scenarios then wait for three guest seconds of stable restored panel output and
-idempotently select LEVEL, verify its lamp, and wait for stable
-panel outputs before capturing per-control baselines. A static OLED
+all-lit and settle for one guest second; L6 also needs a lit editing-mode
+lamp, and L6max needs display pixels. On template and fresh state, L6max also
+waits for a 12 guest-second floor: its first-boot Date/Time editor appears at
+about 9 s, after a card popup, with no lamp change. Spec-built state boots
+straight to its home screen, so it skips the floor; L6max then also requires one
+guest second without a new display frame. Both sweeps end within 5 guest
+seconds. Shared control scenarios then wait until every visible ring holds a
+restored value (on L6, also a lit mode lamp), select LEVEL unless it is already
+lit, verify its lamp, and wait for stable panel outputs before capturing
+per-control baselines. A static OLED
 frame is valid and must not be treated as a stopped guest clock.
 
 Prepared fixtures must match the scenario's explicit setup steps. With a

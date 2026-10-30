@@ -1,7 +1,7 @@
 # On saved-state and prompt-driven boots, L6's encoder sweep passes through a
 # blank-ring interval before MAIN's saved values settle. Spec-built state
-# restores the rings once, about three guest seconds after the sweep, and
-# mixer-ready rejects blank rings, so the wait counts as setup input.
+# restores the rings once after the sweep, and mixer-ready rejects blank rings,
+# so the wait counts as setup input.
 [[step]]
 setup_input = true
 action = "delay"
