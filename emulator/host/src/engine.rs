@@ -62,7 +62,7 @@ pub struct Options {
 
 #[derive(Clone, Copy, Debug)]
 pub enum Timing {
-    /// 8 ns per instruction, with QEMU sleeping when ahead of wall time.
+    /// 4 ns per instruction, with QEMU sleeping when ahead of wall time.
     Paced,
     /// QEMU continuously adjusts the instruction/time ratio.
     Adaptive,
@@ -82,7 +82,7 @@ impl Timing {
 
     fn icount(self) -> Option<&'static str> {
         match self {
-            Self::Paced => Some("shift=3,align=on,sleep=on"),
+            Self::Paced => Some("shift=2,align=on,sleep=on"),
             Self::Adaptive => Some("shift=auto,sleep=on"),
             Self::HostClock | Self::HostClockMulti => None,
         }
@@ -99,7 +99,7 @@ mod timing_tests {
         assert_eq!(Timing::HostClockMulti.accelerator(), "tcg,thread=multi");
         assert_eq!(Timing::HostClock.icount(), None);
         assert_eq!(Timing::HostClockMulti.icount(), None);
-        assert_eq!(Timing::Paced.icount(), Some("shift=3,align=on,sleep=on"));
+        assert_eq!(Timing::Paced.icount(), Some("shift=2,align=on,sleep=on"));
         assert_eq!(Timing::Adaptive.icount(), Some("shift=auto,sleep=on"));
     }
 

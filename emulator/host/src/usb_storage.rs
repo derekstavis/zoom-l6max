@@ -5,6 +5,31 @@ use crate::{
 };
 use std::io;
 
+/// A SCSI command that completed with a failed status, with its sense data
+/// when the device reported CHECK CONDITION.
+#[derive(Debug)]
+pub struct CommandFailed {
+    pub opcode: u8,
+    pub status: u8,
+    pub residue: usize,
+    /// Sense key, additional sense code and qualifier.
+    pub sense: Option<[u8; 3]>,
+}
+impl std::fmt::Display for CommandFailed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "SCSI opcode {:02x} failed, status {}, residue {}",
+            self.opcode, self.status, self.residue
+        )?;
+        if let Some([key, asc, ascq]) = self.sense {
+            write!(f, ", sense key {key:x} ASC {asc:02x} ASCQ {ascq:02x}")?;
+        }
+        Ok(())
+    }
+}
+impl std::error::Error for CommandFailed {}
+
 pub struct MassStorage<'a> {
     usb: &'a UsbHost,
     endpoints: Endpoints,
@@ -70,10 +95,22 @@ impl<'a> MassStorage<'a> {
         }
         let residue = u32::from_le_bytes(csw[8..12].try_into().unwrap()) as usize;
         if csw[12] != 0 {
-            return Err(io::Error::other(format!(
-                "SCSI opcode {:02x} failed, status {}, residue {residue}",
-                cdb[0], csw[12]
-            )));
+            // TEST UNIT READY callers read the sense themselves; reading it
+            // here would clear it first.
+            let sense = if csw[12] == 1 && !matches!(cdb[0], 0 | 3) {
+                self.request_sense()
+                    .ok()
+                    .filter(|sense| sense.len() >= 14)
+                    .map(|sense| [sense[2] & 15, sense[12], sense[13]])
+            } else {
+                None
+            };
+            return Err(io::Error::other(CommandFailed {
+                opcode: cdb[0],
+                status: csw[12],
+                residue,
+                sense,
+            }));
         }
         if residue != 0 || (output.is_none() && input.len() != length) {
             return Err(io::Error::new(
@@ -89,8 +126,11 @@ impl<'a> MassStorage<'a> {
     pub fn request_sense(&mut self) -> io::Result<Vec<u8>> {
         self.command(&[3, 0, 0, 0, 18, 0], 18, None)
     }
+    /// Wait while the device reports UNIT ATTENTION or becoming ready. The
+    /// sense data is the signal; the wall ceiling only bounds a stuck device.
     pub fn ready(&mut self) -> io::Result<()> {
-        for _ in 0..40 {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while std::time::Instant::now() < deadline {
             match self.command(&[0, 0, 0, 0, 0, 0], 0, None) {
                 Ok(_) => return Ok(()),
                 Err(e) if e.kind() == io::ErrorKind::Other => {
@@ -135,9 +175,21 @@ impl<'a> MassStorage<'a> {
         cdb[8] = 1;
         self.command(&cdb, 512, Some(bytes)).map(|_| ())
     }
+    /// Flush the device cache. A device without SYNCHRONIZE CACHE rejects it
+    /// as an invalid opcode; like host operating systems, treat that as
+    /// having no cache to flush.
     pub fn synchronize(&mut self) -> io::Result<()> {
-        self.command(&[0x35, 0, 0, 0, 0, 0, 0, 0, 0, 0], 0, None)
-            .map(|_| ())
+        match self.command(&[0x35, 0, 0, 0, 0, 0, 0, 0, 0, 0], 0, None) {
+            Err(error)
+                if error
+                    .get_ref()
+                    .and_then(|inner| inner.downcast_ref::<CommandFailed>())
+                    .is_some_and(|failed| failed.sense == Some([5, 0x20, 0])) =>
+            {
+                Ok(())
+            }
+            result => result.map(|_| ()),
+        }
     }
 }
 

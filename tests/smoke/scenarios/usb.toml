@@ -10,14 +10,6 @@ until = "boot-ready"
 guest_timeout_ms = 120000
 wall_timeout_s = 600
 
-# Preserve the original no-card USB probe's startup context; this is not the
-# prepared mixer fixture used by panel tests.
-[[step]]
-models = ["l6"]
-action = "delay"
-guest_ms = 22000
-guest_timeout_ms = 30000
-
 [[step]]
 setup_input = true
 models = ["l6"]
@@ -32,6 +24,7 @@ action = "press"
 control = "recorder.confirm"
 
 [[step]]
+setup_input = true
 action = "delay"
 guest_ms = 2000
 
@@ -48,11 +41,15 @@ action = "press"
 control = "recorder.confirm"
 
 [[step]]
+setup_input = true
 action = "delay"
 guest_ms = 5000
 
+# Waits for firmware to start its USB controller after boot.
 [[step]]
 action = "usb-descriptors"
+guest_timeout_ms = 60000
+wall_timeout_s = 300
 
 [[step]]
 action = "encoder"

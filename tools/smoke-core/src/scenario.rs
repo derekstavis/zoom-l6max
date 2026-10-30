@@ -29,6 +29,10 @@ pub struct Scenario {
     #[serde(default)]
     pub trace_sd: bool,
     pub step: Vec<Step>,
+    /// The case state was built from a state spec: setup input is dropped
+    /// and boot readiness does not wait out first-boot setup screens.
+    #[serde(skip)]
+    pub spec_state: bool,
 }
 #[derive(Clone, Debug, Deserialize)]
 pub struct Step {
@@ -909,7 +913,22 @@ impl Scenario {
     }
     pub fn without_setup_input(mut self) -> Self {
         self.step.retain(|step| !step.setup_input);
+        self.spec_state = true;
         self
+    }
+    /// Native host MIDI endpoints have fixed per-model names, so two guests
+    /// publishing them at once would connect to each other's ports.
+    pub fn uses_native_midi(&self) -> bool {
+        self.step.iter().any(|step| {
+            matches!(
+                step.action,
+                Action::HostMidiRoundTrip
+                    | Action::HostMidiSync
+                    | Action::L6DinSweep
+                    | Action::L6DinUsbForwarding
+                    | Action::L6maxDinMixerControl { .. }
+            )
+        })
     }
 }
 /// Environment variable the driver sets to `1` for cases whose persistent
