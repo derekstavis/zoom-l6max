@@ -24,8 +24,10 @@ prepared fixtures. See [testing](../development/testing.md) and
 
 ## Modeling direction and remaining work
 
-The L6max profile enables `sai1_rx_read_stream_compat`, distributing receive
-words across enabled FIFOs when `FCOMB=2`. This is an emulator compatibility
+The L6max profile enables `sai1_rx_read_stream_compat` during startup,
+distributing receive words across enabled FIFOs when `FCOMB=2`. It switches
+to the regular receive behavior after 40.5 guest seconds. Playback during the
+startup interval can run slower than the source. This is an emulator compatibility
 exception, not a claim about RT1040 silicon. L6 leaves it disabled. Physical
 SAI capture or further analysis is needed to explain the difference. The
 [peripheral audit](manual-audit.md) records the register behavior and scope.

@@ -57,8 +57,11 @@
 #define L6_ENCODER_COUNT 8
 #define L6_INPUT_MAGIC 0x4c364950u
 #define L6_INPUT_MESSAGE_SIZE 24
+#define L6_INPUT_INDICATOR_LEVELS 0x8000000au
+#define L6_INDICATOR_INTERVAL_NS 33333333
 #define L6_INPUT_QUEUE_LIMIT 64
 #define L6_INPUT_TX_LIMIT (64 * 1024)
+#define L6MAX_SAI_RX_COMPAT_STARTUP_MS 40500
 /* Bring-up debounce default, matching the verified minimum press duration. */
 #define L6_INPUT_RELEASE_GAP_MS 50
 #define L6_LPUART2_BASE 0x188000
@@ -353,7 +356,9 @@ typedef struct L6ChipState {
     uint64_t audio_trace_irq_count[4];
     uint64_t audio_trace_irq_ack_count[4];
     L6Sai sai[2];
-    unsigned audio_frame_remainder;
+    uint64_t audio_service_period_remainder;
+    uint64_t audio_service_deadline_ns;
+    unsigned audio_service_rate_hz;
     bool audio_sample_trace;
     unsigned audio_sample_trace_ms;
     uint64_t audio_tx_words[2];
@@ -372,6 +377,8 @@ typedef struct L6ChipState {
     FILE *audio_dma_source_capture;
     bool audio_dma_source_capture_header_written;
     unsigned audio_tdm_capture_slots;
+    uint64_t audio_tdm_capture_limit_frames;
+    uint64_t audio_tdm_capture_frames_written;
     L6Display display;
     bool display_dc;
     bool panel;
@@ -614,10 +621,12 @@ static void l6_input_reply(L6ChipState *s, uint32_t kind, uint32_t seq,
     stl_le_p(message + 12, target);
     stl_le_p(message + 16, value);
     stl_le_p(message + 20, qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL));
-    qemu_log_mask(LOG_UNIMP,
-                  "l6 %s input reply kind=%08x seq=%u target=%u value=%d at %" PRId64 " ms\n",
-                  s->panel ? "panel" : "main", kind, seq, target, value,
-                  qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL));
+    if (kind != L6_INPUT_INDICATOR_LEVELS) {
+        qemu_log_mask(LOG_UNIMP,
+                      "l6 %s input reply kind=%08x seq=%u target=%u value=%d at %" PRId64 " ms\n",
+                      s->panel ? "panel" : "main", kind, seq, target, value,
+                      qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL));
+    }
     g_byte_array_append(s->input_tx, message, sizeof(message));
     l6_input_handlers(s);
 }
@@ -1174,24 +1183,46 @@ static void l6_panel_store(L6ChipState *s, hwaddr offset, uint32_t value)
 static void l6_indicator_tick(void *opaque)
 {
     L6ChipState *s = opaque;
-    l6_indicators_sample(&s->indicators);
-    bool initial = !s->indicators.generation;
-    for (unsigned row = 0; row < 8; row++) {
-        if (s->indicators.seen[row] != s->indicators.published[row] || initial) {
-            if (!++s->indicators.generation) {
-                ++s->indicators.generation;
-            }
-            l6_input_reply(s, 0x80000005u, s->indicators.generation, row,
-                           s->indicators.seen[row]);
-            s->indicators.published[row] = s->indicators.seen[row];
-        }
-        s->indicators.seen[row] = 0;
+    L6Indicators *indicators = &s->indicators;
+    if (s->cpu_held) {
+        timer_del(s->indicator_timer);
+        return;
     }
-    /* The display only publishes changed pixels; it is not a clock source. */
-    if (!++s->indicators.generation) { ++s->indicators.generation; }
-    l6_input_reply(s, 0x80000008u, s->indicators.generation, 0, 0);
+    l6_indicators_advance(indicators, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL));
+    if (!++indicators->generation) {
+        ++indicators->generation;
+    }
+    l6_input_reply(s, 0x80000008u, indicators->generation, 0, 0);
+    for (unsigned row = 0; row < 8; row++) {
+        uint64_t active = indicators->row_active_ns[row];
+        if (active) {
+            for (unsigned bit = 0; bit < 24; bit++) {
+                uint64_t on = MIN(indicators->led_on_ns[row][bit], active);
+                indicators->levels[row][bit] =
+                    (uint8_t)((on * 255 + active / 2) / active);
+            }
+        }
+        indicators->row_active_ns[row] = 0;
+        memset(indicators->led_on_ns[row], 0,
+               sizeof(indicators->led_on_ns[row]));
+        for (unsigned group = 0; group < 8; group++) {
+            unsigned first = group * 3;
+            if (memcmp(&indicators->levels[row][first],
+                       &indicators->published[row][first], 3) == 0) {
+                continue;
+            }
+            uint32_t packed = indicators->levels[row][first] |
+                ((uint32_t)indicators->levels[row][first + 1] << 8) |
+                ((uint32_t)indicators->levels[row][first + 2] << 16);
+            l6_input_reply(s, L6_INPUT_INDICATOR_LEVELS,
+                           indicators->generation, row * 8 + group, packed);
+            memcpy(&indicators->published[row][first],
+                   &indicators->levels[row][first], 3);
+        }
+    }
     timer_mod(s->indicator_timer,
-              qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + 50000000);
+              qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
+                  L6_INDICATOR_INTERVAL_NS);
 }
 
 static int64_t l6_panel_tim3_period(L6ChipState *s)
@@ -1274,7 +1305,8 @@ static void l6_panel_spi_dma_tick(void *opaque)
         }
         /* SPI1's PA5 clock / PA7 data shift MSB first, exactly as a
          * three-byte external shift register would consume the pin edges. */
-        l6_indicators_spi_byte(&s->indicators, byte);
+        l6_indicators_spi_byte(&s->indicators, byte,
+                               qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL));
         if (ccr & (1u << 7)) {
             source++;
         }
@@ -1573,7 +1605,10 @@ static void l6_local_reset_request(void *opaque, int n, int level)
         timer_del(chip->panel_tim3);
         timer_del(chip->panel_tim14);
         timer_del(chip->panel_spi_dma);
+        timer_del(chip->indicator_timer);
         memset(&chip->indicators, 0, sizeof(chip->indicators));
+        memset(chip->indicators.published, 0xff,
+               sizeof(chip->indicators.published));
         l6_panel_store(chip, 0x400, 0);
         l6_panel_store(chip, 0x2000, 0);
         l6_panel_store(chip, 0x20008, 0);
@@ -1605,10 +1640,13 @@ static void l6_update_panel_boot(L6ChipState *main)
     timer_del(panel->panel_tim3);
     timer_del(panel->panel_tim14);
     timer_del(panel->panel_spi_dma);
+    timer_del(panel->indicator_timer);
     l6_panel_store(panel, 0x400, 0);
     l6_panel_store(panel, 0x2000, 0);
     l6_panel_store(panel, 0x20008, 0);
     memset(&panel->indicators, 0, sizeof(panel->indicators));
+    memset(panel->indicators.published, 0xff,
+           sizeof(panel->indicators.published));
     l6_panel_store(panel, 0x10000014, 0);
     l6_panel_store(panel, 0x10000414, 0);
     timer_del(main->uart_link->timer);
@@ -1621,6 +1659,11 @@ static void l6_update_panel_boot(L6ChipState *main)
         GUINT_TO_POINTER((0x013800 >> 2) + 1), NULL);
     g_hash_table_insert(panel->registers,
         GUINT_TO_POINTER((0x0000 >> 2) + 1), NULL);
+    if (!held) {
+        timer_mod(panel->indicator_timer,
+                  qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
+                      L6_INDICATOR_INTERVAL_NS);
+    }
     async_run_on_cpu(CPU(panel->armv7m.cpu), l6_chip_cpu_reset,
                      RUN_ON_CPU_HOST_PTR(panel));
 }
@@ -1668,11 +1711,26 @@ static unsigned l6_sai_master_sample_rate(L6ChipState *s)
     return 0;
 }
 
+static void l6_audio_output_flush(L6ChipState *s, size_t available)
+{
+    while (s->audio_pending && s->audio_pending->len && available) {
+        size_t requested = MIN(s->audio_pending->len, available);
+        size_t written = audio_be_write(s->audio_backend, s->audio_voice,
+                                        s->audio_pending->data, requested);
+        if (!written) {
+            break;
+        }
+        g_byte_array_remove_range(s->audio_pending, 0, written);
+        available -= written;
+    }
+}
+
 static void l6_audio_output_callback(void *opaque, int available)
 {
-    /* The SAI timer pushes samples directly as its clocked frames advance. */
-    (void)opaque;
-    (void)available;
+    L6ChipState *s = opaque;
+    if (available > 0) {
+        l6_audio_output_flush(s, available);
+    }
 }
 
 static void l6_audio_output_write(L6ChipState *s, const int32_t *samples,
@@ -1683,7 +1741,7 @@ static void l6_audio_output_write(L6ChipState *s, const int32_t *samples,
     }
 
     if (s->audio_raw_capture) {
-        uint8_t raw[48 * 2 * sizeof(uint32_t)];
+        uint8_t raw[64 * 2 * sizeof(uint32_t)];
         size_t bytes = frames * 2 * sizeof(uint32_t);
 
         g_assert(bytes <= sizeof(raw));
@@ -1709,15 +1767,7 @@ static void l6_audio_output_write(L6ChipState *s, const int32_t *samples,
 
     g_byte_array_append(s->audio_pending, (const uint8_t *)samples,
                          frames * 2 * sizeof(*samples));
-    while (s->audio_pending->len) {
-        size_t written = audio_be_write(s->audio_backend, s->audio_voice,
-                                        s->audio_pending->data,
-                                        s->audio_pending->len);
-        if (!written) {
-            break;
-        }
-        g_byte_array_remove_range(s->audio_pending, 0, written);
-    }
+    l6_audio_output_flush(s, s->audio_pending->len);
 
     /* Keep the frontend close to guest real time if a backend stalls. */
     const unsigned max_pending = 48000 * 2 * sizeof(*samples);
@@ -1780,12 +1830,44 @@ static void l6_audio_irq_trace_tick(L6ChipState *s)
 static void l6_main_audio_service_tick(void *opaque)
 {
     L6ChipState *s = opaque;
+    uint64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+    /* Keep L6max RX read-stream compatibility through firmware startup. */
+    if (qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL) >=
+        L6MAX_SAI_RX_COMPAT_STARTUP_MS) {
+        for (unsigned i = 0; i < s->profile->sai_count; i++) {
+            if (s->profile->sai_bases[i] == 0x384000 &&
+                s->sai[i].rx_read_stream_compat) {
+                s->sai[i].rx_read_stream_compat = false;
+                qemu_log_mask(LOG_UNIMP,
+                              "l6 SAI RX compatibility disabled after startup at=%" PRId64 "ms\n",
+                              qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL));
+            }
+        }
+    }
     unsigned sample_rate = l6_sai_master_sample_rate(s);
     if (sample_rate) {
-        s->audio_frame_remainder += sample_rate;
-        unsigned frames = s->audio_frame_remainder / 1000;
-        s->audio_frame_remainder %= 1000;
-        l6_sai_audio_clock_advance(s, frames);
+        /* Service the guest's audio DMA in its native 64-frame blocks. */
+        const uint64_t frame_period_numerator = 64ULL * 1000000000ULL;
+        if (s->audio_service_rate_hz != sample_rate) {
+            s->audio_service_rate_hz = sample_rate;
+            s->audio_service_period_remainder = 0;
+            s->audio_service_deadline_ns = now;
+        }
+        l6_sai_audio_clock_advance(s, 64);
+        s->audio_service_deadline_ns +=
+            frame_period_numerator / sample_rate;
+        s->audio_service_period_remainder +=
+            frame_period_numerator % sample_rate;
+        if (s->audio_service_period_remainder >= sample_rate) {
+            s->audio_service_deadline_ns++;
+            s->audio_service_period_remainder -= sample_rate;
+        }
+        timer_mod(s->main_audio_service_timer, s->audio_service_deadline_ns);
+    } else {
+        s->audio_service_rate_hz = 0;
+        s->audio_service_period_remainder = 0;
+        s->audio_service_deadline_ns = now + 1000000;
+        timer_mod(s->main_audio_service_timer, s->audio_service_deadline_ns);
     }
     l6_audio_sample_trace_tick(s);
     l6_audio_irq_trace_tick(s);
@@ -1813,8 +1895,6 @@ static void l6_main_audio_service_tick(void *opaque)
         uint32_t write_index = ldl_le_p(sram + s->profile->audio_queue_write_offset);
         stl_le_p(sram + s->profile->audio_queue_read_offset, write_index);
     }
-    timer_mod(s->main_audio_service_timer,
-              qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + 1000000);
 }
 
 static void l6_rom_reply_byte(L6ChipState *s, uint8_t byte)
@@ -2731,8 +2811,8 @@ static void l6_sai_audio_clock_advance(L6ChipState *s, unsigned frames)
 
     uint32_t silence[L6_SAI_CHANNELS * L6_SAI_FIFO_DEPTH] = { 0 };
     uint32_t tx_samples[L6_SAI_FIFO_DEPTH];
-    int32_t audio_frames[48 * 2];
-    uint32_t tdm_frames[48][L6_SAI_FIFO_DEPTH] = { 0 };
+    int32_t audio_frames[64 * 2];
+    uint32_t tdm_frames[64][L6_SAI_FIFO_DEPTH] = { 0 };
     unsigned audio_frame_count = 0;
     for (unsigned frame = 0; frame < frames; frame++) {
         for (unsigned i = 0; i < s->profile->sai_count; i++) {
@@ -2797,7 +2877,10 @@ static void l6_sai_audio_clock_advance(L6ChipState *s, unsigned frames)
                     for (unsigned word = 0; word < words; word++) {
                         uint32_t sample = tx_samples[word];
                         s->audio_tx_words[i]++;
-                        if (sample) {
+                        /* The uninitialized SAI FIFO sentinel is all ones;
+                         * do not count it as nonzero audio or let it hide the
+                         * first/last real sample in this trace window. */
+                        if (sample && sample != UINT32_MAX) {
                             if (!s->audio_tx_nonzero_words[i]) {
                                 s->audio_tx_first_nonzero[i] = sample;
                             }
@@ -2846,7 +2929,7 @@ static void l6_sai_audio_clock_advance(L6ChipState *s, unsigned frames)
     }
     l6_audio_output_write(s, audio_frames, audio_frame_count);
     if (s->audio_tdm_capture && s->audio_tdm_capture_slots) {
-        uint8_t raw_tdm[48 * L6_SAI_FIFO_DEPTH * sizeof(uint32_t)];
+        uint8_t raw_tdm[64 * L6_SAI_FIFO_DEPTH * sizeof(uint32_t)];
         if (ftell(s->audio_tdm_capture) == 0) {
             static const uint8_t header[4] = { 'L', '6', 'T', 'D' };
             uint8_t metadata[12];
@@ -2866,6 +2949,11 @@ static void l6_sai_audio_clock_advance(L6ChipState *s, unsigned frames)
             }
         }
         unsigned captured_frames = MIN(frames, ARRAY_SIZE(tdm_frames));
+        if (s->audio_tdm_capture_limit_frames) {
+            uint64_t remaining = s->audio_tdm_capture_limit_frames -
+                                 s->audio_tdm_capture_frames_written;
+            captured_frames = MIN((uint64_t)captured_frames, remaining);
+        }
         for (unsigned frame = 0; frame < captured_frames; frame++) {
             for (unsigned slot = 0; slot < s->audio_tdm_capture_slots; slot++) {
                 stl_le_p(raw_tdm +
@@ -2882,6 +2970,17 @@ static void l6_sai_audio_clock_advance(L6ChipState *s, unsigned frames)
                           strerror(errno));
             fclose(s->audio_tdm_capture);
             s->audio_tdm_capture = NULL;
+        } else {
+            s->audio_tdm_capture_frames_written += captured_frames;
+            if (s->audio_tdm_capture_limit_frames &&
+                s->audio_tdm_capture_frames_written >=
+                    s->audio_tdm_capture_limit_frames) {
+                qemu_log_mask(LOG_UNIMP,
+                              "l6 TDM capture reached its configured frame limit: %" PRIu64 "\n",
+                              s->audio_tdm_capture_frames_written);
+                fclose(s->audio_tdm_capture);
+                s->audio_tdm_capture = NULL;
+            }
         }
     }
 }
@@ -3129,7 +3228,6 @@ static void l6_mmio_write(void *opaque, hwaddr offset,
         hwaddr base = offset & ~0x3ff;
         unsigned reg = offset & 0x3ff;
         if (reg >= 0x14 && reg < 0x1c) {
-            l6_indicators_sample(&s->indicators);
             uint32_t old = l6_panel_reg(s, base + 0x14);
             uint32_t next = old;
             if ((reg & ~3u) == 0x18) {
@@ -3143,9 +3241,9 @@ static void l6_mmio_write(void *opaque, hwaddr offset,
             if (base == 0x10000000 || base == 0x10000400) {
                 l6_indicators_pins(&s->indicators,
                     l6_panel_reg(s, 0x10000014),
-                    l6_panel_reg(s, 0x10000414));
+                    l6_panel_reg(s, 0x10000414),
+                    qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL));
             }
-            l6_indicators_sample(&s->indicators);
             if ((reg & ~3u) == 0x14) {
                 word = next;
             }
@@ -4275,6 +4373,19 @@ static void l6_chip_init(MachineState *machine, L6ChipState *s, bool panel,
                                  "could not open L6_AUDIO_TDM_CAPTURE '%s'",
                                  tdm_capture_path);
             }
+            const char *limit_seconds =
+                g_getenv("L6_AUDIO_TDM_CAPTURE_SECONDS");
+            if (limit_seconds && *limit_seconds) {
+                char *end = NULL;
+                guint64 seconds = g_ascii_strtoull(limit_seconds, &end, 10);
+                if (!end || *end || !seconds || seconds > 3600) {
+                    error_setg(&error_fatal,
+                               "L6_AUDIO_TDM_CAPTURE_SECONDS must be an integer from 1 to 3600");
+                } else {
+                    s->audio_tdm_capture_limit_frames =
+                        seconds * profile->audio_sample_rate_hz;
+                }
+            }
         }
         if (dma_source_capture_path && *dma_source_capture_path) {
             s->audio_dma_source_capture =
@@ -4359,7 +4470,8 @@ static void l6_chip_init(MachineState *machine, L6ChipState *s, bool panel,
         s->panel_tim14 = timer_new_ns(QEMU_CLOCK_VIRTUAL, l6_panel_tim14_tick, s);
         s->panel_spi_dma = timer_new_ns(QEMU_CLOCK_VIRTUAL, l6_panel_spi_dma_tick, s);
         s->indicator_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, l6_indicator_tick, s);
-        timer_mod(s->indicator_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + 50000000);
+        timer_mod(s->indicator_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
+                  L6_INDICATOR_INTERVAL_NS);
         const char *keys = g_getenv("L6_PANEL_KEYS");
         if (keys) {
             g_auto(GStrv) entries = g_strsplit(keys, ",", -1);

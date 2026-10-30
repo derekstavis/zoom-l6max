@@ -2,42 +2,32 @@
 
 [Documentation index](../README.md)
 
-The update package contains two executable images. Investigation pointed to
-the main MCU as owner of mixer state, storage, USB, and LCD rendering; the
-panel MCU scans controls and drives the LED matrix. Their internal UART carries
-input reports and indicator metadata. The emulator connects both chips in one
-QEMU process with separate address spaces and a shared virtual clock.
-
-## References
-
-- [Controls and indicators](../emulator/controls.md): physical input/output wiring.
-- [QEMU board](../emulator/board.md): modeled peripherals and UART/display boundaries.
-- [Updates](updates.md): package checks, storage handoff, panel programming, installer limits.
-- [Editor MIDI](protocols/editor-midi.md) and [factory MIDI](protocols/factory-midi.md): wire formats, commands, side effects, and verification limits.
-- [Mixer MIDI](protocols/mixer-midi.md): Control Change numbers and the state request.
-- [Parameter values](gui/parameter-values.md): units and knob-popup formatting.
-- [Notification lifetime](gui/notification-lifecycle.md): patch ownership, expiry, and nonblocking mixer handling.
-- [Dismissal behavior](gui/popup-triggers.md): idle polling and regression checks.
-- [Patch implementation](../../patches/knob-dialog/README.md): sources, guarded hooks, and validation.
+The emulator runs MAIN and panel firmware in separate address spaces within a
+shared QEMU process. MAIN handles mixer state, storage, USB, and L6max display
+rendering; the panel handles control scanning and indicators. Profiles and
+patches are specific to the model and supported firmware revision. See
+[model compatibility](../guides/model-compatibility.md) and
+[firmware packages](../guides/firmware-packages.md).
 
 ## Supported revision
 
-The L6max 1.10 MAIN image has SHA-256
-`980d92272c1f84bed200b4d2f83575202f6a00082c928d99b9e8b53af8d44461`.
-The supplied stock package is L6max 1.10; main execution starts at
-`0x80000000`. Addresses and patch hooks in the L6max investigation are
-revision-specific and are not established for other L6max releases. The
-separate L6 1.10 `midi-sync` hook profile is documented in the [model
-compatibility guide](../guides/model-compatibility.md) and
-[MIDI-sync patch guide](../guides/midi-sync-patch.md); it does not establish
-L6 equivalents for other patches. Application names are assigned from
-behavior rather than recovered symbols. Reviewed FreeRTOS names are used in
-patch bindings; the exact kernel release and configuration remain unproven.
+The patch profiles target their declared L6 or L6max 1.10 MAIN image and
+validate the image and hook guards before building. See the
+[model compatibility guide](../guides/model-compatibility.md) for model scope.
 
-## Evidence boundaries
+## References
 
-Public references describe behavior, compatibility addresses, protocols, patch
-contracts, and validation. Static findings, emulator results, and particular
-hardware observations establish different kinds of evidence. A successful
-emulator update uses a replacement installer and does not prove every check
-in the absent manufacturer bootloader.
+- [Controls and indicators](../emulator/controls.md): model-specific inputs and lamps.
+- [QEMU board](../emulator/board.md): modeled peripherals and display boundaries.
+- [Updates](updates.md): package handling, installer behavior, and limits.
+- [Editor MIDI](protocols/editor-midi.md): message formats and session behavior.
+- [Factory protocol scenario](protocols/factory-midi.md): emulator test setup and scope.
+- [Mixer MIDI](protocols/mixer-midi.md): Control Change numbers and state requests.
+- [Parameter values](gui/parameter-values.md): units and knob-popup formatting.
+- [Notification lifetime](gui/notification-lifecycle.md): popup ownership and expiry.
+- [Dismissal behavior](gui/popup-triggers.md): popup behavior during recorder refresh.
+- [Patch implementation](../../patches/knob-dialog/README.md): sources, guards, and validation.
+
+Emulator observations and physical-device observations have different scopes.
+In particular, the emulator uses a replacement installer; successful emulator
+installation does not establish every rule of the physical bootloader.

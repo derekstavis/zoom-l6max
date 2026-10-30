@@ -1,0 +1,103 @@
+version = 1
+name = "l6max-volume-meter-sweep"
+models = ["l6max"]
+main_sha256 = "980d92272c1f84bed200b4d2f83575202f6a00082c928d99b9e8b53af8d44461"
+fixture = "volume-meter"
+backends = ["headless"]
+
+[[step]]
+action = "wait"
+until = "mixer-ready"
+guest_timeout_ms = 60000
+wall_timeout_s = 900
+
+# Spec-built state skips the L6max boot floor. Let the audio engine finish its
+# post-mixer startup before pressing a saved-state sound pad.
+[[step]]
+action = "delay"
+guest_ms = 5000
+guest_timeout_ms = 10000
+wall_timeout_s = 300
+
+# Fail early if boot did not copy the prepared Pad 4 assignment into the active
+# MAIN settings table.
+[[step]]
+action = "expect-memory"
+address = 0x80461872
+bytes = [0x41, 0x00, 0x3a, 0x00, 0x5c, 0x00, 0x53, 0x00, 0x4f, 0x00, 0x55, 0x00, 0x4e, 0x00, 0x44, 0x00, 0x5f, 0x00, 0x50, 0x00, 0x41, 0x00, 0x44, 0x00, 0x5c, 0x00, 0x50, 0x00, 0x41, 0x00, 0x44, 0x00, 0x34, 0x00, 0x5c, 0x00, 0x54, 0x00, 0x4f, 0x00, 0x4e, 0x00, 0x45, 0x00, 0x36, 0x00, 0x36, 0x00, 0x30, 0x00, 0x2e, 0x00, 0x57, 0x00, 0x41, 0x00, 0x56, 0x00, 0x00, 0x00]
+guest_timeout_ms = 1000
+wall_timeout_s = 30
+
+# Set the analog mixer controls to their physical maximum before playback:
+# SOUND PAD, EFX RTN, MASTER, MONITOR and SUB-OUT.
+[[step]]
+action = "analog"
+channel = 1
+steps = 16
+
+[[step]]
+action = "expect-analog"
+channel = 1
+value = 1023
+
+[[step]]
+action = "analog"
+channel = 2
+steps = 16
+
+[[step]]
+action = "expect-analog"
+channel = 2
+value = 1023
+
+[[step]]
+action = "analog"
+channel = 3
+steps = 16
+
+[[step]]
+action = "expect-analog"
+channel = 3
+value = 1023
+
+[[step]]
+action = "analog"
+channel = 4
+steps = 16
+
+[[step]]
+action = "expect-analog"
+channel = 4
+value = 1023
+
+[[step]]
+action = "analog"
+channel = 5
+steps = 16
+
+[[step]]
+action = "expect-analog"
+channel = 5
+value = 1023
+
+# Let the mixer controls settle before treating the current meter as baseline.
+[[step]]
+action = "delay"
+guest_ms = 1000
+guest_timeout_ms = 5000
+wall_timeout_s = 120
+
+# Use only the saved Pad 4 assignment and staged WAV from the prepared SD
+# image. Wait for mixer readiness before pressing; the short fixed boot delay
+# allowed input before the sampler was ready. A 20-second capture covers the
+# complete WAV at the current emulated playback cadence.
+[[step]]
+action = "sound-pad-playback"
+pad = 3
+target = 52
+assignment = "saved-state"
+require_pad_led_change = false
+require_stereo_meter = true
+playback_window_ms = 20000
+guest_timeout_ms = 30000
+wall_timeout_s = 300

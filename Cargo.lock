@@ -2947,6 +2947,8 @@ dependencies = [
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
  "raw-window-handle",
+ "serde",
+ "serde_json",
  "sha2",
  "smallvec",
  "smoke-core",
@@ -2999,6 +3001,7 @@ dependencies = [
 name = "l6test"
 version = "0.1.0"
 dependencies = [
+ "fatfs",
  "firmware-patch-wasm",
  "gif",
  "image",

@@ -2,8 +2,8 @@
 
 [Documentation index](../README.md)
 
-Investigation pointed to separate board card detection, the RT USDHC
-controller, and a ChipIdea USB device controller. The firmware owns card
+The board models card detection, the RT USDHC controller, and a USB device
+controller. The firmware owns card
 initialization, its filesystem, USB descriptors, MIDI processing, and SCSI
 commands. Host requests reach those handlers through modeled peripherals.
 
@@ -126,29 +126,10 @@ continues consuming MIDI IN even when no host application is connected.
 Closing the engine cancels socket operations, joins the worker and disposes
 its endpoints.
 
-The three ports do not appear the instant the engine starts: `MidiBridge::run`
-(`usb_midi.rs`) only calls `P::open` once `usb.enumerate()` succeeds with a
-MIDI endpoint, i.e. once firmware has actually completed USB enumeration —
-before that its status is "Waiting for firmware USB ...". From a cold
-`--volatile` boot this has taken as long as ~90 seconds in practice (not the
-~3.1 seconds the guest-side register writes in [USB device
-controller](#usb-device-controller) above complete by); callers that connect
-immediately after starting the engine should poll rather than assume the
-ports exist. `l6max-host --auto-usb-unlock` (below) is unrelated to this
-delay — it doesn't make enumeration any faster, it just also isn't needed to
-make it happen at all; basic USB MIDI editor connect works fine with nothing
-but patience.
-
-A long-running headless instance can mirror `l6-direct-midi-sync`'s scenario
-steps by passing `l6max-host --auto-usb-unlock`, which presses the panel's
-CH4 MONO button twice at the same guest-ms thresholds that scenario uses,
-instead of needing them clicked by hand in the GUI window. Live testing found
-this is **not** required for basic USB MIDI editor connect or for pad file /
-settings round trips — those all work with plain `--usb` once enumeration
-finishes. What `l6-direct-midi-sync` actually needs the presses for (its own
-later steps use the DIN jacks and ring-pin sweeps, not just the editor port)
-remains unconfirmed; treat `--auto-usb-unlock` as a working but
-not-yet-understood tool, not a general connectivity prerequisite.
+The ports appear after firmware completes USB enumeration; startup can take
+longer in host wall time than the guest-time initialization. Clients should
+wait for the endpoints. `--auto-usb-unlock` supplies the L6 startup inputs used
+by the direct MIDI-sync scenario; basic Editor connectivity does not require it.
 
 ### Hotplug
 
@@ -159,19 +140,9 @@ USB", "Disconnect USB", "Connect MIDI", "Disconnect MIDI") toggles each
 independently while running, and `Engine::connect_usb`/`disconnect_usb`/
 `connect_midi`/`disconnect_midi` do the same from code (`engine.rs`).
 
-The emulated ChipIdea USB device and the LPUART3 socket are always inherited
-by the QEMU child process, like the real chip's USB and UART silicon is
-always physically present; only whether the host side is actively bridging
-them is a runtime toggle. For USB, disconnecting sends the board model's own
-`connected = false` protocol message (the same one `enumerate()` sends
-`true` for on connect) and stops the 3 CoreMIDI ports, without closing the
-inherited socket, so a later connect reuses it instead of restarting QEMU.
-For DIN MIDI, which has no plug-detection on the real jack either, "hotplug"
-only means opening or closing the model's native MIDI IN/OUT port (`L6 MIDI
-In/Out Port` or `L6max MIDI In/Out Port`); the UART
-socket is drained continuously either way so the guest's transmit side never
-blocks, and bytes arriving while disconnected are simply dropped, like an
-unplugged cable.
+Disconnecting USB removes its host endpoints and reconnecting enumerates the
+guest again. Disconnecting DIN MIDI closes its host port; guest output is
+drained and discarded until the port is reconnected.
 
 ### Host MIDI back ends
 
@@ -200,104 +171,16 @@ value 100 changes the firmware-driven channel-1 GPIO LED ring.
 
 ## Physical MIDI IN/OUT (DIN/TRS) jacks
 
-L6max routes the physical MIDI IN/OUT (3.5 mm TRS) jacks through MAIN LPUART3;
-L6 uses MAIN LPUART2. Run with `--midi` (independent of `--usb`) to connect
-this host MIDI port,
-the model's MIDI IN/OUT port (`L6 MIDI In/Out Port (Emulator)` or
-`L6max MIDI In/Out Port (Emulator)`), as soon as the engine starts; it needs
-no USB MIDI interface state and does not wait for enumeration — see
-[Hotplug](#hotplug) above for toggling it, and the 3 USB ports, at runtime
-instead. Zoom's own documentation says the jacks accept the same
-mixer-control Control Change as the USB Mixer Control Port; see
-[the faders feature in the Zoomie editor repository](https://github.com/derekstavis/zoom-l6-control)
-for why this matters for wireless mixer control.
+Use `--midi` to expose the model's MIDI IN/OUT port independently of USB.
+The native app can connect or disconnect the port from **Connections** while
+the emulator is running. L6 uses MAIN LPUART2 and L6max uses LPUART3.
 
-This has none of the USB MIDI framing: it is one plain MIDI byte stream in
-each direction, with no cable number, carried over an inherited socket
-(`L6_MAIN_MIDI_UART_FD`) exactly like `L6_USB_FD`, rather than through
-QEMU's own chardev layer (the project's established pattern for ad hoc
-host/guest links; see `engine.rs`). [`din_midi.rs`](../../emulator/host/src/din_midi.rs)
-reuses the same `HostMidi` back ends as the USB cables (CoreMIDI/ALSA), now
-parameterized by a port name list instead of the fixed three USB names, so
-a single extra port costs no new platform code.
-
-### Current behavior
-
-- L6max 1.10's boot sequence sets LPUART3's CTRL register TE, RE and
-  RIE (bit19, bit18, bit21), initializing the port for both directions with
-  receive interrupts, unconditionally — not gated behind any menu setting.
-  L6 1.10 initializes its DIN candidate LPUART2 later, at about 950 ms after
-  the audio profile handshake; CTRL becomes `0x002c0000`, with RE and RIE set.
-  The model's host RX trace includes CTRL and RIE, distinguishing socket
-  arrival from an enabled guest receiver.
-- The L6 firmware uses IRQn 20-27 for LPUART1-8, sequential from LPUART1 = 20
-  (so LPUART3 = 22); QEMU uses those firmware-observed values. The L6 chip is
-  confirmed as RT1041, while L6max silicon remains unverified.
-  `unpacked/main_firmware.bin`'s
-  own vector table holds a distinct, non-default handler there, the same
-  shape as every other LPUART's entry. RX pulses that line through
-  `qdev_get_gpio_in(.., 22)` when CTRL.RIE is set, once per byte that becomes
-  the pending one (including refills from the queue, each its own RDRF edge
-  on real hardware); TX pulses it symmetrically on CTRL.TIE.
-- L6max firmware drives LPUART1 (the panel link) and LPUART3 (the MIDI
-  jacks). L6 drives its panel link through LPUART7 (SDK instance 6, IRQ 26)
-  and initializes LPUART2 for its DIN jack through the static DIN initializer
-  at `0x8002f8a0`. Stimulated L6 QEMU runs reach the UART7 IRQ handler and
-  read panel reports from its DATA register. A 128-CC L6 run confirms all
-  bytes reach LPUART2 with RE/RIE set, but the mixer ring does not change and
-  all 384 input bytes are read back from LPUART2's DATA register, the raw
-  ring's backing bytes match, and its write/read indices both reach 384. The
-  firmware receive task drains the sweep, but the channel-1 ring does not
-  change; the downstream mixer effect remains under investigation. LPUART4-6
-  and LPUART8 have distinct vector entries, but no
-  relevant CTRL setup has been observed for them.
-- In L6max stock firmware, neither direction of this port reaches the mixer,
-  in any state of `mixerControlViaMidi`. A channel-1 LEVEL CC
-  (`0xB0 0x51 100`, the
-  same message that moves the USB Mixer Control Port's GPIO ring) sent to this
-  port produces no change, and the same holds for a Note On matching a
-  sound pad's configured MIDI note.
-  - The IN jack is an **unconditional MIDI-to-USB bridge**: a message sent to
-    it arrives byte-for-byte on the host's `L6max MIDI I/O Port` (USB cable
-    0, *not* the Mixer Control cable), regardless of `mixerControlViaMidi`.
-    The setting only toggles an extra, functionally inert debug-mirroring
-    step; it does not gate the bridge.
-  - A focused L6 1.10 probe sent a Control Change, Note On, realtime Clock,
-    and short SysEx to DIN IN. Each arrived unchanged on USB MIDI I/O cable 0;
-    other message forms and setting-dependent behavior have not been tested.
-    Run it with:
-
-    ```sh
-    cargo run --offline --locked -p l6test -- run --case l6-din-usb-forwarding --model l6 --config smoke.local.toml
-    ```
-  - The OUT direction's root cause was a gap in this project's own emulator,
-    not the firmware: firmware and its generic LPUART driver fill the
-    LPUART3 ring buffer correctly and enable the transmit interrupt, which
-    real hardware answers immediately (the transmit-empty flag is always set
-    when idle), but this board model's `CTRL`-register write handler never
-    pulsed the IRQ on that enable — only reactively, after a `DATA` write
-    already happened. Fixed by pulsing the IRQ when `TIE` newly transitions
-    high, mirroring logic this model already had for LPUART1 and for the RX
-    side's `RIE`; a channel-1 mute press now produces `B0 5D 7F` on the DIN
-    OUT jack, matching the USB Mixer Control Port echo exactly.
-  - One narrow case on the IN side, a fixed 3-byte Note On sequence, is
-    gated by the factory test jig's connect/disconnect lifecycle, not by
-    anything reachable in normal use.
-  - Zoom documents mixer-control Control Changes over the MIDI jacks. L6max
-    stock firmware leaves DIN IN on its factory-jig path; the
-    [`din-mixer-control` patch](../../patches/din-mixer-control/README.md)
-    routes received messages through the USB Mixer Control handler. On L6,
-    stock firmware maps DIN CCs into its Main event queue. The L6
-    `l6-din-sweep` driver case checks the 384 UART/ring bytes and traces the
-    expected 66 Main submissions and queue reads, setter activity, mixer RAM,
-    and indicator changes. Current stock runs still fail at Main queue
-    consumption/state change, so L6 DIN mixer behavior remains unqualified;
-    do not apply the L6max patch to L6 without further evidence.
-
-Only cable 1 does this. `l6max-direct-midi-sync` sends the same CC on cables 0,
-2, and 5: cable 1 changes the ring from `0x1` to `0x1ff`; the other cables
-only reach `0x3`. A host that exposes only the first USB MIDI port (a CME WIDI
-Uhost does) cannot drive the mixer.
+The L6max MIDI input forwards messages to the USB MIDI I/O port. Stock
+L6max firmware does not route that input to mixer controls; the optional
+[DIN mixer-control patch](../../patches/din-mixer-control/README.md) adds that
+route. L6 forwards tested DIN messages to USB, but its DIN mixer-control and
+forwarding scenarios need further qualification. See
+[current status](../development/current-status.md) for the current limits.
 
 ## Host file access
 

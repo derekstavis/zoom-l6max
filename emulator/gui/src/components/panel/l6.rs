@@ -27,6 +27,7 @@ pub fn panel(
     layout: &Layout,
     scale: f32,
     rows: [u32; 8],
+    indicator_levels: [[u8; 24]; 8],
     analog: [u16; 5],
     powered: bool,
     interactions: &super::PanelInteractions,
@@ -44,7 +45,15 @@ pub fn panel(
         |layout: &Layout, buttons: &[(u32, &str, Option<&str>, Option<u32>)], scale: f32| {
             button_column_with_interactions(layout, buttons, scale, interactions)
         };
-    let rings = indicators::rings(rows);
+    // Normalize each L6 ring segment against its measured full-scale endpoint;
+    // lower firmware PWM levels remain proportional to that segment's maximum.
+    let measured_rings = indicators::ring_levels(indicator_levels);
+    let rings: [[u8; 9]; 6] = std::array::from_fn(|ring| {
+        std::array::from_fn(|segment| {
+            normalize_ring_pwm(ring, segment, measured_rings[ring][segment])
+        })
+    });
+    let [left_level, right_level] = indicators::l6_master_meter_levels(indicator_levels);
     let button_leds = indicators::l6_button_leds(rows);
     let sound_pad_leds = indicators::l6_sound_pad_leds(rows);
     let effect_leds = indicators::l6_effect_leds(rows);
@@ -226,7 +235,7 @@ pub fn panel(
             .child(at_local(
                 layout.knobs[index],
                 s,
-                EncoderWithLeds::new(92.0 * s, EncoderLedLevel::Segments(rings[index] as u16))
+                EncoderWithLeds::new(92.0 * s, EncoderLedLevel::Levels(rings[index]))
                     .with_input(interactions.encoder_input(index)),
             ))
             .child(label_local_sized(
@@ -478,8 +487,8 @@ pub fn panel(
                 appearance: super::vu_meter::SHARED_APPEARANCE,
                 active_fill: 0xe7ee39,
             },
-            left_level: Some(2),
-            right_level: Some(2),
+            left_level: Some(left_level),
+            right_level: Some(right_level),
         }),
     ));
     // Record and transport keys sit inside a single recessed black surround.
@@ -619,6 +628,51 @@ pub fn panel(
             ));
     }
     panel
+}
+
+// Rounded per-segment endpoint averages from two L6 1.10 captures with all
+// six controls at 127. Normalize each physical ring segment against its
+// observed full-load endpoint because the matrix pins report different duty.
+const RING_FULL_SCALE: [[u8; 9]; 6] = [
+    [60, 60, 61, 61, 62, 62, 62, 62, 61],
+    [61, 60, 60, 60, 60, 60, 60, 61, 60],
+    [60, 60, 61, 61, 62, 62, 62, 62, 61],
+    [60, 60, 60, 60, 60, 60, 60, 61, 57],
+    [62, 62, 62, 62, 61, 61, 60, 60, 57],
+    [60, 60, 60, 60, 60, 61, 61, 62, 30],
+];
+
+fn normalize_ring_pwm(ring: usize, segment: usize, measured: u8) -> u8 {
+    let full_scale = u16::from(RING_FULL_SCALE[ring][segment]);
+    ((u16::from(measured) * 255 + full_scale / 2) / full_scale).min(255) as u8
+}
+
+#[cfg(test)]
+mod pwm_tests {
+    use super::{RING_FULL_SCALE, normalize_ring_pwm};
+
+    #[test]
+    fn l6_each_ring_segment_reaches_full_intensity_at_its_measured_endpoint() {
+        for (ring, segments) in RING_FULL_SCALE.iter().enumerate() {
+            for (segment, &full_scale) in segments.iter().enumerate() {
+                assert_eq!(normalize_ring_pwm(ring, segment, full_scale), 255);
+            }
+        }
+    }
+
+    #[test]
+    fn l6_per_segment_pwm_calibration_is_monotonic_and_clamps() {
+        for ring in 0..RING_FULL_SCALE.len() {
+            for segment in 0..RING_FULL_SCALE[ring].len() {
+                let levels = (0..=255)
+                    .map(|measured| normalize_ring_pwm(ring, segment, measured))
+                    .collect::<Vec<_>>();
+                assert_eq!(levels[0], 0);
+                assert_eq!(levels[255], 255);
+                assert!(levels.windows(2).all(|pair| pair[0] <= pair[1]));
+            }
+        }
+    }
 }
 
 fn button_at_with_interactions(
