@@ -12,6 +12,7 @@ use std::sync::Arc;
 pub enum EncoderLedLevel {
     Position(Option<u8>),
     Segments(u16),
+    Levels([u8; 9]),
 }
 
 #[derive(IntoElement)]
@@ -47,14 +48,27 @@ impl EncoderWithLeds {
             EncoderLedLevel::Position(Some(position)) if position < 9 => 1 << position,
             EncoderLedLevel::Position(_) => 0,
             EncoderLedLevel::Segments(mask) => mask & 0x1ff,
+            EncoderLedLevel::Levels(levels) => {
+                levels.iter().enumerate().fold(0, |mask, (index, &level)| {
+                    mask | (u16::from(level != 0) << index)
+                })
+            }
         }
+    }
+
+    fn levels(&self) -> [u8; 9] {
+        if let EncoderLedLevel::Levels(levels) = self.level {
+            return levels;
+        }
+        let mask = self.mask();
+        std::array::from_fn(|index| if mask & (1 << index) != 0 { 255 } else { 0 })
     }
 }
 
 impl RenderOnce for EncoderWithLeds {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
         let size = self.size;
-        let mask = self.mask();
+        let levels = self.levels();
         let mut encoder = div()
             .size(px(size))
             .flex_shrink_0()
@@ -74,11 +88,7 @@ impl RenderOnce for EncoderWithLeds {
                                 diameter * 0.468,
                                 136.0 + segment as f32 * 30.0,
                                 164.0 + segment as f32 * 30.0,
-                                if mask & (1 << segment) != 0 {
-                                    0xf59a52
-                                } else {
-                                    0x56595d
-                                },
+                                ring_color(levels[segment]),
                             );
                         }
                         circle(window, center, diameter * 0.375, 0x151618);
@@ -126,6 +136,38 @@ impl RenderOnce for EncoderWithLeds {
         }
         encoder
     }
+}
+
+fn ring_color(level: u8) -> u32 {
+    fn srgb_to_linear(channel: u8) -> f64 {
+        let channel = f64::from(channel) / 255.0;
+        if channel <= 0.04045 {
+            channel / 12.92
+        } else {
+            ((channel + 0.055) / 1.055).powf(2.4)
+        }
+    }
+
+    fn linear_to_srgb(channel: f64) -> u8 {
+        let channel = if channel <= 0.0031308 {
+            channel * 12.92
+        } else {
+            1.055 * channel.powf(1.0 / 2.4) - 0.055
+        };
+        (channel.clamp(0.0, 1.0) * 255.0 + 0.5) as u8
+    }
+
+    let blend = |off: u8, on: u8| {
+        let amount = f64::from(level) / 255.0;
+        let off = srgb_to_linear(off);
+        let on = srgb_to_linear(on);
+        linear_to_srgb(off + (on - off) * amount)
+    };
+    let off = 0x56595d;
+    let on = 0xffc266;
+    (u32::from(blend((off >> 16) as u8, (on >> 16) as u8)) << 16)
+        | (u32::from(blend((off >> 8) as u8, (on >> 8) as u8)) << 8)
+        | u32::from(blend(off as u8, on as u8))
 }
 
 #[cfg(test)]

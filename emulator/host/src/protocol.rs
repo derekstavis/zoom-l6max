@@ -27,6 +27,9 @@ pub const ADC_SAMPLE: u32 = 0x8000_0007;
 pub const CLOCK: u32 = 0x8000_0008;
 /// Board power-hold output dropped after firmware shutdown.
 pub const POWER_OFF: u32 = 0x8000_0009;
+/// Three packed 8-bit PWM brightness levels for one indicator row.
+/// Target is row * 8 + three-pixel group; value stores the levels in bytes.
+pub const INDICATOR_LEVELS: u32 = 0x8000_000a;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Message {
@@ -71,6 +74,7 @@ impl Message {
                 CLOCK | POWER_OFF => self.target == 0 && self.value == 0,
                 ADC_SAMPLE => (3..=7).contains(&self.target) && (0..=1023).contains(&self.value),
                 INDICATORS => self.target < 8 && (0..=0xffffff).contains(&self.value),
+                INDICATOR_LEVELS => self.target < 64 && (0..=0xffffff).contains(&self.value),
                 _ => false,
             };
         if valid {

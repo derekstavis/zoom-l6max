@@ -41,7 +41,7 @@ fingerprint matches: the SHA-256 of each MAIN code range that handles settings.
 Patched 1.10 images leave those ranges untouched; `info` reports which kind of
 match applied.
 
-Analyzing firmware execution in the emulator found:
+Current emulator comparisons confirm:
 
 - L6max: an `l6nor`-built device and one taken through first-boot setup in the
   UI had byte-identical MAIN NOR, panel flash and option bytes.

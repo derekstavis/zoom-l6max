@@ -435,10 +435,21 @@ impl Runner {
                         pad,
                     }));
                 }
-                Action::SoundPadPlayback { pad, target } => {
+                Action::SoundPadPlayback {
+                    pad,
+                    target,
+                    assignment,
+                    require_pad_led_change,
+                    playback_window_ms,
+                    require_stereo_meter,
+                } => {
                     return Ok(Progress::Device(devices::Operation::SoundPadPlayback {
                         pad,
                         target,
+                        assignment,
+                        require_pad_led_change,
+                        playback_window_ms,
+                        require_stereo_meter,
                     }));
                 }
                 Action::L6RecorderPlayback { target } => {
@@ -542,6 +553,12 @@ impl Runner {
                 }
                 Action::L6maxPanelKeyMap => {
                     return Ok(Progress::Device(devices::Operation::L6maxPanelKeyMap));
+                }
+                Action::L6maxChannelSignalPwm => {
+                    return Ok(Progress::Device(devices::Operation::L6maxChannelSignalPwm));
+                }
+                Action::L6LevelMeterPwm => {
+                    return Ok(Progress::Device(devices::Operation::L6LevelMeterPwm));
                 }
                 Action::Wait { until } => {
                     if until == "boot-ready" {
@@ -1517,7 +1534,7 @@ mod tests {
         assert!(wrong_model.unwrap_err().contains("scoped to L6max"));
     }
     #[test]
-    fn sound_pad_playback_requires_assignment_and_valid_pad_target() {
+    fn sound_pad_playback_supports_editor_or_saved_assignment() {
         let prefix = "version=1\nname='pad-playback'\nmodels=['l6']\nfixture='prepared'\nbackends=['headless']\n";
         let action = "[[step]]\naction='usb-descriptors'\n[[step]]\naction='editor-pad-assignments'\n[[step]]\naction='sound-pad-playback'\npad=0\ntarget=49\n";
         assert!(Scenario::parse(&format!("{prefix}{action}")).is_ok());
@@ -1531,6 +1548,10 @@ mod tests {
                 .unwrap_err()
                 .contains("preceding editor-pad-assignments")
         );
+        let saved_state = Scenario::parse(&format!(
+            "{prefix}[[step]]\naction='sound-pad-playback'\npad=0\ntarget=49\nassignment='saved-state'\nplayback_window_ms=30000\nrequire_pad_led_change=false\n"
+        ));
+        assert!(saved_state.is_ok());
         let invalid_target = Scenario::parse(&format!(
             "{prefix}[[step]]\naction='usb-descriptors'\n[[step]]\naction='editor-pad-assignments'\n[[step]]\naction='sound-pad-playback'\npad=0\ntarget=53\n"
         ));

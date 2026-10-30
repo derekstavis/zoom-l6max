@@ -114,8 +114,7 @@ Supported semantic controls include each physical channel mute, modes
 `eq-high`, `freq`, `mid`, `low`, `aux1`, `aux2`, `efx`, `pan`, `level` and L6max
 `sub-mix`. L6max also accepts its canonical `controls::CONTROLS` names and
 `recorder.menu/up/down/confirm`. Wiring stays in `control_target`; unsupported
-model/control combinations fail early. The L6 USB startup probe uses `ch4-mono`,
-the physical target used by the original probe.
+model/control combinations fail early. The L6 USB startup scenario uses `ch4-mono`.
 
 ## Device and lifecycle steps
 
@@ -139,7 +138,7 @@ Scenarios default to `backends = ["headless", "gui"]`. Typed device steps requir
 | `editor-pad-assignments` | — | Initialize the Editor session, enumerate WAV files, assign the first file on all four pads and verify assignment state through SysEx readback; requires a preceding `usb-descriptors` step |
 | `editor-pad-playback` | `pad` | L6-only assigned-pad playback check; requires preceding `editor-pad-assignments` |
 | `l6max-ui-pad-assignment` | `pad` | L6max UI assignment check; requires preceding `usb-descriptors` and an L6max-scoped scenario |
-| `sound-pad-playback` | `pad`, `target` | After verified Editor assignment, press one L6 or L6max MAIN pad input and require its model-specific pad LED response plus nonzero SAI1 TX samples; enable `L6_AUDIO_SAMPLE_TRACE=1` in the case environment |
+| `sound-pad-playback` | `pad`, `target`, optional `assignment` (`editor` by default or `saved-state`), optional `require_pad_led_change` (default `true`), optional `require_stereo_meter` (default `false`), optional `playback_window_ms` (default `6000`, range `1000..120000`) | Press one L6 or L6max MAIN pad input and require nonzero SAI1 TX samples; require its model-specific pad LED response unless `require_pad_led_change = false`; `editor` requires a preceding Editor assignment step, while `saved-state` uses the assignment already present in the fixture; capture indicator PWM levels throughout playback; when `require_stereo_meter = true`, require two distinct levels of at least two bars on each side independently using a stereo isolation WAV; enable `L6_AUDIO_SAMPLE_TRACE=1` in the case environment |
 | `wasm-patch` | — | Exercise a generated WebAssembly patch package through the firmware update path |
 | `l6-recorder-playback` | `target` | L6 only; GDB verifies event `0x20`, handler acceptance, and the mode-0 callback on MAIN target 4; after five guest seconds it requires a changed SAI1 TX signature and sample data in the channel-14 TCD source. Requires a mode-0 state, valid `MASTER.WAV`, GDB fixture support, and `L6_AUDIO_SAMPLE_TRACE=1` |
 | `l6max-recorder-playback` | `target` | L6max only, MAIN target 4; GDB verifies Play event `0x2c`, event dispatch, callback slot 2, and the recorder action, then requires nonzero changed SAI1 TX windows and sample data in channel-14's TCD source. Requires a prepared playable recording, GDB fixture support, and `L6_AUDIO_SAMPLE_TRACE=1` |
@@ -154,6 +153,8 @@ Scenarios default to `backends = ["headless", "gui"]`. Typed device steps requir
 | `expect-recorder` | — | L6max startup mode restored after restart |
 | `expect-settings` | `restored` | L6max edited RTC/NOR/version records, or reload and RTC startup timing after restart |
 | `l6max-panel-key-map` | — | Verify that L6max sound-pad targets 15, 20, 25 and 30 set their MAIN key-state bits and clear them after release |
+| `l6max-channel-signal-pwm` | — | Seed the twelve firmware channel-level accumulators and verify five distinct increasing sampled PWM levels on all eight green SIGNAL lamps; requires L6max MAIN 1.10 and GDB. This qualifies the firmware-to-panel brightness path, not audio-input routing. |
+| `l6-level-meter-pwm` | — | Seed ten L6 1.10 level accumulators at the measured brightness thresholds and sample the raw panel matrix; require at least one output cell with five distinct nonzero duty means. Uses GDB and no SD, USB, MIDI, or host audio. |
 | `l6-main-gpio-event` | `target`, `event` | Hash-guarded L6 GDB check that Tap target 48 submits event `0x19` and Sound Pad targets 49–52 submit `0x15`–`0x18` |
 | `l6-din-event-dispatch` | `group`, `cc`, `value` | Hash-guarded L6 check of DIN CC-to-event dispatch |
 | `l6-usb-startup` | — | First step only; exact-hash L6 probe replays the startup USB-enable sequence, verifies three firmware entry points and controller writes |

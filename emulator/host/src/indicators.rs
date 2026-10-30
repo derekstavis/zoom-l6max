@@ -104,9 +104,29 @@ pub fn rings(rows: [u32; 8]) -> [u32; 8] {
             })
     })
 }
+
+/// PWM brightness for the nine encoder-ring segments on each channel.
+pub fn ring_levels(levels: [[u8; 24]; 8]) -> [[u8; 9]; 8] {
+    RING_PINS.map(|pins| pins.map(|(row, column)| levels[row][(column ^ 7) as usize]))
+}
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn l6_master_meter_reads_each_side_independently() {
+        let mut levels = [[0; 24]; 8];
+        assert_eq!(l6_master_meter_levels(levels), [0, 0]);
+        for &(row, bit) in &L6_MASTER_METER_PINS[0][..3] {
+            levels[row][bit] = 45;
+        }
+        for &(row, bit) in &L6_MASTER_METER_PINS[1][..5] {
+            levels[row][bit] = 45;
+        }
+        levels[0][10] = 3; // Partial scan while the sixth segment is off.
+        assert_eq!(l6_master_meter_levels(levels), [3, 5]);
+        levels[0][10] = 45;
+        assert_eq!(l6_master_meter_levels(levels), [3, 6]);
+    }
     #[test]
     fn every_output_lights_exactly_one_segment() {
         for (channel, pins) in RING_PINS.iter().enumerate() {
@@ -197,8 +217,37 @@ pub const LED_PINS: [(usize, u32); 72] = [
     (0, 23),
     (0, 19),
 ];
+/// Decode the two six-segment L6max MASTER meters from panel PWM duty.
+pub fn l6max_master_meter_levels(levels: [[u8; 24]; 8]) -> [u8; 2] {
+    [60, 66].map(|start| {
+        LED_PINS[start..start + 6]
+            .iter()
+            .filter(|&&(row, column)| levels[row][(column ^ 7) as usize] != 0)
+            .count() as u8
+    })
+}
+
 pub fn leds(rows: [u32; 8]) -> [bool; 72] {
     LED_PINS.map(|(row, column)| rows[row] & (1 << (column ^ 7)) != 0)
+}
+
+/// L6 MASTER meter segments in bottom-to-top order, as observed in the
+/// panel's 16-bit shift register. Unlike the L6max matrix, these columns
+/// occupy the upper byte of the sampled latch.
+const L6_MASTER_METER_PINS: [[(usize, usize); 6]; 2] = [
+    [(3, 13), (4, 13), (5, 13), (6, 13), (7, 13), (0, 11)],
+    [(3, 12), (4, 12), (5, 12), (6, 12), (7, 12), (0, 10)],
+];
+
+/// Decode the two six-segment MASTER meters from sampled panel PWM duty.
+/// A lit segment measures about 45/255 with the L6 scan; the threshold
+/// suppresses brief partial samples at output transitions.
+pub fn l6_master_meter_levels(levels: [[u8; 24]; 8]) -> [u8; 2] {
+    L6_MASTER_METER_PINS.map(|pins| {
+        pins.iter()
+            .filter(|&&(row, bit)| levels[row][bit] >= 16)
+            .count() as u8
+    })
 }
 
 /// L6 mute, mono, USB, phantom-power, and compressor lamps measured from

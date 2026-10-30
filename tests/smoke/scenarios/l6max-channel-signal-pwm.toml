@@ -1,0 +1,17 @@
+version = 1
+name = "l6max-channel-signal-pwm"
+models = ["l6max"]
+main_sha256 = "980d92272c1f84bed200b4d2f83575202f6a00082c928d99b9e8b53af8d44461"
+fixture = "signal-pwm"
+backends = ["headless"]
+
+[[step]]
+action = "wait"
+until = "mixer-ready"
+guest_timeout_ms = 60000
+wall_timeout_s = 900
+
+[[step]]
+action = "l6max-channel-signal-pwm"
+guest_timeout_ms = 60000
+wall_timeout_s = 120

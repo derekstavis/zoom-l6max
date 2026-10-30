@@ -26,6 +26,7 @@ pub struct InputStatus {
     pub frame_guest_ms: u32,
     pub indicator_updates: u64,
     pub indicators: [u32; 8],
+    pub indicator_levels: [[u8; 24]; 8],
     pub main_gpio: [u32; 5],
     pub adc_samples: [u16; 5],
     pub adc_updates: u64,
@@ -107,7 +108,35 @@ impl EngineInput {
                             let mut state = reader_status
                                 .lock()
                                 .unwrap_or_else(|error| error.into_inner());
-                            state.indicators[message.target as usize] = message.value as u32;
+                            let row = message.target as usize;
+                            state.indicators[row] = message.value as u32;
+                            for bit in 0..24 {
+                                state.indicator_levels[row][bit] =
+                                    if message.value & (1 << bit) != 0 {
+                                        255
+                                    } else {
+                                        0
+                                    };
+                            }
+                            state.indicator_updates += 1;
+                        }
+                        Ok(message) if message.kind == protocol::INDICATOR_LEVELS => {
+                            let mut state = reader_status
+                                .lock()
+                                .unwrap_or_else(|error| error.into_inner());
+                            let row = message.target as usize / 8;
+                            let first = message.target as usize % 8 * 3;
+                            let packed = message.value as u32;
+                            for index in 0..3 {
+                                let level = (packed >> (index * 8)) as u8;
+                                state.indicator_levels[row][first + index] = level;
+                                let mask = 1u32 << (first + index);
+                                if level == 0 {
+                                    state.indicators[row] &= !mask;
+                                } else {
+                                    state.indicators[row] |= mask;
+                                }
+                            }
                             state.indicator_updates += 1;
                         }
                         Ok(message) if message.kind == protocol::FRAME_READY => {

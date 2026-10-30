@@ -1,0 +1,20 @@
+# L6max setup state for the isolated Pad 4 meter case.
+# The prepared SD image supplies the Pad 4 assignment and sweep WAV.
+version = 1
+model = "l6max"
+
+[settings]
+base = "defaults"
+
+[settings.values]
+setup_required = 0
+last_date_year = 2026
+last_date_month = 2
+last_date_day = 2
+last_date_hour = 1
+last_date_minute = 1
+[rtc]
+datetime = "2026-02-02T01:01:00"
+
+[panel]
+programmed = true

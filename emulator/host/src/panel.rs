@@ -8,6 +8,7 @@ use std::{cell::Cell, sync::Arc};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PanelData {
     pub indicators: [u32; 8],
+    pub indicator_levels: [[u8; 24]; 8],
     pub switches: [bool; 54],
     pub analog: [u16; 5],
     pub powered: bool,
@@ -43,6 +44,7 @@ impl Default for PanelData {
     fn default() -> Self {
         Self {
             indicators: [0; 8],
+            indicator_levels: [[0; 24]; 8],
             switches: [false; 54],
             analog: [0; 5],
             powered: false,
@@ -163,8 +165,10 @@ impl PanelFeed {
         Ok(changed)
     }
     pub fn data(&self, switches: [bool; 54], powered: bool) -> PanelData {
+        let panel = self.inputs.panel.snapshot();
         PanelData {
-            indicators: self.inputs.panel.snapshot().indicators,
+            indicators: panel.indicators,
+            indicator_levels: panel.indicator_levels,
             switches,
             analog: self.inputs.analog_positions(),
             powered,
