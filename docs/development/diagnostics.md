@@ -23,7 +23,7 @@ cargo run --offline --locked -p l6dbg -- tools/l6dbg/example.toml \
 ```
 
 The recipe chooses its model and records waits, button presses, encoder turns,
-snapshots, trace excerpts, or hash-guarded MAIN memory captures. Results go to
+snapshots, trace excerpts, or hash-guarded MAIN memory reads and writes. Results go to
 `diagnostic.json`; raw engine logs and display artifacts are written to the
 selected log directory. Memory reads require the recipe's expected MAIN image
 hash. See the complete [`l6dbg` reference](tools/l6dbg.md), including every

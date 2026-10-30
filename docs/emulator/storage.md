@@ -79,9 +79,7 @@ visual UI enables it automatically for attached media, including Power-on
 after a firmware-controlled shutdown. It updates only
 the supported MAIN payload region and leaves boot/calibration/settings intact.
 
-Investigation pointed to a 32-byte calibration header beginning with
-`Dual AD Calibration`, followed by 16 bytes of calibration data. Calibration
-is not present in the update package and is left erased; values are not invented.
+Calibration data is not supplied in the update package and is left erased; values are not invented.
 
 The settings loader at `0x80035c98` selects between bank markers 1, 2, and 3,
 including wraparound. Each bank contains a four-byte generation marker and
@@ -94,8 +92,7 @@ For L6max 1.10 the payload holds six `0x25a`-byte mixer blocks (scenes 0–3,
 the current mixer, and a scratch block) followed by global settings. These
 include the first-boot `setup_required` flag that gates the Date/Time and
 Battery Type flow. [`l6nor`](../development/tools/l6nor.md) reads and edits
-these fields by name and commits them with the same bank sequence. The field
-layout was found by analyzing firmware execution in the emulator.
+these fields by name and commits them with the same bank sequence. Emulator behavior confirms this settings layout and field mapping.
 
 L6 1.10 keeps its two settings banks in the external resource NOR at
 `0x3fb000` and `0x3fd000`, with a `0x17c4`-byte payload of five mixer blocks

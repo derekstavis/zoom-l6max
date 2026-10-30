@@ -75,8 +75,8 @@ Useful background:
 
 ## Limits
 
-- The patch is guarded for the investigated main revision only.
-- The panel image stays original; audio processing is not modeled.
+- The patch is guarded for the supported L6max 1.10 MAIN image.
+- The panel image stays unchanged. Audio fidelity and physical jack routing remain unverified.
 - Hardware-tested popup behavior does not prove every allocation failure,
   scheduling interleaving, or bootloader policy.
 - Combining with the [MIDI sync patch](midi-sync-patch.md) is supported by the

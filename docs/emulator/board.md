@@ -7,31 +7,10 @@ with separate address spaces and a shared virtual clock. QEMU's Cortex-M0
 stands in for the panel's Cortex-M0+. Internal UART links the chips, and the
 main firmware can program, verify, and restart the panel's executable flash.
 
-The L6 MAIN processor marking reads `MIMXRT 1041DFP6B 1N00X` (with the
-visible space after `MIMXRT`); NXP's ordering part number is
-`MIMXRT1041DFP6B`, identifying an i.MX RT1041 in the RT1040 family. NXP's
-[part listing](https://www.nxp.com/part/MIMXRT1041DFP6B) and current
-[RT1040 consumer data sheet, Rev. 5](https://www.nxp.com/docs/en/data-sheet/IMXRT1040CEC.pdf)
-lists this part as a 600 MHz commercial-grade Cortex-M7 device without the
-LCD/PXP feature, in a 169-pin, 9 × 9 mm BGA with 0.65 mm pitch. The L6max
-MAIN processor marking has not been verified, so RT1052-specific silicon
-claims must not be applied to both products. The shared QEMU board models
-firmware-observed peripherals and wiring; it does not assert identical silicon.
-
-For the confirmed L6 part, NXP's [MIMXRT1041 CMSIS feature header](https://raw.githubusercontent.com/nxp-mcuxpresso/mcux-devices-rt/main/RT1040/MIMXRT1041/MIMXRT1041_features.h)
-lists 8 LPUARTs, 3 LPSPIs, 4 LPI2Cs, 2 USDHCs, one eDMA, and one DMAMUX.
-That confirms the relevant peripheral families exist in the L6 silicon. It
-does not establish that every instance is routed on the product board or that
-L6max uses the same part. The RT1040 reference manual is the silicon-level
-register source; firmware traces remain the source for the L6's actual
-addresses, IRQs, and active instances. One naming discrepancy is unresolved:
-the firmware path at `0x403a0000` had been called LPSPI4 by comparison with
-RT1050 materials. NXP's [RT1041 CMSIS common header](https://raw.githubusercontent.com/nxp-mcuxpresso/mcux-devices-rt/main/RT1040/MIMXRT1041/MIMXRT1041_COMMON.h)
-defines `LPSPI3_BASE` as `0x403a0000`; RT1041 has three LPSPI instances. Thus
-the L6 path is LPSPI3, while LPSPI4 is the RT1050-family name used in earlier
-analysis. The L6 firmware's register accesses and QEMU's synthetic NOR reply
-are verified in emulation; that does not prove the external flash wiring,
-electrical protocol, or returned bytes on physical hardware.
+The L6 MAIN processor is an i.MX RT1041. The L6max processor has not been
+identified; the two profiles share the emulated CPU topology without assuming
+identical physical silicon. For L6 peripheral semantics, use the RT1040
+reference manual. L6 external resource NOR uses LPSPI3 at `0x403a0000`.
 
 ## QEMU device-model reuse
 
@@ -53,16 +32,17 @@ but its controller register maps differ from RT1041; see the
 | --- | --- | --- |
 | LPI2C | Generic I²C bus and slave APIs; older `imx.i2c` controller | Keep the RT LPI2C register/FIFO controller; attach supported external devices through generic I²C. |
 | LPSPI | Generic SSI bus; `imx_spi` ECSPI controller | Generic bus can host devices, but the RT LPSPI MMIO/DMA controller still needs firmware-matched behavior. |
-| SAI + eDMA + DMAMUX | Generic audio backends and DMA helpers | The shared RT SAI model handles four channel FIFOs, RX FIFO-combine distribution and aggregated request/status state, advances at 48 kHz, supplies silent RX words, and routes SAI1 TX frames to an optional QEMU audio backend. Both models pass the audio-ring/DSP callback smoke. Earlier L6 Sound Pad probes reported audio, but a fresh L6 trace found the assignment-pending flag still set at the Pad 1 trigger; repeat the L6 mapping/audio checks after assignment completion. L6max targets 49–52 are audio-positive with matching WAVs assigned and corresponding pad LEDs changing, though runtime pad records remain zero. Recorder Play reaches its action but stream-file reads and TX remain open. Capture and physical jack routing remain open. See the [audio investigation](audio.md#modeling-direction-and-remaining-work). |
+| SAI + eDMA + DMAMUX | Generic audio backends and DMA helpers | The board models the observed SAI FIFO and eDMA request paths and can send SAI1 TX frames to a QEMU audio backend. Sound-pad playback and MASTER meters are exercised on both models. Recording, analog inputs, and physical jack routing remain incomplete; see [audio emulation](audio.md). |
 | USDHC / SD | `imx-usdhc`, SDHCI, and QEMU SD bus | Existing controller and card infrastructure is already used by the board. |
-| USB OTG | ChipIdea host controller and USB device bus | Existing controller/device infrastructure is already used for USB MIDI and storage. |
+| USB OTG | Generic QEMU USB device framework | The board supplies an RT device-controller adapter for USB MIDI and storage. |
 | GPIO | i.MX GPIO controller and generic GPIO lines | Reuse GPIO primitives where register compatibility holds; board-specific pins and wiring remain profile data. |
 | LPUART | `imx.serial` (IMX31 UART) and STM32 LPUART models | Neither is an RT1041 LPUART register model. Keep the RT LPUART register behavior and firmware-specific UART routing in the board layer; use QEMU chardevs for byte-stream transport. The panel's STM32 USART already uses QEMU's STM32L4x5 USART model. |
-| Cortex-M7 / NVIC | QEMU `armv7m` device and ARM CPU models | The board already reuses these CPU/NVIC building blocks for both MAIN images; profile-specific IRQ counts and priority bits are configured at realization. |
+| Cortex-M7 / NVIC | QEMU `armv7m` device and ARM CPU models | The board reuses these CPU/NVIC blocks for both MAIN images, with profile-specific IRQ counts and priority bits. |
+| ADC, FlexSPI and clock control | Generic QEMU infrastructure | Board adapters model the exercised register and timing paths. |
 
 This inventory is based on source inspection of the pinned QEMU tree, not just
 device names or the RT1050 family. The board still uses custom adapters where
-QEMU lacks a compatible register interface. See the [audio investigation](audio.md)
+QEMU lacks a compatible register interface. See the [audio model](audio.md)
 for the narrower SAI/eDMA findings and remaining audio work.
 
 The main peripheral address range is currently backed by a sparse firmware-
@@ -84,11 +64,6 @@ address spaces, virtual clock, UART bridge, SD controller, and USB controller.
 Their known differences are kept at the board-profile and control-surface
 layers:
 
-The C board path was also checked directly with the same `l6max-main` machine
-and `L6_MODEL` unset: the stock L6 MAIN image logged `L6`, and the stock L6max
-image logged `L6max`, each selected from its reset vector before guest
-execution. This confirms profile choice does not depend on the Rust launcher.
-
 | Hardware profile | L6 | L6max |
 | --- | --- | --- |
 | MAIN image base | `0x80001000` | `0x80000000` |
@@ -108,16 +83,9 @@ are observed in the panel service path; the L6max values are associated with
 its panel updater. The QEMU profile applies the
 matching GPIO set/clear and UART paths automatically.
 
-The L6-specific resource-NOR path and high-RAM overlay, matrix wiring, encoder
-count, and MIDI UART selection are model-dependent. QEMU peripheral helpers
-that both profiles use remain shared; the display, indicator, and USB models
-are separate helper modules already. The available evidence does not justify two machine
-types: both MAIN images use Cortex-M7 firmware and the observed
-topology is covered by the existing shared machine. The L6 RT1041 identity and
-still-unverified L6max silicon make the board profiles a compatibility layer,
-not an assertion of identical SoCs. If hardware analysis establishes a
-materially different SoC or reset/peripheral topology, keep common device
-models shared and split only board initialization and wiring.
+Resource NOR, matrix wiring, encoder count, and MIDI UART are selected by
+the model profile. Peripheral helpers are shared where their behavior applies
+to both models.
 
 ## Model fidelity and open approximations
 
@@ -129,9 +97,9 @@ below hold the detailed traces and validation evidence.
 
 | Item | Scope and evidence | Change or removal criterion |
 | --- | --- | --- |
-| SAI1 RX read-stream compatibility exception | L6max only. The profile retains `FCOMB=2` but distributes received words across enabled FIFOs. Removing it restored roughly 750 channel-15 IRQ assertions/s and froze panel/encoder indicators; enabled behavior measured 187–188/s and is exercised by the eight-ring indicator smoke. This is empirical firmware compatibility, not established silicon behavior. | Revisit when firmware/eDMA analysis or physical SAI capture explains the indicator freeze and establishes correct RX placement. Until then, preserve the exception and its L6max-only scope. See [audio investigation](audio.md#observed-firmware-configuration). |
+| SAI1 RX read-stream compatibility exception | L6max only: during the first 40.5 guest seconds, `FCOMB=2` distributes receive words across enabled FIFOs. The emulator then switches to regular receive behavior. This is a startup compatibility measure, not a claim about RT1040 silicon. | Revisit with physical SAI capture or a better-established receive model. See [audio emulation](audio.md). |
 | Power cutoff fallback | L6 only. QEMU cuts virtual power after a 500 ms press because the stock L6 shutdown GPIO edge/path is unconfirmed. The interval is synthetic. | Replace it when the L6 firmware power-switch input, shutdown callback and expected board power signal are established. See [power behavior](power.md). |
-| Codec and analog input | L6max codec addresses `0x4c`/`0x4d` accept observed writes through register-bank slaves; physical codec identity is not confirmed. ADC samples are host controlled, with conversion timing and analog sources approximated. SAI RX input is silent. | Expand or replace these models when component identity, register transactions, timing and physical signal routing are established. See [audio investigation](audio.md) and [manual audit](manual-audit.md). |
+| Codec and analog input | L6max codec addresses `0x4c`/`0x4d` accept observed writes through register-bank slaves; physical codec identity is not confirmed. ADC samples are host controlled, with conversion timing and analog sources approximated. SAI RX input is silent. | Expand or replace these models when component identity, register transactions, timing and physical signal routing are established. See [audio model](audio.md) and [manual audit](manual-audit.md). |
 | Partial peripheral behavior | RT eDMA/SAI/LPI2C/LPSPI/LPUART/ADC and FlexSPI use firmware-focused implementations because the pinned QEMU tree has no compatible RT1041 drop-in blocks. Observed paths are modeled, while unobserved commands, timing, flags and features remain incomplete; UART and LPI2C timing are approximate. | Implement additional semantics when firmware traces exercise them or manual-based checks require them. Do not treat a passing firmware smoke as full peripheral conformance; use the [manual audit](manual-audit.md) to track coverage. |
 | Clock and oscillator assumptions | The SAI frame cadence uses the firmware's nominal 24.576 MHz source value; bootloader-inherited clock roots are unverified. Several PLL/oscillator transitions settle immediately on virtual time. | Replace assumptions with established bootloader clock state and documented transition timing. See [clock findings](manual-audit.md#findings). |
 
@@ -146,33 +114,16 @@ Initialize the QEMU 11.1.2 submodule with
 `4fc49f46dc95d4a27de2509e7fceb2931e91faeb`. The builder stages and patches it
 in the ignored `emulator/qemu/build-source/` tree, retaining build outputs.
 An external QEMU 11.1.2 tree can also be passed explicitly and is patched in place.
-The original source archive used during development has SHA-256
-`731b5681e4bb18be313231579b8efd0296c5b015fa36dc533874b639ba838016`.
 QEMU's upstream build requires Python, Ninja, a C compiler, and libfdt. The
 repository's UI and host tools are Rust. macOS UI builds also require Xcode's
 Metal Toolchain component.
 
-Supply `L6.BIN` or `L6max.bin` locally and extract it using the
-[package tool](../guides/firmware-packages.md). Package detection is based on
-the validated system header, and QEMU selects the MAIN flash mapping and both
-integrated MCU profiles directly from the booted MAIN reset vector.
-`l6max-host` also detects the model for its UI and input profile. The
-split-process `qemu-run` detects the same MAIN image and passes the result to
-its standalone panel guest, which has no MAIN image of its own. Fresh volatile
-boots of the stock L6 and L6max 1.10 packages with the same QEMU binary selected
-the corresponding profile from each MAIN reset vector; use the `l6-input-sweep`
-and `l6max-input-smoke` driver cases for input validation.
-The L6 run checked 24 matrix keys, five direct switches, six encoders, and the
-no-display path. The L6max run published display changes and accepted Menu,
-Play, Record, encoder, and date-editor input. The standalone two-process `qemu-run`
-diagnostic now captures live registers for both L6 and L6max. The L6 main CPU
-also reads its external `resource_region.bin` NOR image through LPSPI3 at
-`0x403a0000`. The current model reaches its Idle task, but its LCD framebuffer
-mapping and published display frames remain unknown. The L6max-only framebuffer
-snapshot is therefore omitted for L6. On L6 the panel USART uses the external
-serial socket to reach the separate main-chip process; the integrated machine
-keeps its in-process UART bridge. Firmware packages and extracted components
-are excluded from Git.
+Supply `L6.BIN` or `L6max.bin` locally and extract it with the
+[package tool](../guides/firmware-packages.md). The reset vector selects the
+model profile. The L6 uses its external `resource_region.bin` through LPSPI3
+and has no display; L6max publishes OLED frames. The standalone `qemu-run`
+uses separate main and panel processes, while the native app uses the integrated
+machine. Firmware packages and extracted components are excluded from Git.
 
 From the repository root:
 
@@ -356,35 +307,17 @@ navigation controls.
 Native CPU/system output remains in `engine.trace` and `engine.stderr`; the
 standalone runner writes its `main.*` and `panel.*` files there as well.
 
-## Model findings
+## Model behavior
 
-Investigation pointed to the observed flash layout, selected FlexSPI reads, ADC
-startup responses, display DMA descriptors, GPIO inputs, UART traffic, panel
-RTC state, and a partial STM32 ROM update protocol as the required device
-interfaces. The model implements these paths. Panel flash writes affect
-the running chip's executable memory; reset and boot selection hold the CPU
-during programming and restart it afterward. Each chip's guest-requested
-reset is local, including NVIC and SysTick state.
+The board models the flash, ADC, display DMA, GPIO, UART, panel RTC, and panel
+update paths needed by the supported firmware. Panel flash programming updates
+executable memory; reset and boot selection hold the panel CPU while it is
+programmed. Each chip's guest-requested reset is local.
 
-Date/Time and Battery Type setup reach the recorder's **No SD Card** screen
-with the optional audio queue acknowledgment. The native app enables that
-acknowledgment; standalone diagnostics require `--service-audio-queue`.
-It acknowledges staged audio without processing it. A separate 1 ms service
-can acknowledge audio startup waits through opt-in diagnostic overrides. Both
-model defaults now leave those acknowledgments disabled because clocked
-SAI/eDMA reaches the firmware callbacks. The audio clock feeds silence on RX;
-configured QEMU audio backends receive SAI1 TX frames. See the
-[audio model](audio.md#observed-firmware-configuration).
-The periodic queue acknowledgment uses profile-specific SRAM indices: L6
-producer/consumer offsets `0xbb0c`/`0xbb10`, L6max `0x7d08`/`0x7d0c`.
-Using the L6max offsets on L6 left its staged queue unconsumed and blocked
-Main's initialization. The persistent-state DIN smoke now verifies ordinary
-L6 ingress end to end: the UART delivers all 384 bytes, Main consumes all 66
-mapped events, and the native mixer setters update state. The separate
-event-dispatch smoke continues to isolate queue consumption from UART ingress.
-An opt-in audio trace captures SAI register windows and firmware eDMA TCDs for
-both models. The board executes request-paced transfers for two full-duplex
-SAI paths on L6 and one on L6max; see [audio peripheral investigation](audio.md).
+The audio clock feeds silent SAI RX frames and can send SAI1 TX frames to a
+configured QEMU audio backend. The board executes request-paced transfers for
+two full-duplex SAI paths on L6 and one on L6max. See [audio emulation](audio.md)
+and [current status](../development/current-status.md).
 
 ## Limitations
 
@@ -398,70 +331,27 @@ SAI paths on L6 and one on L6max; see [audio peripheral investigation](audio.md)
 - Audio capture and analog codec behavior are unmodeled. The queue service
   remains a recorder-screen stand-in. Host output is verified for L6 and L6max
   pad playback. Physical jack routing remains unverified. See the
-  [audio investigation](audio.md).
+  [audio model](audio.md).
 - Several peripherals use sparse register storage instead of full device
   models.
 
 ## Reusable QEMU peripheral blocks
 
-The vendored QEMU 11.1.2 source already provides useful models, but most are
-not register-compatible drop-ins for every MAIN MCU peripheral. The L6 is
-confirmed as RT1041; L6max silicon is unverified. MAIN and panel use the same
-sparse MMIO handler in `l6max.c`; selected devices are overlaid with
-individual QEMU models. This inventory separates existing reuse from possible
-candidates:
-
-For L6, the peripheral-family comparison below is grounded in the RT1041
-CMSIS device files and firmware-observed accesses. QEMU block reuse is based on
-register behavior and smoke coverage, not on the shared `i.MX` product name.
-
-| Block | QEMU support | L6/L6max fit |
-| --- | --- | --- |
-| SD/MMC | `imx-usdhc` | Already used for the MAIN SD slot, with a small board adapter for the SoC system-control behavior. |
-| Panel UART | STM32L4x5 USART/LPUART | Already used for the panel-to-MAIN serial link. The MAIN RT LPUART instances have a different register interface. |
-| GPIO | i.MX GPIO and STM32L4x5 GPIO | MAIN now reuses QEMU's i.MX GPIO register and pin-input model, with a board adapter for RT GPIO atomic aliases and panel BOOT/RESET wiring. STM32L4x5 GPIO remains a partial panel match; its exported pin IRQs report sampled input changes, not output-pin callbacks. |
-| CCM_ANALOG | No complete RT1041 CCM/PLL model | The board models the observed PLL_AUDIO lock poll and USB1 PLL control/SET/CLR/TOG state. PLL lock settles immediately on virtual time. SAI frame cadence is derived from the active master divider and frame format using the firmware's nominal 24.576 MHz source assumption; inherited bootloader clock-root values and non-audio peripheral rates remain unverified/unmodeled. See the [manual-led audit](manual-audit.md). |
-| MAIN UART | i.MX serial and STM32L4x5 USART/LPUART | Neither is a demonstrated match for MAIN RT LPUART. The i.MX serial model is the older UART register block; the STM32 model is currently used for the panel-side link. |
-| MAIN SPI | i.MX ECSPI and several unrelated controllers; generic SSI bus and M25P80 serial-NOR device | No drop-in RT LPSPI controller exists in the pinned QEMU tree. L6 firmware framing is known: `0x0b` fast read uses a 24-bit address and dummy byte, and `0x05` reads status. The reusable SSI bus and `m25p80` flash model (`hw/block/m25p80.c`) are candidates for replacing the hand-written command parser once the physical flash type/capacity and required write behavior are confirmed. L6's LPSPI3 path at `0x403a0000` and L6max's OLED SPI still need firmware-matched controller behavior; L6max's silicon-level instance name remains unverified. |
-| I²C | i.MX I²C controller and generic I²C bus/slave framework | The controller uses a different register set from RT LPI2C. The L6max MMIO adapter forwards observed START, data, and STOP commands to QEMU's I²C bus and two lightweight register-bank slaves at `0x4c`/`0x4d`; writes match a TLV320ADC6140-compatible configuration, but do not verify physical silicon or analog behavior. L6 made no LPI2C1 accesses in the tested stock boot. |
-| ADC | Controllers for STM32F2, Aspeed, NPCM, and Xilinx devices | No compatible RT ADC model is present. The current board shim supplies conversion completion and host-controlled samples. |
-| USB | Generic USB device framework, ChipIdea EHCI host model, and i.MX USB PHY | The ChipIdea controller is an EHCI host model; its generic registers are mostly stubs. It does not replace the custom RT USB device-controller register and endpoint path used for USB MIDI. |
-| Audio DMA / SAI | No drop-in RT eDMA or SAI controller in pinned QEMU | The board has shared RT SAI register/FIFO state and request-paced eDMA for the observed descriptor layout, with separate L6/L6max request routes. SAI1 TX can use a QEMU audio backend. Earlier L6 Sound Pad and recorder probes reported output; a fresh GPIO trace showed the Pad 1 assignment still pending, so the four-pad mapping/audio result needs retesting after completion. L6max targets 49–52 each produced audio with matching LEDs when their WAVs were assigned. L6max SNARE8 data is verified in DMA slots 4–7 and host output uses slots 4–5. Runtime L6max pad records remain zero; recorder capture/playback and physical jack routing remain open. See the [audio peripheral investigation](audio.md#modeling-direction-and-remaining-work). |
-
-QEMU's i.MX GPIO model now backs all five MAIN GPIO banks on both firmware
-profiles. Its `DR`, `GDIR`, `PSR`, interrupt configuration, and status
-registers use the offsets observed in the L6/L6max firmware. A thin board adapter
-implements the reserved `+0x80` window and the atomic aliases at local offsets
-`+4/+8/+0xc`, which also drive panel BOOT/RESET behavior. Host switches and
-buttons enter through QEMU GPIO input lines; board telemetry, GPIO2 display
-D/C, SD detect, and power-hold behavior remain board-level wiring. L6 and
-L6max input smokes both pass with this adapter, and model-specific power
-smokes verify cutoff and restart behavior.
-
-The STM32L4x5 GPIO model is also close to the panel register layout. Its
-`MODER`, `PUPDR`, `IDR`, `ODR`, and `BSRR` registers match the accesses handled
-by the current panel path. Its pin IRQ lines represent changes in sampled
-input state, though, and do not expose driven output levels. The current LED
-matrix decoder observes panel output writes, so adopting this model would
-require preserving that observation in a board adapter or adding an output
-signal to the device. Either route is still smaller than replacing its GPIO
-register behavior with a new implementation.
-
-This inventory is specific to the pinned QEMU submodule revision
-`4fc49f46dc95d4a27de2509e7fceb2931e91faeb`; revisit it if that revision
-changes. Implementations are under `emulator/qemu/upstream/hw/` and device
-declarations are under `emulator/qemu/upstream/include/hw/`.
+The board reuses QEMU CPU, GPIO, USDHC/SD, STM32 USART, and generic bus and
+audio infrastructure where their interfaces match. RT-specific SAI, eDMA,
+LPUART, LPSPI, LPI2C, ADC, and FlexSPI behavior remains in board adapters.
+The [device-model inventory](#qemu-device-model-reuse) and
+[peripheral audit](manual-audit.md) describe the reuse boundaries.
 
 ## Panel indicator wiring
 
-Investigation of the panel refresh routines pointed to an eight-common,
-24-column LED matrix. The external matrix model consumes peripheral pin
+The modeled panel indicator surface has eight commons and 24 sampled columns. The external matrix model consumes peripheral pin
 outputs and exposes all 192 outputs independently of UART decoding.
 
 | Signal | Panel pin / peripheral | Model behavior |
 | --- | --- | --- |
 | Serial clock | GPIOA5 / SPI1 SCK | Shift on rising edges |
-| Serial data | GPIOA7 / SPI1 MOSI | MSB first, three bytes per transfer |
+| Serial data | GPIOA7 / SPI1 MOSI | MSB first; L6 transfers two bytes and L6max transfers three |
 | Latch | GPIOA6 | Rising edge copies shift register to output register |
 | Blanking | GPIOA4 | High disables outputs |
 | Commons 0–7 | GPIOB0, B1, B2, B10, B11, B12, B13, B14 | Active low |
@@ -469,34 +359,16 @@ outputs and exposes all 192 outputs independently of UART decoding.
 | Transfer completion | TIM14, IRQ 19 | Firmware checks SPI and invokes its completion callback |
 | LED dwell | TIM3, IRQ 16 | Firmware advances the common and PWM phase |
 
-Panel routines at `0x080014e4`, `0x08000ca0`, `0x08000cb4`, and
-`0x08000cc6` establish the GPIO control signals. `0x080018d4` starts each
-three-byte transfer. `0x08002850` latches the data and selects its common;
-`0x08002834` blanks the outputs before the next transfer. Firmware indicator
-column `n` corresponds to bit `n ^ 7` in the serial output word: the
-firmware reverses byte order while assigning bits within each byte MSB first.
+The panel publishes integrated output levels approximately every 33 guest
+milliseconds. Changed levels use message kind `0x8000000a`, grouped by common
+and column; kind `0x80000008` advances guest time even when the LEDs and LCD
+are static. The host derives the current indicator masks and brightness from
+these samples. The model-specific mappings are in
+`emulator/host/src/indicators.rs`.
 
-Indicator events use runtime message kind `0x80000005`: sequence is a nonzero
-publication counter, target is common 0–7, value is the 24-bit lit-column mask,
-and the final word is guest virtual milliseconds. Only changed rows are sent.
-The 50 ms observation window represents lit/unlit state, not calibrated PWM
-brightness. The UI retains unmapped columns for future hardware mappings.
-
-The panel also publishes kind `0x80000008` every 50 guest milliseconds,
-with a nonzero sequence, zero target/value, and guest time in the final word.
-This clock notification advances even when neither LEDs nor LCD pixels change;
-input tests use it instead of a display publication timestamp.
-
-Main GPIO output changes use kind `0x80000006`: target 0–4 identifies GPIO1–5,
-and value contains all 32 output-latch bits. DR, DR_SET, DR_CLEAR, and DR_TOGGLE
-writes update the latch. These outputs are retained for analog-control
-investigation and do not drive the artwork's scene indicators.
-
-The main ring function at `0x8000c4f0` writes nine consecutive logical LEDs
-per channel, starting at logical index 72. The wiring table at `0x800c457c`
-maps logical indices to common/column pairs. Ring pairs occupy
-`0x800c460c` through `0x800c469b`; the native renderer preserves this wiring
-in `emulator/host/src/indicators.rs`.
+Main GPIO output changes use message kind `0x80000006`: target 0–4 identifies
+GPIO1–5 and the value is the output latch. These outputs do not drive the
+artwork's scene indicators.
 
 Pin-level decoder checks (from the repository root):
 

@@ -77,7 +77,7 @@ It has these top-level blocks:
 | Block | Fields | Purpose |
 | --- | --- | --- |
 | top level | `version = 1`, `qemu`, `qemu_sha256` | Pin the exact QEMU executable. `qemu` is resolved relative to this TOML file; the SHA-256 must match before any run. |
-| `[[fixture]]` | `name`, `model`, exactly one of `firmware_dir` / `firmware_package`; optional `patches`, `update_package`, `state_template`, `state_recipe`, `state_spec`, `sd_image`, `audio_device`, `gdb`, `timing`, `update_bootloader` | Define local firmware and starting state for a named model fixture. Names may repeat for different models, but `(name, model)` must be unique. |
+| `[[fixture]]` | `name`, `model`, exactly one of `firmware_dir` / `firmware_package`; optional `patches`, `update_package`, `state_template`, `state_recipe`, `state_spec`, `sd_image`, `sound_pad`, `audio_device`, `gdb`, `timing`, `update_bootloader` | Define local firmware and starting state for a named model fixture. Names may repeat for different models, but `(name, model)` must be unique. |
 | `[legacy."CASE-ID"]` | optional `fixture`, `executable`, `executable_sha256`, `arguments`, `environment` | Configure a legacy executable required by a catalog case. An executable requires a matching hash. `arguments` and environment values support `{firmware_dir}`, `{logs}`, `{qemu}`, and `{package}` substitutions. |
 | `[[expected_failure]]` | `case`, `model`, `step`, `contains`, `reason` | Match a known failure only at the exact scenario step and when its error contains the specified text. A matching failure is XFAIL; an unexpected pass is XPASS. |
 
@@ -98,6 +98,21 @@ Fixture details:
   `sd_image` is copied for each case. `audio_device` accepts QEMU audio-device
   syntax and `{logs}` expands to the per-case log directory. `gdb` enables the
   fixture's debugger socket. `update_bootloader` enables that update path.
+- Add one or more `[[fixture.sound_pad]]` blocks to prepare assignments on the
+  disposable `sd_image` copy. Each block takes `pad` (1–4), `file` (a path
+  relative to the card root), optional `mode` (`one-shot`, `loop`, or `hold`;
+  default `one-shot`), and optional `level` (0–59; default 49). The WAV must
+  already exist on the card. The driver creates or updates the model's saved
+  pad settings; it does not send USB commands or press controls to configure
+  the device. The resulting card hash is included in `inputs.json`.
+
+  ```toml
+  [[fixture.sound_pad]]
+  pad = 1
+  file = "SOUND_PAD/PAD1/TONE220.WAV"
+  mode = "one-shot"
+  level = 59
+  ```
 - `update_package` is supplied to firmware-update scenarios as the package to
   install after booting the fixture firmware.
 - All fixture paths resolve relative to `smoke.local.toml`; they must exist,

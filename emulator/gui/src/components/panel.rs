@@ -72,11 +72,30 @@ pub fn panel(
     model: l6fw::Model,
     interactions: &PanelInteractions,
 ) -> Div {
+    let indicator_levels = if data
+        .indicator_levels
+        .iter()
+        .flatten()
+        .all(|&level| level == 0)
+    {
+        std::array::from_fn(|row| {
+            std::array::from_fn(|bit| {
+                if data.indicators[row] & (1 << bit) != 0 {
+                    255
+                } else {
+                    0
+                }
+            })
+        })
+    } else {
+        data.indicator_levels
+    };
     match model {
         l6fw::Model::L6 => l6::panel(
             layout,
             scale,
             data.indicators,
+            indicator_levels,
             data.analog,
             data.powered,
             interactions,
@@ -85,6 +104,7 @@ pub fn panel(
             layout,
             scale,
             data.indicators,
+            indicator_levels,
             data.switches,
             data.analog,
             interactions,

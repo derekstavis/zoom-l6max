@@ -61,6 +61,9 @@ fn default_true() -> bool {
 fn ring_settle() -> u32 {
     1000
 }
+fn default_playback_window_ms() -> u32 {
+    6000
+}
 fn guest_timeout() -> u32 {
     10_000
 }
@@ -74,6 +77,13 @@ pub enum Gesture {
     Scroll,
     DragVertical,
     DragHorizontal,
+}
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum PadAssignmentSource {
+    #[default]
+    Editor,
+    SavedState,
 }
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -156,6 +166,14 @@ pub enum Action {
     SoundPadPlayback {
         pad: u8,
         target: u32,
+        #[serde(default)]
+        assignment: PadAssignmentSource,
+        #[serde(default = "default_true")]
+        require_pad_led_change: bool,
+        #[serde(default = "default_playback_window_ms")]
+        playback_window_ms: u32,
+        #[serde(default)]
+        require_stereo_meter: bool,
     },
     L6RecorderPlayback {
         target: u32,
@@ -261,6 +279,8 @@ pub enum Action {
     L6DinSweep,
     L6maxInputTiming,
     L6maxPanelKeyMap,
+    L6maxChannelSignalPwm,
+    L6LevelMeterPwm,
     ExpectEncoderReports,
     ExpectRing {
         channel: usize,
@@ -283,6 +303,7 @@ pub enum Action {
         mode: String,
     },
 }
+
 impl Scenario {
     pub fn parse(text: &str) -> Result<Self, String> {
         let value: Self = toml::from_str(text).map_err(|e| e.to_string())?;
@@ -361,8 +382,14 @@ impl Scenario {
                         return Err("editor-pad-playback scenarios must be scoped to L6".into());
                     }
                 }
-                Action::SoundPadPlayback { pad, target } => {
-                    if !pad_assignments_seen {
+                Action::SoundPadPlayback {
+                    pad,
+                    target,
+                    assignment,
+                    playback_window_ms,
+                    ..
+                } => {
+                    if *assignment == PadAssignmentSource::Editor && !pad_assignments_seen {
                         return Err(
                             "sound-pad-playback requires a preceding editor-pad-assignments step"
                                 .into(),
@@ -371,6 +398,11 @@ impl Scenario {
                     if *pad > 3 || *target != 49 + u32::from(*pad) {
                         return Err(
                             "sound-pad-playback target must match pad (pad 0..3 maps to target 49..52)".into(),
+                        );
+                    }
+                    if !(1000..=120_000).contains(playback_window_ms) {
+                        return Err(
+                            "sound-pad-playback playback_window_ms must be 1000..120000".into()
                         );
                     }
                 }
@@ -468,6 +500,27 @@ impl Scenario {
                 {
                     return Err("l6-din-event-dispatch requires L6 and a group from 0 to 15".into());
                 }
+            }
+            if matches!(step.action, Action::L6maxChannelSignalPwm)
+                && (value.models.iter().any(|model| model != "l6max")
+                    || step.models.iter().any(|model| model != "l6max")
+                    || value.main_sha256.as_deref()
+                        != Some("980d92272c1f84bed200b4d2f83575202f6a00082c928d99b9e8b53af8d44461"))
+            {
+                return Err(
+                    "l6max-channel-signal-pwm requires L6max MAIN 1.10 and its exact firmware hash"
+                        .into(),
+                );
+            }
+            if matches!(step.action, Action::L6LevelMeterPwm)
+                && (value.models.iter().any(|model| model != "l6")
+                    || step.models.iter().any(|model| model != "l6")
+                    || value.main_sha256.as_deref()
+                        != Some("827c7c5cb2a43cc3a011d4556462b8cb9539242f817ebeed7727d66a36c03799"))
+            {
+                return Err(
+                    "l6-level-meter-pwm requires L6 MAIN 1.10 and its exact firmware hash".into(),
+                );
             }
             if let Action::L6maxRecorderPlayback { target } = step.action {
                 if value.models.iter().any(|model| model != "l6max")
@@ -712,6 +765,8 @@ impl Scenario {
                 | Action::L6DinSweep
                 | Action::L6maxInputTiming
                 | Action::L6maxPanelKeyMap
+                | Action::L6maxChannelSignalPwm
+                | Action::L6LevelMeterPwm
                     if value.backends.iter().any(|b| b != "headless") =>
                 {
                     return Err("device operations require backends=[\"headless\"]".into());

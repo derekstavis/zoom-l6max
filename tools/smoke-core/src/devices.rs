@@ -1,5 +1,5 @@
 //! Typed peripheral operations. Sequencing, timing and artifacts stay in the runner.
-use crate::{Scenario, Session};
+use crate::{Scenario, Session, scenario::PadAssignmentSource};
 use l6max_host::{engine::Options, headless::Headless};
 use serde_json::{Value, json};
 use std::{
@@ -48,6 +48,10 @@ pub enum Operation {
     SoundPadPlayback {
         pad: u8,
         target: u32,
+        assignment: PadAssignmentSource,
+        require_pad_led_change: bool,
+        playback_window_ms: u32,
+        require_stereo_meter: bool,
     },
     L6RecorderPlayback {
         target: u32,
@@ -97,10 +101,23 @@ pub enum Operation {
     L6DinSweep,
     L6maxInputTiming,
     L6maxPanelKeyMap,
+    L6maxChannelSignalPwm,
+    L6LevelMeterPwm,
 }
 
 /// Configure only the hardware instrumentation explicitly requested by a scenario.
 pub fn prepare(scenario: &Scenario, options: &mut Options) -> Result<(), String> {
+    if scenario.step.iter().any(|step| {
+        matches!(
+            step.action,
+            crate::Action::L6maxChannelSignalPwm | crate::Action::L6LevelMeterPwm
+        )
+    }) {
+        options.usb_enabled = false;
+        options.midi_enabled = false;
+        options.gdb_socket =
+            Some(std::env::temp_dir().join(format!("l6sp-{}.sock", std::process::id())));
+    }
     if scenario.fixture == "factory-protocol" {
         prepare_factory_fixture(options)?;
     }
@@ -1231,6 +1248,451 @@ fn run_l6_usb_startup(
         "breakpoint_hits": hits,
         "usb_controller_writes": usb_controller_writes,
     }))
+}
+
+fn run_l6max_channel_signal_pwm(
+    session: &Session,
+    options: &Options,
+    guest_timeout_ms: u32,
+    wall_timeout_s: u64,
+) -> Result<Value, String> {
+    use l6max_diagnostics::gdb::Gdb;
+    if session.engine.model() != l6fw::Model::L6max {
+        return Err("l6max-channel-signal-pwm requires L6max firmware".into());
+    }
+    let socket = options.gdb_socket.as_ref().ok_or("GDB is required")?;
+    let qmp = &session.engine.management[0];
+    let mut debugger = Gdb::connect(socket).map_err(|error| error.to_string())?;
+    let inputs = session
+        .engine
+        .inputs
+        .as_ref()
+        .ok_or("headless panel input missing")?;
+    // Recovered LevelMeterLed thresholds at 0x800a6984 and 0x800a69b4.
+    // Its first four signal outputs and final four outputs use separate scales.
+    let sweeps: [(
+        &str,
+        std::ops::Range<usize>,
+        std::ops::Range<usize>,
+        [f32; 5],
+    ); 2] = [
+        (
+            "signal-1-to-4",
+            0..4,
+            0..4,
+            [
+                1_500_000.0,
+                2_000_000.0,
+                3_000_000.0,
+                4_000_000.0,
+                8_000_000.0,
+            ],
+        ),
+        (
+            "signal-5-to-8",
+            4..12,
+            4..8,
+            [
+                8_000_000.0,
+                12_000_000.0,
+                16_000_000.0,
+                24_000_000.0,
+                40_000_000.0,
+            ],
+        ),
+    ];
+    let started_guest = inputs.panel.snapshot().guest_ms;
+    let deadline = Instant::now() + Duration::from_secs(wall_timeout_s);
+    let mut sweep_evidence = Vec::new();
+    let mut failures = Vec::new();
+
+    for (sweep_index, (name, accumulator_range, output_range, levels)) in
+        sweeps.into_iter().enumerate()
+    {
+        if sweep_index > 0 {
+            // The worker retains falling-level state between scans. Drain the
+            // previous accumulator band before measuring this independent
+            // band, so its samples cannot contain the prior sweep's LEDs.
+            let zeroes = vec![0_u8; 12 * 4];
+            qmp.stop().map_err(|error| error.to_string())?;
+            debugger
+                .write(0x2001_50e0, &zeroes)
+                .map_err(|error| error.to_string())?;
+            qmp.resume().map_err(|error| error.to_string())?;
+            let drain_start = inputs.panel.snapshot().guest_ms;
+            let mut last_seed = drain_start;
+            let mut zero_samples = 0_u8;
+            loop {
+                let panel = session.poll().map_err(|error| error.to_string())?;
+                let guest_ms = inputs.panel.snapshot().guest_ms;
+                let prior_band_off = (0..4).all(|channel| {
+                    let (row, column) = l6max_host::indicators::LED_PINS[52 + channel];
+                    panel.indicator_levels[row][(column ^ 7) as usize] == 0
+                });
+                zero_samples = if prior_band_off { zero_samples + 1 } else { 0 };
+                if zero_samples >= 3 {
+                    break;
+                }
+                let elapsed = guest_ms.wrapping_sub(drain_start);
+                if elapsed >= 1_000 {
+                    return Err(format!(
+                        "previous L6max SIGNAL band did not clear within {elapsed} guest ms"
+                    ));
+                }
+                if guest_ms.wrapping_sub(last_seed) >= 40 {
+                    qmp.stop().map_err(|error| error.to_string())?;
+                    debugger
+                        .write(0x2001_50e0, &zeroes)
+                        .map_err(|error| error.to_string())?;
+                    qmp.resume().map_err(|error| error.to_string())?;
+                    last_seed = guest_ms;
+                }
+                thread::sleep(Duration::from_millis(1));
+            }
+        }
+        let mut stage_evidence = Vec::new();
+        for value in levels {
+            let mut bytes = Vec::with_capacity(12 * 4);
+            for channel in 0..12 {
+                let channel_value = if accumulator_range.contains(&channel) {
+                    value
+                } else {
+                    0.0
+                };
+                bytes.extend_from_slice(&channel_value.to_le_bytes());
+            }
+            let mut seed = || -> Result<(), String> {
+                qmp.stop().map_err(|error| error.to_string())?;
+                debugger
+                    .write(0x2001_50e0, &bytes)
+                    .map_err(|error| error.to_string())?;
+                qmp.resume().map_err(|error| error.to_string())?;
+                Ok(())
+            };
+            seed()?;
+            let stage_start = inputs.panel.snapshot().guest_ms;
+            let mut last_seed = stage_start;
+            let mut samples: Vec<[u8; 8]> = Vec::new();
+            loop {
+                let panel = session.poll().map_err(|error| error.to_string())?;
+                let guest_ms = inputs.panel.snapshot().guest_ms;
+                if guest_ms.wrapping_sub(last_seed) >= 40 {
+                    seed()?;
+                    last_seed = guest_ms;
+                }
+                let sample = std::array::from_fn(|channel| {
+                    let (row, column) = l6max_host::indicators::LED_PINS[52 + channel];
+                    panel.indicator_levels[row][(column ^ 7) as usize]
+                });
+                samples.push(sample);
+                if guest_ms.wrapping_sub(stage_start) >= 1_000 {
+                    break;
+                }
+                if Instant::now() >= deadline
+                    || guest_ms.wrapping_sub(started_guest) > guest_timeout_ms
+                {
+                    return Err(format!("timed out sampling {name} PWM"));
+                }
+                thread::sleep(Duration::from_millis(5));
+            }
+            let mean: [f64; 8] = std::array::from_fn(|channel| {
+                samples
+                    .iter()
+                    .map(|sample| sample[channel] as u64)
+                    .sum::<u64>() as f64
+                    / samples.len() as f64
+            });
+            stage_evidence.push(json!({"input_level":value,"sample_count":samples.len(),"signal_led_mean_levels":mean,"samples":samples}));
+        }
+        let medians = stage_evidence
+            .iter()
+            .map(|entry| {
+                entry["signal_led_mean_levels"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|value| value.as_f64().unwrap())
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        for channel in output_range.clone() {
+            for stage in 0..medians.len() {
+                if medians[stage][channel] == 0.0
+                    || (stage > 0 && medians[stage][channel] <= medians[stage - 1][channel])
+                {
+                    let details = medians.iter().map(|row| row[channel]).collect::<Vec<_>>();
+                    failures.push(format!("SIGNAL LED {} did not produce five distinct increasing sampled PWM levels in {name}: {details:?}", channel + 1));
+                }
+            }
+        }
+        sweep_evidence.push(json!({"group":name,"accumulator_indices":accumulator_range,"output_channels":output_range,"levels":stage_evidence}));
+    }
+    let evidence =
+        json!({"stimulus":"firmware_shared_channel_level_accumulators","sweeps":sweep_evidence});
+    fs::write(
+        options.logs.join("channel-signal-pwm.json"),
+        serde_json::to_vec_pretty(&evidence).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    if !failures.is_empty() {
+        return Err(failures.join("; "));
+    }
+    Ok(evidence)
+}
+
+fn run_l6_level_meter_pwm(
+    session: &Session,
+    options: &Options,
+    guest_timeout_ms: u32,
+    wall_timeout_s: u64,
+) -> Result<Value, String> {
+    use l6max_diagnostics::gdb::Gdb;
+    if session.engine.model() != l6fw::Model::L6 {
+        return Err("l6-level-meter-pwm requires L6 firmware".into());
+    }
+    let socket = options.gdb_socket.as_ref().ok_or("GDB is required")?;
+    let qmp = &session.engine.management[0];
+    let mut debugger = Gdb::connect(socket).map_err(|error| error.to_string())?;
+    // QEMU can report a paused VM after the GDB client attaches even though
+    // the scenario was running. Resume before measuring guest-time progress.
+    if !qmp
+        .query_status()
+        .map_err(|error| error.to_string())?
+        .running
+    {
+        qmp.resume().map_err(|error| error.to_string())?;
+    }
+    let inputs = session
+        .engine
+        .inputs
+        .as_ref()
+        .ok_or("headless panel input missing")?;
+
+    // Skip the long boot-time panel output sequence; the PWM probe exercises
+    // the task's normal meter loop and panel updates.
+    const TASK_ENTRY: u32 = 0x8002_b140;
+    const STARTUP_CALL: u32 = 0x8002_b150;
+    const THRESHOLD_BUILDER: u32 = 0x8002_6f88;
+    const TASK_PHASE: u32 = 0x801f_8e84;
+    const ACTIVE_GATES: u32 = 0x801f_8e74;
+    const CONVERTED_ACCUMULATORS: u32 = 0x801f_90b8;
+    const THRESHOLD_STAGES: [u32; 6] = [0, 1_500_000, 2_000_000, 3_000_000, 4_000_000, 6_000_000];
+    const STAGE_WINDOW_MS: u32 = 500;
+    const SETTLE_MS: u32 = 100;
+
+    let started_guest = inputs.panel.snapshot().guest_ms;
+    let deadline = Instant::now() + Duration::from_secs(wall_timeout_s);
+    let initial_gates = qmp
+        .read_memory(0, ACTIVE_GATES, 3)
+        .map_err(|error| error.to_string())?;
+    let initial_phase = u32::from_le_bytes(
+        qmp.read_memory(0, TASK_PHASE, 4)
+            .map_err(|error| error.to_string())?
+            .try_into()
+            .unwrap(),
+    );
+    qmp.stop().map_err(|error| error.to_string())?;
+    debugger
+        .breakpoint(TASK_ENTRY, true)
+        .map_err(|error| format!("setting LevelMeterLed task-entry breakpoint: {error}"))?;
+    if let Err(error) = debugger.continue_until_stop(Duration::from_secs(wall_timeout_s.min(30))) {
+        let status = qmp
+            .query_status()
+            .map(|status| status.status)
+            .unwrap_or_else(|read| format!("unavailable: {read}"));
+        qmp.resume().map_err(|resume| resume.to_string())?;
+        return Err(format!(
+            "LevelMeterLed task entry {TASK_ENTRY:#010x} was not reached within {}s (phase {initial_phase}, gates {initial_gates:02x?}, QEMU {status}): {error}; PWM probe was not run",
+            wall_timeout_s.min(30)
+        ));
+    }
+    let entry_pc = debugger
+        .read_register(15)
+        .map_err(|error| error.to_string())?
+        & !1;
+    if entry_pc != TASK_ENTRY {
+        qmp.resume().map_err(|error| error.to_string())?;
+        return Err(format!(
+            "LevelMeterLed entry breakpoint stopped at {entry_pc:#010x}, expected {TASK_ENTRY:#010x}"
+        ));
+    }
+    debugger
+        .breakpoint(TASK_ENTRY, false)
+        .map_err(|error| error.to_string())?;
+    qmp.stop().map_err(|error| error.to_string())?;
+    const NOP_PAIR: [u8; 4] = [0x00, 0xbf, 0x00, 0xbf];
+    debugger
+        .write(STARTUP_CALL, &NOP_PAIR)
+        .map_err(|error| format!("skipping the LevelMeterLed startup output sequence: {error}"))?;
+    let patched_call = qmp
+        .read_memory(0, STARTUP_CALL, NOP_PAIR.len())
+        .map_err(|error| error.to_string())?;
+    if patched_call != NOP_PAIR {
+        qmp.resume().map_err(|error| error.to_string())?;
+        return Err("could not verify the focused LevelMeterLed startup skip".into());
+    }
+    debugger
+        .write(ACTIVE_GATES, &[1, 1])
+        .map_err(|error| error.to_string())?;
+    debugger
+        .breakpoint(THRESHOLD_BUILDER, true)
+        .map_err(|error| format!("setting L6 meter threshold-builder breakpoint: {error}"))?;
+    if let Err(error) = debugger.continue_until_stop(Duration::from_secs(5)) {
+        let interrupt = debugger
+            .interrupt()
+            .unwrap_or_else(|interrupt| format!("interrupt failed: {interrupt}"));
+        let pc = debugger
+            .read_register(15)
+            .map(|register| format!("{:#x}", register & !1))
+            .unwrap_or_else(|read| format!("unavailable: {read}"));
+        let gates = qmp
+            .read_memory(0, ACTIVE_GATES, 2)
+            .map(|bytes| format!("{bytes:02x?}"))
+            .unwrap_or_else(|read| format!("unavailable: {read}"));
+        let phase = qmp
+            .read_memory(0, 0x801f_8e84, 4)
+            .map(|bytes| format!("{bytes:02x?}"))
+            .unwrap_or_else(|read| format!("unavailable: {read}"));
+        qmp.resume().map_err(|resume| resume.to_string())?;
+        return Err(format!(
+            "waiting for L6 meter threshold builder failed: {error}; stop={interrupt}; PC={pc}; gates={gates}; phase={phase}"
+        ));
+    }
+    if debugger
+        .read_register(15)
+        .map_err(|error| error.to_string())?
+        & !1
+        != THRESHOLD_BUILDER
+    {
+        return Err("L6 meter threshold-builder breakpoint was missed".into());
+    }
+    let mut stage_evidence = Vec::new();
+    for value in THRESHOLD_STAGES {
+        let bytes: Vec<u8> = (0..10).flat_map(|_| value.to_le_bytes()).collect();
+        let stage_start = inputs.panel.snapshot().guest_ms;
+        let mut sums = [[0_u64; 24]; 8];
+        let mut sample_count = 0_u64;
+        loop {
+            debugger
+                .write(ACTIVE_GATES, &[1, 1])
+                .map_err(|error| error.to_string())?;
+            debugger
+                .write(CONVERTED_ACCUMULATORS, &bytes)
+                .map_err(|error| error.to_string())?;
+            let injected = qmp
+                .read_memory(0, CONVERTED_ACCUMULATORS, bytes.len())
+                .map_err(|error| error.to_string())?;
+            if injected != bytes {
+                return Err(format!(
+                    "L6 meter accumulator injection failed at {value}: wrote {bytes:02x?}, read {injected:02x?}"
+                ));
+            }
+            debugger
+                .continue_until_stop(Duration::from_secs(10))
+                .map_err(|error| format!("advancing L6 meter task at {value}: {error}"))?;
+            if debugger
+                .read_register(15)
+                .map_err(|error| error.to_string())?
+                & !1
+                != THRESHOLD_BUILDER
+            {
+                return Err("L6 meter threshold-builder breakpoint was missed".into());
+            }
+            let panel = session.poll().map_err(|error| error.to_string())?;
+            let guest_ms = inputs.panel.snapshot().guest_ms;
+            let elapsed = guest_ms.wrapping_sub(stage_start);
+            if elapsed >= SETTLE_MS {
+                for (row, values) in panel.indicator_levels.iter().enumerate() {
+                    for (column, level) in values.iter().enumerate() {
+                        sums[row][column] += u64::from(*level);
+                    }
+                }
+                sample_count += 1;
+            }
+            if elapsed >= STAGE_WINDOW_MS {
+                break;
+            }
+            if Instant::now() >= deadline || guest_ms.wrapping_sub(started_guest) > guest_timeout_ms
+            {
+                return Err(format!("timed out sampling L6 level-meter PWM at {value}"));
+            }
+        }
+        if sample_count == 0 {
+            return Err("L6 level-meter PWM captured no panel samples".into());
+        }
+        let group_a_records = qmp
+            .read_memory(0, 0x8062_93dc, 12)
+            .map_err(|error| error.to_string())?;
+        let group_b_records = qmp
+            .read_memory(0, 0x8062_93e8, 12)
+            .map_err(|error| error.to_string())?;
+        let threshold_masks_and_codes = qmp
+            .read_memory(0, 0x801f_8e88, 0x32)
+            .map_err(|error| error.to_string())?;
+        let mean_levels: [[f64; 24]; 8] = std::array::from_fn(|row| {
+            std::array::from_fn(|column| sums[row][column] as f64 / sample_count as f64)
+        });
+        stage_evidence.push(json!({
+            "input_level": value,
+            "sample_count": sample_count,
+            "group_a_records": group_a_records,
+            "group_b_records": group_b_records,
+            "threshold_masks_and_codes": threshold_masks_and_codes,
+            "mean_levels": mean_levels,
+        }));
+    }
+    // Treat this as a diagnostic only when the controlled input reaches a
+    // panel output. A stopped task or an unmapped/uninitialized output must
+    // never report a passing PWM result.
+    let stage_means = stage_evidence
+        .iter()
+        .map(|stage| {
+            stage["mean_levels"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|row| {
+                    row.as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|level| level.as_f64().unwrap())
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    let responsive_cells = (0..8)
+        .flat_map(|row| (0..24).map(move |column| (row, column)))
+        .filter(|&(row, column)| {
+            let levels = stage_means
+                .iter()
+                .map(|stage| stage[row][column])
+                .collect::<Vec<_>>();
+            levels.first() == Some(&0.0)
+                && levels[1..].iter().all(|level| *level > 0.0)
+                && levels.windows(2).all(|pair| pair[1] > pair[0])
+        })
+        .count();
+    debugger
+        .breakpoint(THRESHOLD_BUILDER, false)
+        .map_err(|error| error.to_string())?;
+    qmp.resume().map_err(|error| error.to_string())?;
+
+    let evidence = json!({
+        "stimulus": "l6_level_meter_threshold_builder_inputs",
+        "setup": "boot_time_panel_output_sequence_skipped",
+        "responsive_cells": responsive_cells,
+        "samples_per_stage": stage_evidence,
+    });
+    fs::write(
+        options.logs.join("l6-level-meter-pwm.json"),
+        serde_json::to_vec_pretty(&evidence).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    if responsive_cells == 0 {
+        return Err("L6 meter stimulus produced no panel cell with five distinct increasing nonzero duty levels; measurements saved to l6-level-meter-pwm.json".into());
+    }
+    Ok(evidence)
 }
 
 fn run_l6max_panel_key_map(session: &Session, wall_timeout_s: u64) -> Result<Value, String> {
@@ -3083,6 +3545,7 @@ impl State {
             }
             Operation::L6MainGpioEvent { target, event } => {
                 const EVENT_SUBMIT: u32 = 0x80020ca0;
+                const SOUND_PAD_EVENT_HANDLER: u32 = 0x800408b0;
                 let inputs = &session.engine.inputs.as_ref().unwrap().main;
                 let qmp = &session.engine.management[0];
                 let socket = options
@@ -3120,7 +3583,38 @@ impl State {
                     )
                     .into());
                 }
-                gdb.breakpoint(EVENT_SUBMIT, false)?;
+                let dispatch_arguments = if (0x15..=0x18).contains(&event) {
+                    gdb.breakpoint(EVENT_SUBMIT, false)?;
+                    gdb.breakpoint(SOUND_PAD_EVENT_HANDLER, true)?;
+                    match gdb.continue_until_stop(Duration::from_secs(15)) {
+                        Ok(_) => {
+                            let dispatch_pc = gdb.read_register(15)? & !1;
+                            if dispatch_pc != SOUND_PAD_EVENT_HANDLER {
+                                return Err(format!(
+                                    "L6 MAIN target {target} stopped at {dispatch_pc:#010x}, expected sound-pad event handler {SOUND_PAD_EVENT_HANDLER:#010x}"
+                                )
+                                .into());
+                            }
+                            let dispatch_args = (0..3)
+                                .map(|register| gdb.read_register(register))
+                                .collect::<Result<Vec<_>, _>>()?;
+                            gdb.breakpoint(SOUND_PAD_EVENT_HANDLER, false)?;
+                            Some(dispatch_args)
+                        }
+                        Err(error) => {
+                            let _ = gdb.interrupt();
+                            let _ = gdb.breakpoint(SOUND_PAD_EVENT_HANDLER, false);
+                            let _ = qmp.resume();
+                            return Err(format!(
+                                "L6 MAIN target {target} submitted event {event:#04x} but did not reach the sound-pad event handler: {error}"
+                            )
+                            .into());
+                        }
+                    }
+                } else {
+                    gdb.breakpoint(EVENT_SUBMIT, false)?;
+                    None
+                };
                 qmp.resume()?;
                 let applied = inputs.snapshot().applied;
                 inputs.up(target)?;
@@ -3134,7 +3628,9 @@ impl State {
                     100,
                     Instant::now() + Duration::from_secs(wall_timeout_s),
                 )?;
-                Ok(json!({"target":target,"event":event,"arguments":args}))
+                Ok(
+                    json!({"target":target,"event":event,"arguments":args,"dispatch_arguments":dispatch_arguments}),
+                )
             }
             Operation::L6UsbStartup => {
                 Ok(
@@ -3157,6 +3653,19 @@ impl State {
             Operation::L6maxPanelKeyMap => {
                 Ok(run_l6max_panel_key_map(session, wall_timeout_s)
                     .map_err(std::io::Error::other)?)
+            }
+            Operation::L6maxChannelSignalPwm => Ok(run_l6max_channel_signal_pwm(
+                session,
+                options,
+                guest_timeout_ms,
+                wall_timeout_s,
+            )
+            .map_err(std::io::Error::other)?),
+            Operation::L6LevelMeterPwm => {
+                Ok(
+                    run_l6_level_meter_pwm(session, options, guest_timeout_ms, wall_timeout_s)
+                        .map_err(std::io::Error::other)?,
+                )
             }
             Operation::Restart => Err("restart is supervised by the session runner".into()),
             Operation::PowerPress { hold_ms, powered } => {
@@ -3567,11 +4076,22 @@ impl State {
                     wall_timeout_s,
                 )
             }
-            Operation::SoundPadPlayback { pad, target } => run_sound_pad_playback(
+            Operation::SoundPadPlayback {
+                pad,
+                target,
+                assignment,
+                require_pad_led_change,
+                playback_window_ms,
+                require_stereo_meter,
+            } => run_sound_pad_playback(
                 session,
                 options,
                 pad,
                 target,
+                assignment,
+                require_pad_led_change,
+                playback_window_ms,
+                require_stereo_meter,
                 guest_timeout_ms,
                 wall_timeout_s,
             ),
@@ -4827,18 +5347,6 @@ fn run_editor_pad_assignments(
         deadline,
     )?;
     require_editor_reply(&global, &[0xf0, 0x52, 0, 0, 0x2a], "global settings")?;
-    let keep_alive = editor_exchange(
-        session,
-        &usb,
-        endpoints,
-        &mut encoder,
-        &[0xf0, 0x52, 0, 0, 0x31, 0x0b, 0xf7],
-        250,
-        start_guest,
-        guest_timeout_ms,
-        deadline,
-    )?;
-    require_editor_reply(&keep_alive, &[0xf0, 0x52, 0, 0, 0, 0x0b], "keep-alive")?;
     let app_version = editor_exchange(
         session,
         &usb,
@@ -4873,6 +5381,23 @@ fn run_editor_pad_assignments(
         &[0xf0, 0x52, 0, 0, 0x67, 0x00],
         "SD card information",
     )?;
+
+    // Start keep-alive after initialization, matching the Editor's sequence.
+    // The inspected L6 1.10 fixture does not reply to 31 0B; L6max does.
+    if session.engine.model() == l6fw::Model::L6max {
+        let keep_alive = editor_exchange(
+            session,
+            &usb,
+            endpoints,
+            &mut encoder,
+            &[0xf0, 0x52, 0, 0, 0x31, 0x0b, 0xf7],
+            500,
+            start_guest,
+            guest_timeout_ms,
+            deadline,
+        )?;
+        require_editor_reply(&keep_alive, &[0xf0, 0x52, 0, 0, 0, 0x0b], "keep-alive")?;
+    }
 
     let mut assignments = Vec::new();
     for pad in 0u8..4 {
@@ -5345,6 +5870,10 @@ fn run_sound_pad_playback(
     options: &Options,
     pad: u8,
     target: u32,
+    assignment: PadAssignmentSource,
+    require_pad_led_change: bool,
+    playback_window_ms: u32,
+    require_stereo_meter: bool,
     guest_timeout_ms: u32,
     wall_timeout_s: u64,
 ) -> Result<Value, Box<dyn std::error::Error>> {
@@ -5366,6 +5895,28 @@ fn run_sound_pad_playback(
         .inputs
         .as_ref()
         .ok_or_else(|| std::io::Error::other("sound-pad-playback has no panel inputs"))?;
+    let assignment_ready = if model == l6fw::Model::L6 {
+        let address = 0x8044_337f + u32::from(pad);
+        let start_guest = inputs.panel.snapshot().guest_ms;
+        let deadline = Instant::now() + Duration::from_secs(wall_timeout_s.min(30));
+        loop {
+            let pending = session.engine.management[0].read_memory(0, address, 1)?[0];
+            if pending == 0 {
+                break json!({"address":format!("{address:#010x}"),"pending":pending});
+            }
+            let elapsed_guest = inputs.panel.snapshot().guest_ms.wrapping_sub(start_guest);
+            if elapsed_guest >= guest_timeout_ms || Instant::now() >= deadline {
+                return Err(std::io::Error::other(format!(
+                    "L6 saved pad {} assignment is still pending ({pending:#04x}) at {address:#010x}; refusing to press before the file assignment completes",
+                    pad + 1
+                ))
+                .into());
+            }
+            wait_guest_duration(session, 100, deadline).map_err(std::io::Error::other)?;
+        }
+    } else {
+        json!({"model":"l6max","source":format!("{assignment:?}")})
+    };
     let trace_path = options.logs.join("engine.trace");
     let audio_prefix = "l6 audio TX samples sai=00384000";
     let trace_before = fs::read_to_string(&trace_path)?;
@@ -5374,9 +5925,17 @@ fn run_sound_pad_playback(
         .filter(|line| line.starts_with(audio_prefix))
         .count();
     let start_guest = inputs.panel.snapshot().guest_ms;
+    let mut last_indicator_sample_ms = start_guest;
+    let initial_panel = session.poll().map_err(std::io::Error::other)?;
+    let mut indicator_samples = vec![json!({
+        "elapsed_guest_ms": 0,
+        "master_meter": master_meter_levels(model, initial_panel.indicator_levels),
+        "indicator_levels": initial_panel.indicator_levels,
+    })];
     let wall_deadline = Instant::now() + Duration::from_secs(wall_timeout_s);
     let guest_deadline_ms = guest_timeout_ms;
-    let led_before = sound_pad_led(model, inputs.panel.snapshot().indicators, pad);
+    let led_before = require_pad_led_change
+        .then(|| sound_pad_led(model, inputs.panel.snapshot().indicators, pad));
     let applied_before = inputs.main.snapshot().applied;
     inputs
         .main
@@ -5386,6 +5945,15 @@ fn run_sound_pad_playback(
     let observe_until_guest_ms = 400u32;
     loop {
         let data = session.poll().map_err(std::io::Error::other)?;
+        let panel = inputs.panel.snapshot();
+        if panel.guest_ms != last_indicator_sample_ms {
+            last_indicator_sample_ms = panel.guest_ms;
+            indicator_samples.push(json!({
+                "elapsed_guest_ms": panel.guest_ms.wrapping_sub(start_guest),
+                "master_meter": master_meter_levels(model, data.indicator_levels),
+                "indicator_levels": data.indicator_levels,
+            }));
+        }
         let main = inputs.main.snapshot();
         if !main.connected {
             return Err(std::io::Error::other(format!(
@@ -5394,7 +5962,9 @@ fn run_sound_pad_playback(
             .into());
         }
         if main.applied > applied_before {
-            pad_led_changed |= sound_pad_led(model, data.indicators, pad) != led_before;
+            if let Some(led_before) = led_before {
+                pad_led_changed |= sound_pad_led(model, data.indicators, pad) != led_before;
+            }
             let elapsed = inputs.panel.snapshot().guest_ms.wrapping_sub(start_guest);
             if elapsed >= observe_until_guest_ms {
                 break;
@@ -5414,9 +5984,17 @@ fn run_sound_pad_playback(
         .main
         .up(target)
         .map_err(|error| std::io::Error::other(error.to_string()))?;
-    let playback_window_ms = 6000u32;
     loop {
         let data = session.poll().map_err(std::io::Error::other)?;
+        let panel = inputs.panel.snapshot();
+        if panel.guest_ms != last_indicator_sample_ms {
+            last_indicator_sample_ms = panel.guest_ms;
+            indicator_samples.push(json!({
+                "elapsed_guest_ms": panel.guest_ms.wrapping_sub(start_guest),
+                "master_meter": master_meter_levels(model, data.indicator_levels),
+                "indicator_levels": data.indicator_levels,
+            }));
+        }
         let main = inputs.main.snapshot();
         if !main.connected {
             return Err(std::io::Error::other(format!(
@@ -5424,7 +6002,9 @@ fn run_sound_pad_playback(
             ))
             .into());
         }
-        pad_led_changed |= sound_pad_led(model, data.indicators, pad) != led_before;
+        if let Some(led_before) = led_before {
+            pad_led_changed |= sound_pad_led(model, data.indicators, pad) != led_before;
+        }
         let elapsed = inputs.panel.snapshot().guest_ms.wrapping_sub(start_guest);
         if elapsed >= playback_window_ms && main.applied > released_before {
             break;
@@ -5459,22 +6039,46 @@ fn run_sound_pad_playback(
                 "words": field("words")?,
                 "nonzero": field("nonzero")?,
                 "underruns": field("underruns")?,
+                "first": line.split_whitespace().find_map(|part| part.strip_prefix("first="))?,
+                "last": line.split_whitespace().find_map(|part| part.strip_prefix("last="))?,
                 "at_ms": at_ms,
             }))
         })
         .collect::<Vec<_>>();
-    let nonzero_audio = samples
-        .iter()
-        .any(|sample| sample["nonzero"].as_u64().is_some_and(|count| count > 0));
+    let nonzero_audio = samples.iter().any(|sample| {
+        let nonzero = sample["nonzero"].as_u64().unwrap_or(0);
+        let words = sample["words"].as_u64().unwrap_or(0);
+        let first = sample["first"].as_str().unwrap_or_default();
+        let last = sample["last"].as_str().unwrap_or_default();
+        nonzero > 0 && words > 0 && first != "ffffffff" && last != "ffffffff"
+    });
+    let isolated_levels = std::array::from_fn::<_, 2, _>(|side| {
+        let mut seen = [false; 7];
+        for sample in &indicator_samples {
+            let meter = &sample["master_meter"];
+            let level = meter[side].as_u64().unwrap_or(0) as usize;
+            if meter[1 - side].as_u64() == Some(0) && (2..=6).contains(&level) {
+                seen[level] = true;
+            }
+        }
+        (2..=6).filter(|&level| seen[level]).collect::<Vec<_>>()
+    });
+    let left_only = isolated_levels[0].len() >= 2;
+    let right_only = isolated_levels[1].len() >= 2;
     let evidence = json!({
+        "stereo_meter": {"required": require_stereo_meter, "left_only": left_only, "right_only": right_only, "isolated_levels": isolated_levels},
         "pad": pad + 1,
         "target": target,
+        "assignment_source": format!("{assignment:?}"),
+        "assignment_ready": assignment_ready,
         "led": if model == l6fw::Model::L6 {
             usize::from(pad)
         } else {
             27 + usize::from(pad)
         },
+        "pad_led_check_enabled": require_pad_led_change,
         "pad_led_changed_from_baseline": pad_led_changed,
+        "indicator_samples": indicator_samples,
         "audio_samples": samples,
         "nonzero_audio_after_press": nonzero_audio,
         "guest_window_ms": inputs.panel.snapshot().guest_ms.wrapping_sub(start_guest),
@@ -5483,12 +6087,22 @@ fn run_sound_pad_playback(
         options.logs.join("sound-pad-playback.json"),
         serde_json::to_vec_pretty(&evidence)?,
     )?;
-    if !nonzero_audio || !pad_led_changed {
+    if !nonzero_audio
+        || (require_pad_led_change && !pad_led_changed)
+        || (require_stereo_meter && !(left_only && right_only))
+    {
         return Err(std::io::Error::other(format!(
-            "sound-pad playback assertion failed: audio={nonzero_audio}, pad LED changed={pad_led_changed}, evidence={evidence}"
+            "sound-pad playback assertion failed: audio={nonzero_audio}, pad LED changed={pad_led_changed}, pad LED required={require_pad_led_change}, stereo meter required={require_stereo_meter}, left only={left_only}, right only={right_only}; details saved to sound-pad-playback.json"
         )).into());
     }
     Ok(evidence)
+}
+
+fn master_meter_levels(model: l6fw::Model, levels: [[u8; 24]; 8]) -> [u8; 2] {
+    match model {
+        l6fw::Model::L6 => l6max_host::indicators::l6_master_meter_levels(levels),
+        l6fw::Model::L6max => l6max_host::indicators::l6max_master_meter_levels(levels),
+    }
 }
 
 fn run_l6_recorder_playback(
@@ -5538,12 +6152,25 @@ fn run_l6_recorder_playback(
         .gdb_socket
         .as_ref()
         .ok_or_else(|| std::io::Error::other("l6-recorder-playback requires GDB"))?;
-    let mut debugger =
-        l6max_diagnostics::gdb::Gdb::connect(gdb_socket).map_err(std::io::Error::other)?;
-    qmp.stop().map_err(std::io::Error::other)?;
-    debugger
-        .breakpoint(0x8002_0ca0, true)
-        .map_err(std::io::Error::other)?;
+    let mut debugger = l6max_diagnostics::gdb::Gdb::connect(gdb_socket).map_err(|error| {
+        std::io::Error::other(format!("connecting recorder GDB socket: {error}"))
+    })?;
+    qmp.stop().map_err(|error| {
+        std::io::Error::other(format!(
+            "stopping QEMU before recorder breakpoint setup: {error}"
+        ))
+    })?;
+    debugger.breakpoint(0x8002_c9d8, true).map_err(|error| {
+        std::io::Error::other(format!(
+            "setting L6 system-event dispatcher breakpoint: {error}"
+        ))
+    })?;
+    debugger.breakpoint(0x8000_8a08, true).map_err(|error| {
+        std::io::Error::other(format!("setting L6 Play handler breakpoint: {error}"))
+    })?;
+    debugger.breakpoint(0x8004_b890, true).map_err(|error| {
+        std::io::Error::other(format!("setting L6 recorder callback breakpoint: {error}"))
+    })?;
     let start_guest_ms = inputs.panel.snapshot().guest_ms;
     let before_applied = inputs.main.snapshot().applied;
     inputs
@@ -5573,32 +6200,40 @@ fn run_l6_recorder_playback(
     debugger
         .continue_until_stop(Duration::from_secs(10))
         .map_err(|error| {
-            std::io::Error::other(format!("waiting for L6 Play submit event: {error}"))
+            std::io::Error::other(format!("waiting for L6 system-event dispatcher: {error}"))
         })?;
-    let event_pc = debugger.read_register(15).map_err(std::io::Error::other)? & !1;
-    let event_args = (0..4)
-        .map(|register| debugger.read_register(register))
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(std::io::Error::other)?;
-    if event_pc != 0x8002_0ca0 || event_args.get(2) != Some(&0x20) {
+    let dispatcher_pc = debugger.read_register(15).map_err(std::io::Error::other)? & !1;
+    let event_pointer = debugger.read_register(0).map_err(std::io::Error::other)?;
+    let event = qmp
+        .read_memory(0, event_pointer, 20)
+        .map_err(|error| std::io::Error::other(format!("reading dispatched L6 event: {error}")))?;
+    let event_state = u32::from_le_bytes(event[0..4].try_into().unwrap());
+    let event_class = u32::from_le_bytes(event[4..8].try_into().unwrap());
+    let event_code = u32::from_le_bytes(event[8..12].try_into().unwrap());
+    if dispatcher_pc != 0x8002_c9d8 {
         return Err(std::io::Error::other(format!(
-            "L6 Play did not submit event 0x20 at 0x80020ca0 (pc={event_pc:#010x}, args={event_args:?})"
-        ))
-        .into());
+            "L6 Play event did not reach class-0 dispatcher (pc={dispatcher_pc:#010x}, event={event:02x?})"
+        )).into());
+    }
+    if event_state != 0 || event_class != 0 || event_code != 0x20 {
+        return Err(std::io::Error::other(format!(
+            "L6 class-0 dispatcher received an unexpected event (state={event_state}, class={event_class}, code={event_code:#x}, bytes={event:02x?})"
+        )).into());
     }
     debugger
-        .breakpoint(0x8002_0ca0, false)
-        .map_err(std::io::Error::other)?;
-    debugger
-        .breakpoint(0x8000_8a08, true)
-        .map_err(std::io::Error::other)?;
-    debugger
         .continue_until_stop(Duration::from_secs(10))
-        .map_err(std::io::Error::other)?;
+        .map_err(|error| std::io::Error::other(format!("waiting for L6 Play handler: {error}")))?;
     let handler_pc = debugger.read_register(15).map_err(std::io::Error::other)? & !1;
     let handler_argument = debugger.read_register(0).map_err(std::io::Error::other)?;
-    let mode = u32::from_le_bytes(qmp.read_memory(0, 0x8057_8ebc, 4)?.try_into().unwrap());
-    let selection_key = qmp.read_memory(0, 0x8061_01a8, 8)?;
+    let mode = u32::from_le_bytes(
+        qmp.read_memory(0, 0x8057_8ebc, 4)
+            .map_err(|error| std::io::Error::other(format!("reading L6 recorder mode: {error}")))?
+            .try_into()
+            .unwrap(),
+    );
+    let selection_key = qmp.read_memory(0, 0x8061_01a8, 8).map_err(|error| {
+        std::io::Error::other(format!("reading selected L6 recording key: {error}"))
+    })?;
     if handler_pc != 0x8000_8a08
         || handler_argument != 1
         || mode != 0
@@ -5610,14 +6245,10 @@ fn run_l6_recorder_playback(
         .into());
     }
     debugger
-        .breakpoint(0x8000_8a08, false)
-        .map_err(std::io::Error::other)?;
-    debugger
-        .breakpoint(0x8004_b890, true)
-        .map_err(std::io::Error::other)?;
-    debugger
         .continue_until_stop(Duration::from_secs(10))
-        .map_err(std::io::Error::other)?;
+        .map_err(|error| {
+            std::io::Error::other(format!("waiting for L6 recorder callback: {error}"))
+        })?;
     let callback_pc = debugger.read_register(15).map_err(std::io::Error::other)? & !1;
     if callback_pc != 0x8004_b890 {
         return Err(std::io::Error::other(format!(
@@ -5628,7 +6259,9 @@ fn run_l6_recorder_playback(
     debugger
         .breakpoint(0x8004_b890, false)
         .map_err(std::io::Error::other)?;
-    qmp.resume().map_err(std::io::Error::other)?;
+    qmp.resume().map_err(|error| {
+        std::io::Error::other(format!("resuming QEMU after L6 recorder callback: {error}"))
+    })?;
     wait_guest_duration(session, POST_PRESS_SETTLE_MS, wall_deadline)
         .map_err(std::io::Error::other)?;
     let release_before = inputs.main.snapshot().applied;
@@ -5649,10 +6282,16 @@ fn run_l6_recorder_playback(
         }
         thread::sleep(Duration::from_millis(5));
     }
-    qmp.stop().map_err(std::io::Error::other)?;
-    let tcd = qmp.read_memory(0, 0x400e_91c0, 32)?;
+    qmp.stop().map_err(|error| {
+        std::io::Error::other(format!("stopping QEMU for L6 SAI DMA inspection: {error}"))
+    })?;
+    let tcd = qmp.read_memory(0, 0x400e_91c0, 32).map_err(|error| {
+        std::io::Error::other(format!("reading L6 SAI channel-14 TCD: {error}"))
+    })?;
     let source = u32::from_le_bytes(tcd[0..4].try_into().unwrap());
-    let source_data = qmp.read_memory(0, source, 16)?;
+    let source_data = qmp.read_memory(0, source, 16).map_err(|error| {
+        std::io::Error::other(format!("reading L6 SAI channel-14 DMA source: {error}"))
+    })?;
     let source_words = source_data
         .chunks_exact(4)
         .map(|word| u32::from_le_bytes(word.try_into().unwrap()))
@@ -5682,7 +6321,8 @@ fn run_l6_recorder_playback(
     let evidence = json!({
         "target": target,
         "guest_window_ms": inputs.panel.snapshot().guest_ms.wrapping_sub(start_guest_ms),
-        "event": event_args,
+        "dispatched_event_pointer": event_pointer,
+        "dispatched_event": event,
         "handler_argument": handler_argument,
         "recorder_mode": mode,
         "selection_key": selection_key,
@@ -5774,6 +6414,9 @@ fn refresh_editor_session(
     guest_timeout_ms: u32,
     wall_deadline: Instant,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    if session.engine.model() == l6fw::Model::L6 {
+        return Ok(());
+    }
     let replies = editor_exchange(
         session,
         usb,
@@ -5785,7 +6428,8 @@ fn refresh_editor_session(
         guest_timeout_ms,
         wall_deadline,
     )?;
-    require_editor_reply(&replies, &[0xf0, 0x52, 0, 0, 0, 0x0b], "keep-alive")
+    require_editor_reply(&replies, &[0xf0, 0x52, 0, 0, 0, 0x0b], "keep-alive")?;
+    Ok(())
 }
 
 fn require_editor_reply(

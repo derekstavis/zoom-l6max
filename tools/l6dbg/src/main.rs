@@ -3,6 +3,7 @@ mod input;
 mod midi;
 mod popup_trigger;
 mod uart_startup;
+use l6max_diagnostics::gdb::Gdb;
 use l6max_host::{engine::Options, headless::Headless, indicators::rings, panel::PanelData};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -53,6 +54,18 @@ enum Step {
         address: u32,
         length: usize,
     },
+    MemoryWrite {
+        name: String,
+        address: u32,
+        bytes: Vec<u8>,
+    },
+    FirmwareCall {
+        name: String,
+        address: u32,
+        args: Vec<u32>,
+        #[serde(default = "call_timeout_ms")]
+        timeout_ms: u32,
+    },
     Trace {
         name: String,
         contains: String,
@@ -66,6 +79,9 @@ fn hold() -> u32 {
 fn trace_limit() -> usize {
     100
 }
+fn call_timeout_ms() -> u32 {
+    2_000
+}
 
 impl Recipe {
     fn load(path: &Path) -> Result<Self, String> {
@@ -77,19 +93,22 @@ impl Recipe {
         if recipe.version != 1
             || !["l6", "l6max"].contains(&recipe.model.as_str())
             || recipe.step.is_empty()
-            || recipe.step.len() > 1000
+            || recipe.step.len() > 2000
             || recipe.wall_timeout_s == 0
             || recipe.wall_timeout_s > 3600
         {
             return Err(
-                "recipe requires version 1, a model, 1..1000 steps and a wall timeout of 1..3600 seconds"
+                "recipe requires version 1, a model, 1..2000 steps and a wall timeout of 1..3600 seconds"
                     .into(),
             );
         }
         let mut names = BTreeSet::new();
         for step in &recipe.step {
-            if let Step::Snapshot { name } | Step::Memory { name, .. } | Step::Trace { name, .. } =
-                step
+            if let Step::Snapshot { name }
+            | Step::Memory { name, .. }
+            | Step::MemoryWrite { name, .. }
+            | Step::FirmwareCall { name, .. }
+            | Step::Trace { name, .. } = step
             {
                 if !names.insert(name) {
                     return Err("observation names must be unique".into());
@@ -130,6 +149,46 @@ impl Recipe {
                             "memory requires a MAIN SHA-256 guard and a valid 1..4096-byte range"
                                 .into(),
                         );
+                    }
+                }
+                Step::MemoryWrite {
+                    name,
+                    address,
+                    bytes,
+                } => {
+                    validate_name(name)?;
+                    let end = address.checked_add(bytes.len() as u32);
+                    if recipe
+                        .main_sha256
+                        .as_ref()
+                        .is_none_or(|v| v.len() != 64 || !v.bytes().all(|b| b.is_ascii_hexdigit()))
+                        || bytes.is_empty()
+                        || bytes.len() > 256
+                        || *address < 0x8000_0000
+                        || end.is_none_or(|end| end > 0x8200_0000)
+                    {
+                        return Err("memory-write requires a MAIN SHA-256 guard and a 1..256-byte range in MAIN RAM (0x80000000..0x82000000)".into());
+                    }
+                }
+                Step::FirmwareCall {
+                    name,
+                    address,
+                    args,
+                    timeout_ms,
+                } => {
+                    validate_name(name)?;
+                    if recipe
+                        .main_sha256
+                        .as_ref()
+                        .is_none_or(|v| v.len() != 64 || !v.bytes().all(|b| b.is_ascii_hexdigit()))
+                        || *address < 0x8000_0000
+                        || *address >= 0x8020_0000
+                        || address & 1 != 0
+                        || !(1..=5).contains(&args.len())
+                        || *timeout_ms == 0
+                        || *timeout_ms > 10_000
+                    {
+                        return Err("firmware-call requires a MAIN SHA-256 guard, an even MAIN address, 1..5 arguments and a timeout of 1..10000 ms".into());
                     }
                 }
                 Step::Snapshot { name } => validate_name(name)?,
@@ -202,6 +261,25 @@ fn wait(guest: &Headless, ms: u32, deadline: Instant) -> Result<(), String> {
     }
     Ok(())
 }
+fn connect_gdb(path: &Path, deadline: Instant) -> Result<Gdb, String> {
+    let mut last_error = None;
+    while Instant::now() < deadline {
+        match Gdb::connect(path) {
+            Ok(debugger) => return Ok(debugger),
+            Err(error) => {
+                last_error = Some(error);
+                thread::sleep(Duration::from_millis(50));
+            }
+        }
+    }
+    Err(format!(
+        "could not connect to QEMU GDB socket {}: {}",
+        path.display(),
+        last_error
+            .map(|error| error.to_string())
+            .unwrap_or_else(|| "diagnostic wall timeout".into())
+    ))
+}
 fn run(recipe_path: &Path, options: Options) -> Result<Value, String> {
     let recipe = Recipe::load(recipe_path)?;
     let main = main_image(&options)?;
@@ -217,8 +295,35 @@ fn run(recipe_path: &Path, options: Options) -> Result<Value, String> {
             return Err("MAIN firmware does not match recipe guard".into());
         }
     }
+    let needs_gdb = recipe
+        .step
+        .iter()
+        .any(|step| matches!(step, Step::MemoryWrite { .. } | Step::FirmwareCall { .. }));
+    let gdb_socket = if needs_gdb {
+        Some(
+            options
+                .gdb_socket
+                .as_deref()
+                .ok_or("memory-write requires --gdb-socket")?,
+        )
+    } else {
+        None
+    };
     let guest = Headless::start(&options)?;
     let deadline = Instant::now() + Duration::from_secs(recipe.wall_timeout_s);
+    let mut debugger = gdb_socket
+        .map(|socket| connect_gdb(socket, deadline))
+        .transpose()?;
+    if debugger.is_some() {
+        let management = &guest.engine.management[0];
+        if !management
+            .query_status()
+            .map_err(|error| error.to_string())?
+            .running
+        {
+            management.resume().map_err(|error| error.to_string())?;
+        }
+    }
     let mut events = Vec::new();
     let outcome = (|| -> Result<(), String> {
         for (index, step) in recipe.step.iter().enumerate() {
@@ -257,7 +362,7 @@ fn run(recipe_path: &Path, options: Options) -> Result<Value, String> {
                     )
                     .map_err(|e| e.to_string())?;
                     let visible = if actual_model == "l6" { 6 } else { 8 };
-                    json!({"action":"snapshot","name":name,"indicators":status.indicators,"rings":&rings(status.indicators)[..visible],"display_available":display_available,"display_ascii":format!("{name}.txt")})
+                    json!({"action":"snapshot","name":name,"indicators":status.indicators,"indicator_levels":status.indicator_levels,"ring_levels":&l6max_host::indicators::ring_levels(status.indicator_levels)[..visible],"rings":&rings(status.indicators)[..visible],"display_available":display_available,"display_ascii":format!("{name}.txt")})
                 }
                 Step::Memory {
                     name,
@@ -268,6 +373,50 @@ fn run(recipe_path: &Path, options: Options) -> Result<Value, String> {
                         .read_memory(0, *address, *length)
                         .map_err(|e| e.to_string())?;
                     json!({"action":"memory","name":name,"address":format!("{address:#010x}"),"bytes":data})
+                }
+                Step::MemoryWrite {
+                    name,
+                    address,
+                    bytes,
+                } => {
+                    let management = &guest.engine.management[0];
+                    management.stop().map_err(|error| error.to_string())?;
+                    let write_result = debugger
+                        .as_mut()
+                        .ok_or("missing GDB connection")?
+                        .write(*address, bytes)
+                        .map_err(|error| error.to_string());
+                    let readback_result = management
+                        .read_memory(0, *address, bytes.len())
+                        .map_err(|error| error.to_string());
+                    let resume_result = management.resume().map_err(|error| error.to_string());
+                    write_result?;
+                    let readback = readback_result?;
+                    resume_result?;
+                    if readback != *bytes {
+                        return Err(format!(
+                            "MAIN RAM write at {address:#010x} read back as {readback:02x?}, expected {bytes:02x?}"
+                        ));
+                    }
+                    json!({"action":"memory-write","name":name,"address":format!("{address:#010x}"),"bytes":bytes,"readback":readback})
+                }
+                Step::FirmwareCall {
+                    name,
+                    address,
+                    args,
+                    timeout_ms,
+                } => {
+                    let management = &guest.engine.management[0];
+                    management.stop().map_err(|error| error.to_string())?;
+                    let call_result = debugger
+                        .as_mut()
+                        .ok_or("missing GDB connection")?
+                        .call_thumb(*address, args, Duration::from_millis(*timeout_ms as u64))
+                        .map_err(|error| error.to_string());
+                    let resume_result = management.resume().map_err(|error| error.to_string());
+                    let stop = call_result?;
+                    resume_result?;
+                    json!({"action":"firmware-call","name":name,"address":format!("{address:#010x}"),"args":args,"stop":stop})
                 }
                 Step::Trace {
                     name,

@@ -1,0 +1,85 @@
+version = 1
+name = "l6-volume-meter-playback"
+models = ["l6"]
+main_sha256 = "827c7c5cb2a43cc3a011d4556462b8cb9539242f817ebeed7727d66a36c03799"
+fixture = "l6-volume-meter"
+backends = ["headless"]
+
+[[step]]
+action = "delay"
+guest_ms = 16000
+guest_timeout_ms = 21000
+wall_timeout_s = 900
+
+# Confirm the saved Pad 1 WAV path was loaded into MAIN's active assignment
+# record before pressing the pad. A cleared assignment-pending flag alone does
+# not prove that a WAV is assigned.
+[[step]]
+action = "expect-memory"
+address = 0x80445524
+bytes = [0x41, 0x00, 0x3a, 0x00, 0x5c, 0x00, 0x53, 0x00, 0x4f, 0x00, 0x55, 0x00, 0x4e, 0x00, 0x44, 0x00, 0x5f, 0x00, 0x50, 0x00, 0x41, 0x00, 0x44, 0x00, 0x5c, 0x00, 0x50, 0x00, 0x41, 0x00, 0x44, 0x00, 0x31, 0x00, 0x5c, 0x00, 0x54, 0x00, 0x4f, 0x00, 0x4e, 0x00, 0x45, 0x00, 0x32, 0x00, 0x32, 0x00, 0x30, 0x00, 0x2e, 0x00, 0x57, 0x00, 0x41, 0x00, 0x56, 0x00, 0x00, 0x00]
+guest_timeout_ms = 1000
+wall_timeout_s = 30
+
+# The SD assignment stores Pad 1's play mode; mode 0 is one-shot.
+[[step]]
+action = "expect-memory"
+address = 0x80441d8c
+bytes = [0]
+guest_timeout_ms = 1000
+wall_timeout_s = 30
+
+# Put the model's four analog output controls at their physical maximum before
+# playback: SOUND PAD, EFX RTN, MASTER and MONITOR.
+[[step]]
+action = "analog"
+channel = 1
+steps = 16
+
+[[step]]
+action = "expect-analog"
+channel = 1
+value = 1023
+
+[[step]]
+action = "analog"
+channel = 2
+steps = 16
+
+[[step]]
+action = "expect-analog"
+channel = 2
+value = 1023
+
+[[step]]
+action = "analog"
+channel = 3
+steps = 16
+
+[[step]]
+action = "expect-analog"
+channel = 3
+value = 1023
+
+[[step]]
+action = "analog"
+channel = 4
+steps = 16
+
+[[step]]
+action = "expect-analog"
+channel = 4
+value = 1023
+
+# Load Pad 1's saved assignment from the L6 SD card and verify actual playback
+# without using the USB editor or USB MIDI.
+[[step]]
+action = "sound-pad-playback"
+pad = 0
+target = 49
+assignment = "saved-state"
+require_pad_led_change = false
+require_stereo_meter = true
+playback_window_ms = 7000
+guest_timeout_ms = 30000
+wall_timeout_s = 300

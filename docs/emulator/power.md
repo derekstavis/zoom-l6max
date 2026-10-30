@@ -8,7 +8,7 @@ different paths.
 | Surface | L6max | L6 |
 | --- | --- | --- |
 | Power key | Input ID 53; active-high MAIN GPIO2 bit 25 | Host input ID 53; no L6 firmware GPIO mapping is implemented |
-| Firmware input path | Reader `0x80021d58`, inverted before the button scanner | Not yet established from L6 1.10 firmware analysis |
+| Firmware input path | Reader `0x80021d58`, inverted before the button scanner | L6 firmware shutdown path is not modeled |
 | Shutdown path | Firmware clears MAIN GPIO3 bit 3 after cleanup | QEMU board timer cuts virtual power after 500 ms |
 | Power-off signal | GPIO3 DR_CLEAR at `0x401c0088`, mask `8` | Host `POWER_OFF` notification; no L6 GPIO3.3 edge |
 
@@ -19,18 +19,10 @@ indicators, waits for pending work, resets the panel, and finally drops power
 hold. Firmware-update preparation writes `FW UPDT\0` through that window
 callback before the final power cut.
 
-The L6 1.10 firmware did not produce the L6max GPIO3.3 shutdown edge during
-native testing, even though QEMU observed the Power input change. The L6 profile
-therefore models its documented on/off switch as a board-level power cutoff
-after a 500 ms press. This interval is an emulator approximation, not a measured
-physical timing. Startup keys are held for 10 seconds into boot; the GUI queues
-them as DOWN events while CPUs are paused, then resumes firmware.
-
-The L6 MAIN image includes `EV_BTN_PWR_SW_%s` and
-`EV_SYS_POWER_PWRSW_SHUTDOWN` event-name strings, but analysis found no direct
-code reference to the system-event label. These strings do not establish which hardware input reaches the event
-or whether the path is active in the stock firmware. The 500 ms cutoff remains
-a synthetic fallback until that path is traced.
+The L6 profile uses a board-level power cutoff after a 500 ms press. This is
+an emulator approximation; physical timing and the complete shutdown path are
+unverified. Startup keys are held for 10 seconds into boot and queued before
+the CPUs resume.
 
 GPIO5 bit 1 is panel reset, rather than whole-device power-off. Serial close
 requires idle transmit-complete status on unconnected LPUART ports; without
