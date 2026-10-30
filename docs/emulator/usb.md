@@ -46,14 +46,20 @@ PRES_STATE.SDSTB before programming SYS_CTRL, whose low three bits are reserved
 on this controller. QEMU's SDHCI clock model instead requires an internal
 clock enable bit. The board adapter retains the firmware-visible divider and
 timeout fields, supplies stable SoC clock and 3.3 V power, and translates
-reset requests. RSTA/RSTC/RSTD and INITA self-clear. Card commands, DMA and
-controller interrupts continue through upstream QEMU.
+reset requests. RSTA/RSTC/RSTD and INITA self-clear. Card removal does not
+gate that clock, so a command issued to an empty slot ends with a command
+timeout error. PROT_CTRL WECINT/WECINS/WECRM enable wakeup events only; the
+adapter keeps them readable but out of the interrupt decision, so card
+insertion and removal interrupt only through INT_SIGNAL_EN. Card commands, DMA
+and controller interrupts continue through upstream QEMU.
 
 Validation covers CMD0/8, ACMD41, identification, card selection, CMD17/18
 reads, filesystem startup, and removal/reinsertion. With the tested FAT32
 image, the recorder changes from `No SD Card` to `No File`. Removing the
 medium restores `No SD Card`; reinserting it restores the original recorder
-frame and produces a new initialization/read sequence.
+frame and produces a new initialization/read sequence. A card that holds a
+recorder project returns with a new project named from the current clock
+instead of the project selected at power-on.
 
 ## USB device controller
 
@@ -83,6 +89,10 @@ The firmware exposes USB audio and MIDI descriptors in normal mode. Selecting
 The firmware's menu entry is index 5, after Project, Recorder Mode, Sound Pad,
 Mixer and SD Card. The transition stops and restarts the USB controller;
 host enumeration allows that transition and bus-reset processing to finish.
+The device model tracks a host SETUP until an EP0 transfer completes it. When
+firmware flushes every endpoint or resets the controller first, as its bus-reset
+handling does, later EP0 tokens return ECONNRESET and the host resends the
+control transfer from SETUP.
 
 L6 and L6max both enumerate through the direct USB device socket. On L6, the
 USB startup wrapper, initializer, and PHY gate run at about 3.1 seconds in a

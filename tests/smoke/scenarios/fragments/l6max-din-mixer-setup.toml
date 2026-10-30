@@ -27,6 +27,9 @@ guest_ms = 4950
 
 [[step]]
 action = "usb-descriptors"
+# Covers firmware starting its USB controller after boot.
+guest_timeout_ms = 60000
+wall_timeout_s = 300
 
 [[step]]
 action = "usb-sysex"

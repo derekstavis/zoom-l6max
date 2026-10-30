@@ -10,6 +10,8 @@ name = "prepared"
 model = "l6"
 firmware_package = "/absolute/path/to/L6.BIN"
 state_template = "/absolute/path/to/known-l6-state"
+# An empty card suffices for storage cases:
+# cargo run --offline --locked -p l6fs -- card create l6-card.img --size-mib 128
 sd_image = "/absolute/path/to/l6-card.img"
 timing = "paced"
 
@@ -18,6 +20,8 @@ name = "prepared"
 model = "l6max"
 firmware_package = "/absolute/path/to/L6max.bin"
 state_template = "/absolute/path/to/known-l6max-state"
+# Use an empty card here too: after reinsertion, a card with recorder projects
+# shows a new project name, which the storage case's display check rejects.
 sd_image = "/absolute/path/to/l6max-card.img"
 timing = "paced"
 

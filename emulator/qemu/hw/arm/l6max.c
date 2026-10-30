@@ -311,6 +311,7 @@ typedef struct L6ChipState {
     const MemoryRegionOps *sd_ops;
     uint32_t sd_sysctl;
     uint32_t sd_vend_spec2;
+    uint8_t sd_wakeup;
     bool sd_present;
     Clock *sysclk;
     Clock *refclk;
@@ -1997,6 +1998,9 @@ static void l6_rom_write_byte(L6ChipState *s, uint8_t byte)
  * Unlike SDHCI, USDHC derives clock/power from the SoC; SYS_CTRL[2:0]
  * are reserved. Firmware 0x80080fc8 waits for PRES_STATE.SDSTB before
  * programming its divider and writes INITA to issue initialization clocks.
+ * Card removal therefore does not gate the card clock: a command to an empty
+ * slot completes with a command timeout. PROT_CTRL WECINT/WECINS/WECRM only
+ * enable wakeup events, so they are kept out of SDHCI's interrupt decision.
  */
 static uint64_t l6_sd_read(void *opaque, hwaddr offset, unsigned size)
 {
@@ -2006,6 +2010,10 @@ static uint64_t l6_sd_read(void *opaque, hwaddr offset, unsigned size)
     }
     if (offset == 0xc8 && size == 4) {
         return s->sd_vend_spec2;
+    }
+    if (offset == 0x28 && size == 4) {
+        return s->sd_ops->read(s->sdhc, offset, size) |
+               ((uint32_t)s->sd_wakeup << 24);
     }
     return s->sd_ops->read(s->sdhc, offset, size);
 }
@@ -2028,6 +2036,14 @@ static void l6_sd_write(void *opaque, hwaddr offset, uint64_t value, unsigned si
         s->sd_vend_spec2 = (s->sd_vend_spec2 & ~L6_USDHC_VEND_SPEC2_RW_MASK) |
                            ((uint32_t)value & L6_USDHC_VEND_SPEC2_RW_MASK);
         return;
+    }
+    if (offset == 0x28 && size == 4) {
+        s->sd_ops->write(s->sdhc, offset, value & 0x00ffffffu, size);
+        s->sd_wakeup = (value >> 24) & 0x07;
+        return;
+    }
+    if (offset == 0x0c) {
+        s->sdhc->clkcon |= 7u;
     }
     s->sd_ops->write(s->sdhc, offset, value, size);
 }
