@@ -2,7 +2,7 @@
 //!
 //! Offsets `0x00–0x5f` hold little-endian RTC registers (`0x40002800+`) and
 //! `0x80` holds RCC BDCR. Register layout follows the STM32G0 reference
-//! manual (RM0454). The main firmware's Date/Time check uses CR bit 18 as
+//! manual (RM0444). The main firmware's Date/Time check uses CR bit 18 as
 //! its calendar-valid marker.
 
 use std::fmt;

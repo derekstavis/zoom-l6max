@@ -23,7 +23,7 @@ the parent path supplied by the user.
 | --- | ---: | --- |
 | `main-nor.bin` | 2 MiB | Main MCU's physical serial NOR, erased bytes `ff` |
 | `resource-nor.bin` | 4 MiB, L6 only | External serial NOR containing the L6 resource region |
-| `panel-flash.bin` | 64 KiB | Panel executable flash at `0x08000000` |
+| `panel-flash.bin` | 64 KiB | Emulated panel flash backing at `0x08000000`; the ROM updater limits flash operations to the STM32G031C4T6's 16 KiB |
 | `panel-options.bin` | 4 bytes | Panel ROM protocol's option-byte word at `0x1fff7800` |
 | `panel-rtc.bin` | 256 bytes | Panel RTC backup domain, separate from flash |
 
@@ -41,10 +41,10 @@ On a fresh device the main firmware programs the panel and writes its version
 stamp at `0x08003ffc`. Retaining panel flash prevents this programming sequence
 from repeating on the next process launch.
 
-The L6 package contains a 13,440-byte panel image rather than a full 64 KiB
-flash dump. Its missing tail is seeded as zero to match the volatile ROM
-mapping, which lets the L6 panel reach its ready path. L6max retains the erased
-`0xff` tail. Older L6 state seeded by earlier builds is migrated only when its
+The L6 package contains a 13,440-byte panel image. The emulator seeds the
+missing backing bytes as zero to match the volatile ROM mapping, which lets the
+L6 panel reach its ready path. L6max retains an erased `0xff` tail. Only the
+first 16 KiB of either backing image are guest-visible. Older L6 state seeded by earlier builds is migrated only when its
 panel prefix exactly matches the supplied image and its remaining bytes are
 all `0xff`; changed panel contents are preserved.
 
@@ -129,7 +129,7 @@ The remaining bytes are reserved and zero on creation.
 TR contains BCD time, DR contains BCD date and weekday, and CR bit 18 is the
 firmware's calendar-valid marker. The model supplies oscillator-ready,
 initialization, synchronization, prescaler, and wakeup reset behavior. Register
-layout follows the [STM32G0 reference manual](https://www.st.com/resource/en/reference_manual/rm0454-stm32g0x0-advanced-armbased-32bit-mcus-stmicroelectronics.pdf).
+layout follows the [STM32G0x1 reference manual RM0444](https://www.st.com/resource/en/reference_manual/rm0444-stm32g0x1-advanced-armbased-32bit-mcus-stmicroelectronics.pdf).
 
 The calendar and subsecond counter advance with QEMU virtual time. Pausing
 QEMU freezes them. Date/time is retained across process restarts; time while

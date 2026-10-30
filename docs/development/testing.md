@@ -302,6 +302,19 @@ These firmware-free checks verify parsing, sequencing, deadlines, snapshots,
 transport, gesture handling and process cleanup. They do not establish guest
 firmware behavior. See [CI](ci.md) for hosted checks.
 
+The panel register check uses the built QEMU test accelerator and a synthetic
+image; it needs neither firmware nor an SD card:
+
+```sh
+python3 emulator/qemu/tests/panel-qtest.py emulator/qemu/build-source/build/qemu-system-arm
+```
+
+It exercises both panel profiles, flash boundaries and existing 64 KiB saved
+flash, plus GPIO and timer registers, pending interrupts and timer overflows.
+It does not establish behavior on physical hardware. The smaller C tests in
+`emulator/qemu/tests/panel-gpio.c` and `panel-timer.c` cover shared register
+logic independently of QEMU.
+
 ## Input, display, and LEDs
 
 Use the shared `panel`, `l6-input-sweep`, and `l6max-input-smoke` scenarios.
