@@ -1,5 +1,5 @@
 //! Observable startup readiness shared by native and headless diagnostics.
-use crate::indicators::rings;
+use crate::indicators::{l6_mode_leds, rings};
 use l6fw::Model;
 
 #[derive(Default, Debug)]
@@ -7,8 +7,18 @@ pub struct BootReadiness {
     pub all_lit_seen: bool,
     candidate: Option<[u32; 8]>,
     stable_since: u32,
+    /// State built from a state spec boots straight to its home screen, so
+    /// there are no first-boot setup screens for the guest-time floor to
+    /// wait out; the settled sweep alone establishes readiness.
+    pub no_setup_screens: bool,
 }
 impl BootReadiness {
+    pub fn new(no_setup_screens: bool) -> Self {
+        Self {
+            no_setup_screens,
+            ..Default::default()
+        }
+    }
     pub fn observe(&mut self, model: Model, guest_ms: u32, rows: [u32; 8]) -> bool {
         let count = if model == Model::L6 { 6 } else { 8 };
         let current = rings(rows);
@@ -21,12 +31,19 @@ impl BootReadiness {
                 self.stable_since = guest_ms;
             }
         }
-        // Preserve the validated setup floors until the firmware setup screens
-        // have semantic recognizers. Wall time never substitutes for this clock.
-        let floor = if model == Model::L6 { 18_000 } else { 40_000 };
+        // L6 lights its editing-mode lamp once MAIN has restored the mixer.
+        // L6max first-boot setup shows its Date/Time editor at about 9 guest
+        // seconds, after a card popup, with no lamp change; the floor covers it
+        // until the screens have semantic recognizers. Wall time never
+        // substitutes for this clock.
+        let floor = match (self.no_setup_screens, model) {
+            (false, Model::L6max) => 12_000,
+            _ => 0,
+        };
         guest_ms >= floor
             && self.candidate.is_some()
             && guest_ms.wrapping_sub(self.stable_since) >= 1_000
+            && (model != Model::L6 || l6_mode_leds(rows).contains(&true))
     }
 }
 
@@ -53,11 +70,36 @@ mod tests {
     #[test]
     fn model_ring_count_and_stability_are_enforced() {
         let mut boot = BootReadiness::default();
-        assert!(!boot.observe(Model::L6, 20_000, rows(6)));
-        assert!(!boot.observe(Model::L6, 21_000, [0; 8]));
-        assert!(!boot.observe(Model::L6, 21_999, [0; 8]));
-        assert!(boot.observe(Model::L6, 22_000, [0; 8]));
-        assert!(!boot.observe(Model::L6, 22_100, rows(1)));
-        assert!(boot.observe(Model::L6, 23_100, rows(1)));
+        assert!(!boot.observe(Model::L6max, 20_000, rows(6)));
+        assert!(!boot.observe(Model::L6max, 21_000, rows(8)));
+        assert!(!boot.observe(Model::L6max, 21_100, [0; 8]));
+        assert!(!boot.observe(Model::L6max, 22_099, [0; 8]));
+        assert!(boot.observe(Model::L6max, 22_100, [0; 8]));
+        assert!(!boot.observe(Model::L6max, 22_200, rows(1)));
+        assert!(boot.observe(Model::L6max, 23_200, rows(1)));
+    }
+    #[test]
+    fn l6_waits_for_its_mode_lamp() {
+        let mut boot = BootReadiness::default();
+        let level = |mut rows: [u32; 8]| {
+            rows[4] |= 1 << 8;
+            rows
+        };
+        assert!(!boot.observe(Model::L6, 2_000, rows(6)));
+        assert!(!boot.observe(Model::L6, 3_000, rows(1)));
+        assert!(!boot.observe(Model::L6, 4_000, rows(1)));
+        assert!(boot.observe(Model::L6, 4_100, level(rows(1))));
+    }
+    #[test]
+    fn state_without_setup_screens_needs_only_the_settled_sweep() {
+        let mut floor = BootReadiness::default();
+        let mut spec = BootReadiness::new(true);
+        for boot in [&mut floor, &mut spec] {
+            assert!(!boot.observe(Model::L6max, 3_200, rows(8)));
+            assert!(!boot.observe(Model::L6max, 5_400, [0; 8]));
+        }
+        assert!(!floor.observe(Model::L6max, 6_400, [0; 8]));
+        assert!(spec.observe(Model::L6max, 6_400, [0; 8]));
+        assert!(floor.observe(Model::L6max, 12_000, [0; 8]));
     }
 }

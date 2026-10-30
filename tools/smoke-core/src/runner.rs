@@ -39,7 +39,7 @@ struct SceneSaveState {
 impl Observation {
     fn summary(&self) -> Value {
         json!({"guest_ms": self.panel.guest_ms, "rings": rings(self.data.indicators), "rows": self.data.indicators,
-            "main": {"sent":self.main.sent,"applied":self.main.applied,"released":self.main.released,"frames":self.main.frame_ready},
+            "main": {"sent":self.main.sent,"applied":self.main.applied,"released":self.main.released,"frames":self.main.frame_ready,"frame_guest_ms":self.main.frame_guest_ms},
             "panel": {"sent":self.panel.sent,"applied":self.panel.applied,"released":self.panel.released}, "encoder_reports":self.reports,"trace_counts":self.traces})
     }
 }
@@ -120,6 +120,7 @@ impl Runner {
             }
         }
         fs::create_dir_all(&logs).map_err(|e| e.to_string())?;
+        let no_setup_screens = scenario.spec_state;
         Ok(Self {
             scenario,
             model,
@@ -130,7 +131,7 @@ impl Runner {
             dispatched: false,
             baseline: None,
             last_command: None,
-            startup: Default::default(),
+            startup: BootReadiness::new(no_setup_screens),
             trace,
             history: Default::default(),
             completed: vec![],
@@ -544,19 +545,25 @@ impl Runner {
                 }
                 Action::Wait { until } => {
                     if until == "boot-ready" {
+                        // Without the setup floor, L6max also needs its screen
+                        // to have held one frame for a guest second.
+                        let display_settled = !self.scenario.spec_state
+                            || obs.panel.guest_ms.wrapping_sub(obs.main.frame_guest_ms) >= 1000;
                         ready
-                            && (self.model == Model::L6 || obs.data.display.iter().any(|b| *b != 0))
+                            && (self.model == Model::L6
+                                || (obs.data.display.iter().any(|b| *b != 0) && display_settled))
+                    } else if until == "mixer-ready" {
+                        // MAIN restores every ring at once after the sweep;
+                        // L6 then lights its editing-mode lamp.
+                        rings(obs.data.indicators)[..if self.model == Model::L6 { 6 } else { 8 }]
+                            .iter()
+                            .all(|mask| *mask != 0)
+                            && (self.model != Model::L6
+                                || l6_mode_leds(obs.data.indicators).contains(&true))
                     } else {
-                        let stable = self.panel_quiet.is_some_and(|(_, since)| {
-                            obs.panel.guest_ms.wrapping_sub(since)
-                                >= if until == "mixer-ready" { 3000 } else { 1000 }
-                        });
-                        stable
-                            && (until != "mixer-ready"
-                                || rings(obs.data.indicators)
-                                    [..if self.model == Model::L6 { 6 } else { 8 }]
-                                    .iter()
-                                    .all(|mask| *mask != 0))
+                        self.panel_quiet.is_some_and(|(_, since)| {
+                            obs.panel.guest_ms.wrapping_sub(since) >= 1000
+                        })
                     }
                 }
                 Action::SelectMode { mode } => {
@@ -566,13 +573,13 @@ impl Runner {
                     } else {
                         leds(obs.data.indicators)[17 + index]
                     };
-                    let settled = self
-                        .panel_quiet
-                        .is_some_and(|(_, since)| obs.panel.guest_ms.wrapping_sub(since) >= 3000);
-                    if !settled {
-                        return Ok(Progress::Waiting);
-                    }
                     if !self.dispatched && !lit {
+                        let settled = self.panel_quiet.is_some_and(|(_, since)| {
+                            obs.panel.guest_ms.wrapping_sub(since) >= 1000
+                        });
+                        if !settled {
+                            return Ok(Progress::Waiting);
+                        }
                         return self.dispatch(
                             Command::Press {
                                 target: control_target(self.model, &format!("mode.{mode}"))?,
@@ -952,7 +959,7 @@ impl Runner {
     pub fn guest_restarted(&mut self, logs: &Path) {
         self.trace.restart();
         self.trace_path = logs.join("engine.trace");
-        self.startup = Default::default();
+        self.startup = BootReadiness::new(self.scenario.spec_state);
         self.entered = None;
         self.panel_quiet = None;
         self.ring_quiet = None;
@@ -1380,7 +1387,7 @@ mod tests {
         fs::remove_dir_all(&runner.logs).unwrap();
     }
     #[test]
-    fn restored_mixer_values_must_cover_all_visible_channels_and_settle() {
+    fn restored_mixer_values_must_cover_all_visible_channels_and_light_the_mode_lamp() {
         let mut runner = test_runner("[[step]]\naction='wait'\nuntil='mixer-ready'\n");
         let now = Instant::now();
         let mut obs = sample(0);
@@ -1401,7 +1408,8 @@ mod tests {
             runner.advance(obs.clone(), now).unwrap(),
             Progress::Waiting
         ));
-        obs.panel.guest_ms = 5000;
+        obs.data.indicators[4] |= 1 << 8;
+        obs.panel.guest_ms = 2050;
         assert!(matches!(
             runner.advance(obs, now).unwrap(),
             Progress::Complete

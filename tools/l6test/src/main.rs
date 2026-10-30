@@ -70,7 +70,10 @@ fn audio_device_spec(fixture: &Fixture, logs: &Path) -> String {
         .replace("{logs}", &logs.display().to_string())
 }
 fn gdb_socket_path() -> PathBuf {
-    env::temp_dir().join(format!("l6gdb-{}.sock", std::process::id()))
+    // Cases may run concurrently; each fixture copy needs its own socket.
+    static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let index = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    env::temp_dir().join(format!("l6gdb-{}-{index}.sock", std::process::id()))
 }
 #[derive(Default, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -135,6 +138,12 @@ struct Args {
     model: String,
     output: Option<PathBuf>,
     build: bool,
+    jobs: usize,
+}
+/// Each guest runs one single-threaded TCG engine plus its scenario process.
+/// Leave headroom so concurrent guests keep their paced clocks.
+fn default_jobs() -> usize {
+    thread::available_parallelism().map_or(1, |cores| (cores.get() / 4).clamp(1, 4))
 }
 fn parse_args() -> Result<Args, String> {
     let mut args = env::args().skip(1);
@@ -148,6 +157,7 @@ fn parse_args() -> Result<Args, String> {
         model: "all".into(),
         output: None,
         build: true,
+        jobs: default_jobs(),
     };
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -166,6 +176,13 @@ fn parse_args() -> Result<Args, String> {
                 ))
             }
             "--no-build" => result.build = false,
+            "--jobs" => {
+                result.jobs = args
+                    .next()
+                    .and_then(|value| value.parse().ok())
+                    .filter(|jobs| *jobs > 0)
+                    .ok_or("--jobs needs a positive number")?
+            }
             _ => return Err(format!("unknown argument {arg}")),
         }
     }
@@ -1002,7 +1019,7 @@ fn execute() -> Result<i32, String> {
     }
     if !["run", "check"].contains(&args.command.as_str()) {
         println!(
-            "Usage: cargo run -p l6test -- list | check | run [--config smoke.local.toml] [--suite NAME | --case ID] [--model l6|l6max|all] [--backend headless|gui|both] [--output NEW_DIR] [--no-build]\n       cargo run -p l6test -- probe gui --keys TARGET,... --volatile [engine options]\n       cargo run -p l6test -- capture screen --out FILE.gif [capture options] --volatile [engine options]"
+            "Usage: cargo run -p l6test -- list | check | run [--config smoke.local.toml] [--suite NAME | --case ID] [--model l6|l6max|all] [--backend headless|gui|both] [--output NEW_DIR] [--no-build] [--jobs N]\n       cargo run -p l6test -- probe gui --keys TARGET,... --volatile [engine options]\n       cargo run -p l6test -- capture screen --out FILE.gif [capture options] --volatile [engine options]"
         );
         return Ok(0);
     }
@@ -1173,84 +1190,113 @@ fn execute() -> Result<i32, String> {
         fs::copy(built_dir.join(package), output.join("bin").join(package))
             .map_err(|e| e.to_string())?;
     }
-    let mut results = vec![];
+    let mut jobs = vec![];
     for case in cases {
         for model in case
             .models
             .iter()
             .filter(|m| args.model == "all" || *m == &args.model)
         {
-            let fixture_name = case
+            let scenario = case
                 .scenario
                 .as_ref()
-                .map(|p| Scenario::load(&catalog_dir.join(p)).unwrap().fixture)
-                .unwrap_or_else(|| {
+                .map(|p| Scenario::load(&catalog_dir.join(p)))
+                .transpose()?;
+            let fixture_name = scenario.as_ref().map_or_else(
+                || {
                     config
                         .legacy
                         .get(&case.id)
                         .and_then(|local| local.fixture.clone())
                         .or_else(|| case.fixture.clone())
                         .unwrap_or_else(|| "prepared".into())
-                });
-            let selected: Vec<&str> = if case.scenario.is_some() {
-                if case.gui {
-                    vec!["gui"]
-                } else {
-                    let scenario =
-                        Scenario::load(&catalog_dir.join(case.scenario.as_ref().unwrap()))?;
-                    backends
-                        .iter()
-                        .copied()
-                        .filter(|b| scenario.backends.iter().any(|s| s == b))
-                        .collect()
-                }
-            } else {
-                vec![if case.gui { "gui" } else { "headless" }]
+                },
+                |s| s.fixture.clone(),
+            );
+            let selected: Vec<&str> = match &scenario {
+                Some(_) if case.gui => vec!["gui"],
+                Some(scenario) => backends
+                    .iter()
+                    .copied()
+                    .filter(|b| scenario.backends.iter().any(|s| s == b))
+                    .collect(),
+                None => vec![if case.gui { "gui" } else { "headless" }],
             };
             for backend in selected {
-                let dir = output.join(format!("{}-{model}-{backend}", case.id.replace('/', "-")));
-                let case_span = tracing::info_span!("smoke_case",case=%case.id,model=%model,backend,artifacts=%dir.display());
-                let _entered = case_span.enter();
-                tracing::info!(event = "case_started", "case started");
-                let result = if let Some(fixture) = config
-                    .fixture
-                    .iter()
-                    .find(|f| f.model == *model && f.name == fixture_name)
-                {
-                    run_case(root, &catalog_dir, &config, fixture, case, backend, &dir)
-                } else {
-                    CaseResult {
-                        case: case.id.clone(),
-                        model: model.clone(),
-                        backend: backend.into(),
-                        outcome: "BLOCKED".into(),
-                        detail: format!("missing fixture {fixture_name}/{model}"),
-                        artifacts: dir,
-                    }
-                };
-                match result.outcome.as_str() {
-                    "PASS" => {
-                        tracing::info!(event="case_finished",outcome=%result.outcome,detail=%result.detail,"case completed")
-                    }
-                    "BLOCKED" | "XFAIL" => {
-                        tracing::warn!(event="case_finished",outcome=%result.outcome,detail=%result.detail,"case incomplete")
-                    }
-                    _ => {
-                        tracing::error!(event="case_finished",outcome=%result.outcome,detail=%result.detail,"case failed")
-                    }
-                }
-                results.push(result);
-                fs::write(
-                    output.join("report.json"),
-                    serde_json::to_vec_pretty(
-                        &json!({"schema":1,"outcome":"RUNNING","results":results}),
-                    )
-                    .unwrap(),
-                )
-                .map_err(|e| e.to_string())?;
+                // GUI windows, native host MIDI ports and external executables
+                // are host-wide resources; such cases run alone.
+                let exclusive =
+                    backend == "gui" || scenario.as_ref().is_none_or(Scenario::uses_native_midi);
+                jobs.push(Job {
+                    case,
+                    model: model.clone(),
+                    backend,
+                    fixture_name: fixture_name.clone(),
+                    exclusive,
+                    dir: output.join(format!("{}-{model}-{backend}", case.id.replace('/', "-"))),
+                });
             }
         }
     }
+    let run_job = |job: &Job| -> CaseResult {
+        let case_span = tracing::info_span!("smoke_case",case=%job.case.id,model=%job.model,backend=job.backend,artifacts=%job.dir.display());
+        let _entered = case_span.enter();
+        tracing::info!(event = "case_started", "case started");
+        let result = if let Some(fixture) = config
+            .fixture
+            .iter()
+            .find(|f| f.model == job.model && f.name == job.fixture_name)
+        {
+            run_case(
+                root,
+                &catalog_dir,
+                &config,
+                fixture,
+                job.case,
+                job.backend,
+                &job.dir,
+            )
+        } else {
+            CaseResult {
+                case: job.case.id.clone(),
+                model: job.model.clone(),
+                backend: job.backend.into(),
+                outcome: "BLOCKED".into(),
+                detail: format!("missing fixture {}/{}", job.fixture_name, job.model),
+                artifacts: job.dir.clone(),
+            }
+        };
+        match result.outcome.as_str() {
+            "PASS" => {
+                tracing::info!(event="case_finished",outcome=%result.outcome,detail=%result.detail,"case completed")
+            }
+            "BLOCKED" | "XFAIL" => {
+                tracing::warn!(event="case_finished",outcome=%result.outcome,detail=%result.detail,"case incomplete")
+            }
+            _ => {
+                tracing::error!(event="case_finished",outcome=%result.outcome,detail=%result.detail,"case failed")
+            }
+        }
+        result
+    };
+    // Queue shareable cases first so an exclusive one never idles the pool.
+    jobs.sort_by_key(|job| job.exclusive);
+    let results = schedule(
+        &jobs,
+        args.jobs,
+        |job| job.exclusive,
+        run_job,
+        |finished| {
+            fs::write(
+                output.join("report.json"),
+                serde_json::to_vec_pretty(
+                    &json!({"schema":1,"outcome":"RUNNING","results":finished}),
+                )
+                .unwrap(),
+            )
+            .map_err(|e| e.to_string())
+        },
+    )?;
     if results.is_empty() {
         return Err("no model/case combinations selected".into());
     }
@@ -1294,6 +1340,81 @@ fn execute() -> Result<i32, String> {
     } else {
         0
     })
+}
+struct Job<'a> {
+    case: &'a Case,
+    model: String,
+    backend: &'a str,
+    fixture_name: String,
+    exclusive: bool,
+    dir: PathBuf,
+}
+/// Run jobs on up to `limit` workers. An exclusive job starts only when no
+/// other job is running and holds back later jobs until it finishes. Results
+/// keep job order; `progress` receives the completed results so far.
+fn schedule<J: Sync, R: Send>(
+    jobs: &[J],
+    limit: usize,
+    exclusive: impl Fn(&J) -> bool + Sync,
+    run: impl Fn(&J) -> R + Sync,
+    progress: impl Fn(&[&R]) -> Result<(), String> + Sync,
+) -> Result<Vec<R>, String> {
+    use std::sync::{Condvar, Mutex};
+    struct State<R> {
+        next: usize,
+        running: usize,
+        exclusive: bool,
+        results: Vec<Option<R>>,
+        error: Option<String>,
+    }
+    let state = Mutex::new(State {
+        next: 0,
+        running: 0,
+        exclusive: false,
+        results: jobs.iter().map(|_| None).collect(),
+        error: None,
+    });
+    let changed = Condvar::new();
+    thread::scope(|scope| {
+        for _ in 0..limit.clamp(1, jobs.len().max(1)) {
+            scope.spawn(|| {
+                loop {
+                    let mut guard = state.lock().unwrap();
+                    let index = loop {
+                        if guard.next == jobs.len() || guard.error.is_some() {
+                            return;
+                        }
+                        let exclusive = exclusive(&jobs[guard.next]);
+                        if !guard.exclusive && (guard.running == 0 || !exclusive) {
+                            break guard.next;
+                        }
+                        guard = changed.wait(guard).unwrap();
+                    };
+                    let exclusive = exclusive(&jobs[index]);
+                    guard.next += 1;
+                    guard.running += 1;
+                    guard.exclusive = exclusive;
+                    drop(guard);
+                    let result = run(&jobs[index]);
+                    let mut guard = state.lock().unwrap();
+                    guard.results[index] = Some(result);
+                    guard.running -= 1;
+                    guard.exclusive &= !exclusive;
+                    let finished: Vec<&R> = guard.results.iter().flatten().collect();
+                    if let Err(error) = progress(&finished) {
+                        guard.error = Some(error);
+                    }
+                    drop(guard);
+                    changed.notify_all();
+                }
+            });
+        }
+    });
+    let state = state.into_inner().unwrap();
+    if let Some(error) = state.error {
+        return Err(error);
+    }
+    Ok(state.results.into_iter().flatten().collect())
 }
 fn main() {
     let cli_args = env::args_os().skip(1).collect::<Vec<_>>();
@@ -1604,6 +1725,37 @@ mod tests {
         assert!(error.contains("different model"));
         assert!(!dir.join("run/state/main-nor.bin").exists());
         fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn scheduler_bounds_concurrency_and_isolates_exclusive_jobs() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let running = AtomicUsize::new(0);
+        let peak = AtomicUsize::new(0);
+        let exclusive_overlap = AtomicUsize::new(0);
+        let jobs: Vec<(usize, bool)> = (0..12).map(|i| (i, i % 5 == 4)).collect();
+        let results = schedule(
+            &jobs,
+            3,
+            |job| job.1,
+            |job| {
+                let now = running.fetch_add(1, Ordering::SeqCst) + 1;
+                peak.fetch_max(now, Ordering::SeqCst);
+                if job.1 && now != 1 {
+                    exclusive_overlap.fetch_add(1, Ordering::SeqCst);
+                }
+                thread::sleep(Duration::from_millis(20));
+                if job.1 && running.load(Ordering::SeqCst) != 1 {
+                    exclusive_overlap.fetch_add(1, Ordering::SeqCst);
+                }
+                running.fetch_sub(1, Ordering::SeqCst);
+                job.0
+            },
+            |_| Ok(()),
+        )
+        .unwrap();
+        assert_eq!(results, (0..12).collect::<Vec<_>>());
+        assert_eq!(peak.load(Ordering::SeqCst), 3);
+        assert_eq!(exclusive_overlap.load(Ordering::SeqCst), 0);
     }
     #[test]
     fn timeout_stops_descendants_as_well_as_the_parent() {
