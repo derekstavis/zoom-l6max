@@ -2,7 +2,8 @@ version = 1
 name = "l6max-direct-midi-sync"
 models = ["l6max"]
 backends = ["headless"]
-fixture = "prepared"
+fixture = "midi-sync"
+main_sha256 = "a3f32acf2c29a32f1d7a5667a0fed5d313594fafd926dabc214d97fd88b1b644"
 
 [[step]]
 action = "delay"

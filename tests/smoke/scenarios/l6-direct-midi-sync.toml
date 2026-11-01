@@ -2,7 +2,7 @@ version = 1
 name = "l6-direct-midi-sync"
 models = ["l6"]
 backends = ["headless"]
-fixture = "prepared"
+fixture = "midi-sync"
 main_sha256 = "22de029238e790dde9319ef3315b13da0de1581861a7680b3e7464834e51f549"
 
 [[step]]

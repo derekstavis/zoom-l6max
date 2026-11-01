@@ -23,6 +23,21 @@ state_spec = "/absolute/path/to/tests/smoke/states/l6max-setup-complete.toml"
 card_spec = "/absolute/path/to/tests/smoke/cards/l6max-empty.toml"
 timing = "paced"
 
+# The midi-sync cases need firmware carrying that patch.
+[[fixture]]
+name = "midi-sync"
+model = "l6"
+firmware_package = "/absolute/path/to/L6.BIN"
+patches = ["midi-sync"]
+state_spec = "/absolute/path/to/tests/smoke/states/l6-settings-defaults.toml"
+
+[[fixture]]
+name = "midi-sync"
+model = "l6max"
+firmware_package = "/absolute/path/to/L6max.bin"
+patches = ["midi-sync"]
+state_spec = "/absolute/path/to/tests/smoke/states/l6max-setup-complete.toml"
+
 # The L6 recorder playback test needs the normal QEMU audio queue service; it
 # records the result through the QEMU WAV backend while keeping the run headless.
 [[fixture]]

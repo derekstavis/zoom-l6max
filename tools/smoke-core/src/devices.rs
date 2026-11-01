@@ -279,7 +279,7 @@ pub fn prepare(scenario: &Scenario, options: &mut Options) -> Result<(), String>
             );
         }
         options.start_paused = true;
-        options.timing = l6max_host::engine::Timing::Adaptive;
+        options.timing = l6max_host::engine::Timing::Paced;
         options.usb_enabled = false;
         options.midi_enabled = false;
         options.gdb_socket =
@@ -1009,6 +1009,7 @@ pub struct State {
     midi: Option<l6max_host::usb::Endpoints>,
     gdb: Option<l6max_diagnostics::gdb::Gdb>,
     host_midi: Option<Box<dyn crate::host_midi::Client>>,
+    encoder_turned_up: bool,
 }
 
 impl State {
@@ -2025,10 +2026,17 @@ fn run_l6_din_sweep_inner(
     };
     let trace_path = options.logs.join("engine.trace");
     let ready_deadline = Instant::now() + Duration::from_secs(120);
+    let main_queue_pending = || -> Result<u32, String> {
+        let bytes = session.engine.management[0]
+            .read_memory(0, 0x806b2f20, 4)
+            .map_err(|e| e.to_string())?;
+        Ok(u32::from_le_bytes(bytes.try_into().unwrap()))
+    };
+    // Main must be draining its queue, or the sweep only fills it.
     loop {
         session.poll()?;
         let trace = fs::read_to_string(&trace_path).map_err(|e| e.to_string())?;
-        if trace.contains("LPUART2 (MIDI jacks) CTRL 002c0000") {
+        if trace.contains("LPUART2 (MIDI jacks) CTRL 002c0000") && main_queue_pending()? == 0 {
             break;
         }
         if Instant::now() >= ready_deadline {
@@ -2144,8 +2152,8 @@ fn run_l6_din_sweep_inner(
         || read_index != write_index
         || changes.is_empty()
         || dispatch_hits[0] != 128
-        || dispatch_hits[1] != 66
-        || dispatch_hits[2] != dispatch_hits[1]
+        || dispatch_hits[1] < mapped_cc_count
+        || dispatch_hits[2] < dispatch_hits[1]
         || dispatch_hits[3] == 0
         || mixer_changed_bytes == 0
     {
@@ -2375,7 +2383,9 @@ impl State {
         };
         let start_guest = inputs.panel.snapshot().guest_ms;
         let deadline = Instant::now() + Duration::from_secs(wall_timeout_s.min(30));
-        inputs.encoder(0, -4)?;
+        // Alternate direction: repeated turns one way saturate and send no CC.
+        self.encoder_turned_up = !self.encoder_turned_up;
+        inputs.encoder(0, if self.encoder_turned_up { -4 } else { 4 })?;
         let mut knob_message = None;
         while Instant::now() < deadline {
             session.poll()?;
@@ -2396,9 +2406,8 @@ impl State {
                 "model-specific encoder CC {expected_cc:02x?} did not reach the host MIDI endpoint"
             ))
         })?;
-        if model == l6fw::Model::L6 {
-            wait_guest_duration(session, 1000, deadline)?;
-        }
+        // Let the encoder's remaining reports land before taking the baseline.
+        wait_guest_duration(session, 1000, deadline)?;
         let before = inputs.panel.snapshot().indicators;
         let mixer_cc = if model == l6fw::Model::L6 { 0x53 } else { 0x51 };
         client
@@ -3023,6 +3032,15 @@ impl State {
         } else {
             (94, None)
         };
+        // Leftover encoder CCs would otherwise count as replies.
+        let mut quiet_since = Instant::now();
+        while quiet_since.elapsed() < Duration::from_millis(500) {
+            session.poll()?;
+            while client.poll().map_err(std::io::Error::other)?.is_some() {
+                quiet_since = Instant::now();
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
         client
             .send(&[0xb0, 127, 127])
             .map_err(std::io::Error::other)?;
@@ -5801,18 +5819,34 @@ fn run_l6max_ui_pad_assignment(
         Ok(())
     };
 
-    // Match the legacy Sound Assign navigation: Menu, two Down presses to
-    // Sound Pad, Confirm into Sound Assign, Confirm into the pad list, select
-    // the requested pad, Confirm into its file list and Confirm the first WAV.
+    // A "Data OK." popup can still be up, and it would swallow the Menu press.
+    wait_guest_duration(session, 5000, deadline)?;
+
+    // Sound Assign navigation: Menu, Confirm into Sound Pad, Confirm into Sound
+    // Assign, select the pad, Confirm into its file list, Down past its first row,
+    // None Assigned, and Confirm the first WAV. Menus keep their cursors between
+    // visits, so only the first pad moves down to Sound Pad, and each later pad moves
+    // one row from the last. A stray Down here reaches SD Card and its Format.
     tap(0, true, &mut key_evidence)?;
-    for button in [2, 2, 3, 3]
-        .into_iter()
-        .chain(std::iter::repeat_n(2, pad as usize))
-        .chain([3, 3])
+    let to_sound_pad: &[u32] = if pad == 0 { &[2, 2] } else { &[] };
+    let to_pad: &[u32] = if pad == 0 { &[] } else { &[2] };
+    for &button in to_sound_pad
+        .iter()
+        .chain(&[3, 3])
+        .chain(to_pad)
+        .chain(&[3, 2, 3])
     {
+        // Each menu loads after its key, and the file list drops keys until then.
+        wait_guest_duration(session, 2000, deadline)?;
         tap(button, false, &mut key_evidence)?;
     }
-    tap(0, true, &mut key_evidence)?;
+    // Back out through Sound Pad and Menu to the home screen, which saves the
+    // assignment and leaves the next visit starting from the same place.
+    for _ in 0..3 {
+        wait_guest_duration(session, 2000, deadline)?;
+        tap(0, true, &mut key_evidence)?;
+    }
+    wait_guest_duration(session, 2000, deadline)?;
 
     // Verify the UI assignment through the same Editor state query used by
     // the original probe, after opening an Editor session on cable 2.

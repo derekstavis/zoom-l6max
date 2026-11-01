@@ -74,8 +74,10 @@ The system file is `ZOOM_L6max.sys` on L6max and `ZOOM_L6.SYS` on L6, as observe
 cards the firmware formatted. It is 2188 bytes: a header naming the file with
 ZOOM's copyright notice, a version ` 1.00` at offset `0x50`, the model name padded to
 32 bytes at `0x60`, and zeros. Generated cards include it. Cards with small clusters still boot and play assigned pads. WAV
-files need the FAT archive attribute to appear in the firmware's file list. Generated
-cards are 4 GiB FAT32 with 32 KiB clusters. They are sparse, so they use only the disk
+files need the FAT archive attribute to appear in the firmware's file list. The firmware's
+own Format, on a 4 GiB card, writes an MBR with one FAT32 partition at sector 8192,
+32 KiB clusters, and the label `ZOOM_SD`. Generated cards are 4 GiB FAT32 with 32 KiB
+clusters, with no partition table. They are sparse, so they use only the disk
 space their files need.
 
 ### Validation

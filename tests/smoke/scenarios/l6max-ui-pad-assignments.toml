@@ -2,6 +2,7 @@ version = 1
 name = "l6max-ui-pad-assignments"
 models = ["l6max"]
 fixture = "prepared"
+card = "pad-files"
 backends = ["headless"]
 
 [[step]]
@@ -17,23 +18,23 @@ path = "fragments/editor-pad-usb-ready.toml"
 [[step]]
 action = "l6max-ui-pad-assignment"
 pad = 0
-guest_timeout_ms = 30000
+guest_timeout_ms = 60000
 wall_timeout_s = 600
 
 [[step]]
 action = "l6max-ui-pad-assignment"
 pad = 1
-guest_timeout_ms = 30000
+guest_timeout_ms = 60000
 wall_timeout_s = 600
 
 [[step]]
 action = "l6max-ui-pad-assignment"
 pad = 2
-guest_timeout_ms = 30000
+guest_timeout_ms = 60000
 wall_timeout_s = 600
 
 [[step]]
 action = "l6max-ui-pad-assignment"
 pad = 3
-guest_timeout_ms = 30000
+guest_timeout_ms = 60000
 wall_timeout_s = 600

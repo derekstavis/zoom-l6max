@@ -22,9 +22,7 @@ analog audio behavior, and physical jack routing remain unverified.
 
 - The full L6 panel scenario and exact encoder reversal need further
   qualification on both headless and GPUI backends.
-- L6 DIN input, DIN-to-USB forwarding, and the event-dispatch scenario need
-  further qualification. L6 USB startup and L6max direct USB cable-isolation
-  scenarios also need live qualification.
+- L6 DIN-to-USB forwarding and USB startup scenarios need further qualification.
 - L6 scene-save GUI coverage, startup-key parity, and the packaged-app menu
   and bundle cases require further validation.
 - Sound-pad playback and MASTER meter response are exercised for both models
