@@ -26,13 +26,13 @@ the L6 mapped-CC sender at `0x80008330`. Values above 127 and invalid mapped
 channels are skipped. `tests/cpu_sim_l6.py` executes the compiled hook and
 trampoline while stubbing those firmware helpers.
 
-The sender and getter roles are supported by analysis of the L6 1.10
-image and by a live QEMU hook test. The `l6-midi-sync` driver case pauses
+The sender and getter roles are supported by a live QEMU hook test on the
+L6 1.10 image. The `l6-midi-sync` driver case pauses
 the L6 guest at its Idle task, injects the request at the patched handler, and
 checks that every enabled CC-map entry reaches the stock mapped-CC queue sender
 with the configured channel and a valid value. The test lets the final sender
 call return successfully. It bypasses USB/DIN ingress, so host delivery and
-physical-device behavior remain unverified. A separate DIN probe now confirms
+physical-device behavior remain unverified. A separate DIN probe confirms
 the unattended L6 boot initializes LPUART2 after QEMU acknowledges the audio
 profile ramp handshake; bytes reach the raw MIDI ring and the stock handler.
 USB enumeration remains incomplete in the current emulator.

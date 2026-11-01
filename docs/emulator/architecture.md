@@ -3,7 +3,7 @@
 [Documentation index](../README.md)
 
 The emulator UI and host tools are Rust. The native GPUI application starts
-both firmware images in one QEMU process, receives completed display frames
+each firmware image in its own QEMU process, receives completed display frames
 through anonymous shared memory, and sends input over inherited sockets.
 
 ## Build and run

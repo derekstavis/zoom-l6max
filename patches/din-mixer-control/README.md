@@ -21,8 +21,7 @@ class-2 handler applies queued values through the native channel setters. A
 volatile QEMU DIN sweep verifies that path end to end: LPUART2 receives and
 drains 384 bytes, Main consumes all 66 mapped events, native setters run, and
 mixer RAM plus the channel-1 indicator change. L6 DIN mixer control is
-provided by stock firmware and does not need this patch. The earlier L6
-handler-argument hypothesis was disproved by the stock queued-event test.
+provided by stock firmware and does not need this patch.
 
 The native and browser builders select the L6max profile only for L6max
 firmware. L6's native event route is documented in
@@ -111,9 +110,9 @@ Confirmed on L6max, both alone and combined with `knob-dialog` and `midi-sync`:
   marker, the installed main image matches the built payload byte for byte,
   and boot/calibration/settings regions are preserved.
 - A fader Control Change sent into the DIN MIDI IN jack, with Mixer Control
-  via MIDI enabled through the real editor session, now moves the mixer
+  via MIDI enabled through the real editor session, moves the mixer
   (confirmed on channel-1 LEVEL), the same as the USB Mixer Control port.
-- `midi-sync`'s own CC 127 state broadcast (80 replies) and `knob-dialog`'s
+- `midi-sync`'s own CC 127 state broadcast and `knob-dialog`'s
   notification behavior both still work unchanged in the combined build.
 - General boot and input behavior is covered by the `l6max-input-smoke` driver case.
 
@@ -135,7 +134,7 @@ Confirmed on L6max, both alone and combined with `knob-dialog` and `midi-sync`:
   QEMU tests above. Emulator timing is not cycle-accurate to real silicon, so
   the added instructions' effect on interrupt/ISR latency under worst-case
   real-hardware conditions is unverified.
-- `0x8003f7c8` can now be reached from both the USB Mixer Control port and the
+- `0x8003f7c8` can be reached from both the USB Mixer Control port and the
   DIN jack. Combining with `midi-sync` is tested (see above), but near-
   simultaneous calls from USB and DIN into the same handler have not been
   stress-tested; if that handler is not reentrant-safe against two callers at

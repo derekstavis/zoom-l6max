@@ -343,12 +343,14 @@ pub struct InputHub {
     pub main: EngineInput,
     pub panel: EngineInput,
     analog: Arc<Mutex<[u16; 5]>>,
+    analog_channels: [u32; 5],
 }
 impl InputHub {
-    pub fn new(main: EngineInput, panel: EngineInput) -> Self {
+    pub fn new(main: EngineInput, panel: EngineInput, model: l6fw::Model) -> Self {
         Self {
             main,
             panel,
+            analog_channels: crate::controls::analog_channels(model),
             analog: Arc::new(Mutex::new([512; 5])),
         }
     }
@@ -375,7 +377,8 @@ impl InputHub {
         *self.analog.lock().unwrap()
     }
     pub fn set_analog_position(&self, channel: usize, value: u16) -> io::Result<u32> {
-        let adc = *crate::controls::ANALOG_CHANNELS
+        let adc = *self
+            .analog_channels
             .get(channel)
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "invalid analog channel"))?;
         if value > 1023 {
@@ -389,7 +392,7 @@ impl InputHub {
         Ok(sequence)
     }
     pub fn restore_analog_positions(&self, values: [u16; 5]) -> io::Result<()> {
-        for (channel, value) in crate::controls::ANALOG_CHANNELS.into_iter().zip(values) {
+        for (channel, value) in self.analog_channels.into_iter().zip(values) {
             self.main.adc(channel, value)?;
         }
         *self.analog.lock().unwrap() = values;
@@ -408,7 +411,7 @@ impl InputHub {
         let value = (positions[knob] as i64
             + steps as i64 * crate::controls::ANALOG_COUNTS_PER_STEP)
             .clamp(0, 1023) as u16;
-        let adc = crate::controls::ANALOG_CHANNELS[knob];
+        let adc = self.analog_channels[knob];
         let sequence = self.main.adc(adc, value)?;
         positions[knob] = value;
         Ok(sequence)
@@ -422,7 +425,7 @@ mod tests {
     fn analog_gestures_route_to_main_and_stop_at_physical_endpoints() {
         let (main, mut wire) = EngineInput::pair().unwrap();
         let (panel, _panel_wire) = EngineInput::pair().unwrap();
-        let hub = InputHub::new(main, panel);
+        let hub = InputHub::new(main, panel, l6fw::Model::L6);
         hub.knob(8, i32::MAX).unwrap();
         let high = Message::read(&mut wire).unwrap();
         assert_eq!(
@@ -480,7 +483,7 @@ mod tests {
     fn routes_commands_and_receives_fragmented_acknowledgements() {
         let (main, mut main_engine) = EngineInput::pair().unwrap();
         let (panel, mut panel_engine) = EngineInput::pair().unwrap();
-        let hub = InputHub::new(main, panel);
+        let hub = InputHub::new(main, panel, l6fw::Model::L6max);
         let menu_seq = hub.tap(0, 500).unwrap();
         assert_eq!(Message::read(&mut main_engine).unwrap().sequence, menu_seq);
         let up_seq = hub.down(1, 500).unwrap();

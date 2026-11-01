@@ -198,15 +198,10 @@ runtime checks; see the [L6 notes](l6/README.md) for its scope.
 - A full dump is 94 three-byte messages (282 bytes) in the 2048-byte transmit
   ring, which the stock queue writes without a full check. A host that does not
   read the port can lose older unread bytes, as with stock traffic.
-- The broadcast is ~17% longer than before MUTE/EFX TYPE/COMPRESSOR were
-  added (94 getter-and-send iterations instead of 80), so the hook now
-  occupies its caller's context for proportionally longer per request. This
-  used to be an open question; it's now resolved for the normal trigger
-  path. A sync request arriving over the USB Mixer Control port runs inside
-  the `MidiControlMsg` FreeRTOS task, confirmed as the only caller of the
-  hooked function (`0x8003f7c8`) — not inferred from a name, a direct
-  call-site search found exactly 4 call sites and all 4 are inside that one
-  task's own code. That task's priority (18) sits strictly below every
+- The broadcast runs 94 getter-and-send iterations, which occupies its
+  caller's context for that long per request. A sync request arriving over the
+  USB Mixer Control port runs inside the `MidiControlMsg` FreeRTOS task, the
+  only caller observed for the hooked function (`0x8003f7c8`). That task's priority (18) sits strictly below every
   audio-capture and recording-related task found (audio ADC sampling: 27;
   audio timing compensation: 26; recorder/sampler file I/O: 28). FreeRTOS's
   preemptive scheduler guarantees a strictly-higher-priority task always

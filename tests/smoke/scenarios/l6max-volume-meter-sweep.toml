@@ -88,9 +88,8 @@ guest_timeout_ms = 5000
 wall_timeout_s = 120
 
 # Use only the saved Pad 4 assignment and staged WAV from the prepared SD
-# image. Wait for mixer readiness before pressing; the short fixed boot delay
-# allowed input before the sampler was ready. A 20-second capture covers the
-# complete WAV at the current emulated playback cadence.
+# image. Wait for mixer readiness before pressing, so the sampler is ready. The WAV holds each isolated stereo
+# level long enough for the 33 ms meter scan; a 20-second capture covers it.
 [[step]]
 action = "sound-pad-playback"
 pad = 3

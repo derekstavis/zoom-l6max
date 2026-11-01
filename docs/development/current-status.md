@@ -28,8 +28,10 @@ analog audio behavior, and physical jack routing remain unverified.
 - L6 scene-save GUI coverage, startup-key parity, and the packaged-app menu
   and bundle cases require further validation.
 - Sound-pad playback and MASTER meter response are exercised for both models
-  using saved assignments. The L6 Editor-assigned pad scenario needs further
-  qualification. Recorder playback requires prepared media and state;
+  using saved assignments. The waveform cases compare SAI output with the
+  source WAV. Cards must meet the firmware's
+  [layout requirements](../emulator/usb.md#card-layout). The L6 Editor-assigned
+  pad scenario needs further qualification. Recorder playback requires prepared media and state;
   recording to a file remains unresolved.
 - L6max sound-pad key-bit assertions and DIN/Editor scenarios need live
   qualification. Physical control wiring is not established by emulator tests.

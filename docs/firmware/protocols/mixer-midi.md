@@ -66,7 +66,7 @@ Full coverage: every one of the 94 stock parameter identifiers is included.
 
 ## Evidence and limits
 
-Findings are static, plus a CPU-level simulation of the patched handler; see the
+Findings are checked with a CPU-level simulation of the patched handler; see the
 [patch validation](../../../patches/midi-sync/README.md#validation). The default
 controller numbers combine the default map with the identifier layout and match
 the emulator's documented channel-1 controller `51`. Hardware behavior, button

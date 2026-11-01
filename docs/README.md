@@ -32,10 +32,13 @@ task at hand.
 | [Native frontend](emulator/frontend.md) | Shared display frames, components, input timing, LEDs, CPU use |
 | [Headless host](emulator/host.md) | Engine options, lifecycle, services |
 | [QEMU board](emulator/board.md) | Dual-chip model, peripheral coverage, diagnostics |
+| [Audio](emulator/audio.md) | SAI output, output fidelity, live two-process timing |
 | [Controls and indicators](emulator/controls.md) | GPIO matrix, encoders, ADC knobs, LED wiring |
 | [Persistent storage](emulator/storage.md) | NOR regions, panel flash, version records, RTC |
 | [SD and USB](emulator/usb.md) | Card detection, CoreMIDI and ALSA MIDI, USB file transfers, limits |
 | [Power lifecycle](emulator/power.md) | GPIO power input, shutdown, restart, validation |
+| [Peripheral audit](emulator/manual-audit.md) | Register behavior and coverage against the reference manual |
+| [Panel audit](emulator/panel-manual-audit.md) | STM32G031 panel memory, GPIO, and timer coverage against RM0444 |
 
 The [firmware overview](firmware/README.md) summarizes supported revisions,
 model differences, patch contracts, updates, and MIDI protocols. Focused pages

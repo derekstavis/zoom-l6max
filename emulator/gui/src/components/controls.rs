@@ -51,6 +51,19 @@ pub fn power_with_press(
     super::power_button::PowerButton::new(size, scale).on_press(on_press)
 }
 
+/// The engine keeps a press down for its requested duration, so a release only
+/// shortens the hold when a shorter one was requested.
+pub fn power_with_events(
+    size: f32,
+    scale: f32,
+    on_press: impl Fn() + Send + Sync + 'static,
+    on_release: impl Fn() + Send + Sync + 'static,
+) -> impl gpui::IntoElement {
+    super::power_button::PowerButton::new(size, scale)
+        .on_press(on_press)
+        .on_release(on_release)
+}
+
 pub fn switch_with_toggle(
     w: f32,
     h: f32,

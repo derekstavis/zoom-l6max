@@ -46,7 +46,7 @@ impl Command {
                 .map_err(|e| e.to_string())?;
             }
             Self::Press { target } => {
-                inputs.down(target, 50).map_err(|e| e.to_string())?;
+                inputs.down(target, 100).map_err(|e| e.to_string())?;
                 inputs.up(target).map_err(|e| e.to_string())?;
             }
             Self::HoldDown {
@@ -173,6 +173,7 @@ pub fn run(scenario: Scenario, mut options: Options) -> Result<(), String> {
         session.as_ref().unwrap().engine.model(),
         options.logs.clone(),
     )?;
+    runner.set_separate_clocks(options.timing == l6max_host::engine::Timing::Split);
     runner.trace_file(options.logs.join(if options.trace_sd {
         "sdhci.trace"
     } else {

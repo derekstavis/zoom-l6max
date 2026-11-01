@@ -69,6 +69,7 @@ pub struct Runner {
     last_progress: Instant,
     panel_quiet: Option<([u32; 8], u32)>,
     ring_quiet: Option<([u32; 8], u32)>,
+    separate_clocks: bool,
     last_report_guest: u32,
     checkpoints: BTreeMap<String, Observation>,
     scene_save: Option<SceneSaveState>,
@@ -140,6 +141,7 @@ impl Runner {
             last_progress: Instant::now(),
             panel_quiet: None,
             ring_quiet: None,
+            separate_clocks: false,
             last_report_guest: 0,
             checkpoints: Default::default(),
             scene_save: None,
@@ -442,6 +444,8 @@ impl Runner {
                     require_pad_led_change,
                     playback_window_ms,
                     require_stereo_meter,
+                    expect_source,
+                    max_residual_db,
                 } => {
                     return Ok(Progress::Device(devices::Operation::SoundPadPlayback {
                         pad,
@@ -450,6 +454,8 @@ impl Runner {
                         require_pad_led_change,
                         playback_window_ms,
                         require_stereo_meter,
+                        expect_source,
+                        max_residual_db,
                     }));
                 }
                 Action::L6RecorderPlayback { target } => {
@@ -531,6 +537,9 @@ impl Runner {
                         target,
                         event,
                     }));
+                }
+                Action::L6maxTapHandler => {
+                    return Ok(Progress::Device(devices::Operation::L6maxTapHandler));
                 }
                 Action::L6UsbStartup => {
                     return Ok(Progress::Device(devices::Operation::L6UsbStartup));
@@ -864,8 +873,8 @@ impl Runner {
                     if *previous != channel {
                         return Err("analog assertion channel differs from preceding action".into());
                     }
-                    let adc_index =
-                        (l6max_host::controls::ANALOG_CHANNELS[channel - 1] - 3) as usize;
+                    let adc_index = (l6max_host::controls::analog_channels(self.model)[channel - 1]
+                        - 3) as usize;
                     obs.data.analog[channel - 1] == value
                         && obs.main.adc_samples[adc_index] == value
                 }
@@ -910,12 +919,32 @@ impl Runner {
                     reports_ready
                         && settled
                         && checkpoint.as_ref().is_none_or(|name| {
+                            // Firmware accelerates encoders by report spacing, which
+                            // only repeats exactly when both MCUs share one clock.
+                            if self.separate_clocks {
+                                let moved = after[channel - 1].count_ones() as i64
+                                    - before[channel - 1].count_ones() as i64;
+                                return match self.last_command {
+                                    Some(Command::Encoder { steps, .. }) => {
+                                        moved.signum() == i64::from(steps.signum())
+                                    }
+                                    _ => moved == 0,
+                                };
+                            }
                             self.checkpoints.get(name).is_some_and(|o| {
                                 rings(o.data.indicators)[channel - 1] == after[channel - 1]
                             })
                         })
                         && mask.is_none_or(|v| after[channel - 1] == v)
                         && (!changed || before[channel - 1] != after[channel - 1])
+                }
+                Action::ExpectRingLevel { channel, min, max } => {
+                    let level = l6max_host::indicators::ring_levels(obs.data.indicator_levels)
+                        [channel - 1]
+                        .into_iter()
+                        .max()
+                        .unwrap_or(0);
+                    (min..=max).contains(&level)
                 }
                 Action::ExpectMute { channel } => {
                     let base = self
@@ -964,6 +993,9 @@ impl Runner {
             return Err(format!("duplicate encoder reports: {delta}"));
         }
         Ok(delta == u64::from(steps.unsigned_abs()))
+    }
+    pub fn set_separate_clocks(&mut self, separate: bool) {
+        self.separate_clocks = separate;
     }
     pub(crate) fn trace_file(&mut self, path: PathBuf) {
         self.trace_path = path;

@@ -60,9 +60,9 @@ pub struct Options {
     pub start_paused: bool,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Timing {
-    /// 4 ns per instruction, with QEMU sleeping when ahead of wall time.
+    /// 2 ns per instruction, with QEMU sleeping when ahead of wall time.
     Paced,
     /// QEMU continuously adjusts the instruction/time ratio.
     Adaptive,
@@ -70,19 +70,22 @@ pub enum Timing {
     HostClock,
     /// Use the host virtual clock and one TCG execution thread per vCPU.
     HostClockMulti,
+    /// Run MAIN and the panel in separate paced QEMU processes, each with its
+    /// own instruction rate and host thread. Runs are not deterministic.
+    Split,
 }
 
 impl Timing {
     fn accelerator(self) -> &'static str {
         match self {
-            Self::Paced | Self::Adaptive | Self::HostClock => "tcg,thread=single",
+            Self::Paced | Self::Adaptive | Self::HostClock | Self::Split => "tcg,thread=single",
             Self::HostClockMulti => "tcg,thread=multi",
         }
     }
 
     fn icount(self) -> Option<&'static str> {
         match self {
-            Self::Paced => Some("shift=2,align=on,sleep=on"),
+            Self::Paced | Self::Split => Some("shift=1,align=on,sleep=on"),
             Self::Adaptive => Some("shift=auto,sleep=on"),
             Self::HostClock | Self::HostClockMulti => None,
         }
@@ -99,8 +102,9 @@ mod timing_tests {
         assert_eq!(Timing::HostClockMulti.accelerator(), "tcg,thread=multi");
         assert_eq!(Timing::HostClock.icount(), None);
         assert_eq!(Timing::HostClockMulti.icount(), None);
-        assert_eq!(Timing::Paced.icount(), Some("shift=2,align=on,sleep=on"));
+        assert_eq!(Timing::Paced.icount(), Some("shift=1,align=on,sleep=on"));
         assert_eq!(Timing::Adaptive.icount(), Some("shift=auto,sleep=on"));
+        assert_eq!(Timing::Split.icount(), Some("shift=1,align=on,sleep=on"));
     }
 
     #[test]
@@ -208,15 +212,16 @@ impl Options {
                         Some("adaptive") => Timing::Adaptive,
                         Some("host-clock") => Timing::HostClock,
                         Some("host-clock-multi") => Timing::HostClockMulti,
+                        Some("split") => Timing::Split,
                         _ => return Err(
-                            "--timing requires paced, adaptive, host-clock, or host-clock-multi"
+                            "--timing requires paced, adaptive, host-clock, host-clock-multi, or split"
                                 .into(),
                         ),
                     };
                 }
                 "--help" | "-h" => {
                     println!(
-                        "Engine options: [QEMU] [--qemu PATH] [--audio-device 'driver=...,id=...'] [--firmware-dir DIR | --firmware-package PACKAGE] [--update-package PACKAGE] [--no-auto-setup] [--logs DIR] [--state-dir DIR | --volatile] [--sd-image FILE | --no-sd] [--update-bootloader] [--usb] [--midi] [--trace-sd] [--timing paced|adaptive|host-clock|host-clock-multi] [--smoke-scenario FILE] [--gdb-socket PATH] [--control-socket PATH] [--start-paused]"
+                        "Engine options: [QEMU] [--qemu PATH] [--audio-device 'driver=...,id=...'] [--firmware-dir DIR | --firmware-package PACKAGE] [--update-package PACKAGE] [--no-auto-setup] [--logs DIR] [--state-dir DIR | --volatile] [--sd-image FILE | --no-sd] [--update-bootloader] [--usb] [--midi] [--trace-sd] [--timing paced|adaptive|host-clock|host-clock-multi|split] [--smoke-scenario FILE] [--gdb-socket PATH] [--control-socket PATH] [--start-paused]"
                     );
                     std::process::exit(0);
                 }
@@ -329,11 +334,14 @@ impl Engine {
         let (qmp_parent, qmp_guest) = UnixStream::pair().map_err(|e| e.to_string())?;
         let (usb_host, usb_guest) = UnixStream::pair().map_err(|e| e.to_string())?;
         let (din_midi_host, din_midi_guest) = UnixStream::pair().map_err(|e| e.to_string())?;
+        let split = options.timing == Timing::Split;
+        let (link_main, link_panel) = UnixStream::pair().map_err(|e| e.to_string())?;
+        let (control_main, control_panel) = UnixStream::pair().map_err(|e| e.to_string())?;
         // Both the USB and DIN MIDI sockets are always inherited, like the
         // real chip's always-present USB and UART silicon: whether a cable
         // is actually "plugged in" is a host-side runtime toggle
         // (`Engine::connect_usb`/`connect_midi`), not a boot-time choice.
-        let fds = vec![
+        let mut fds = vec![
             main_input_guest.as_raw_fd(),
             panel_input_guest.as_raw_fd(),
             qmp_guest.as_raw_fd(),
@@ -341,6 +349,10 @@ impl Engine {
             usb_guest.as_raw_fd(),
             din_midi_guest.as_raw_fd(),
         ];
+        if split {
+            fds.retain(|&fd| fd != panel_input_guest.as_raw_fd());
+            fds.extend([link_main.as_raw_fd(), control_main.as_raw_fd()]);
+        }
         let audio_id = options
             .audio_device
             .as_deref()
@@ -351,9 +363,10 @@ impl Engine {
                     .ok_or("--audio-device must contain a nonempty id= field")
             })
             .transpose()?;
+        let machine_type = if split { "l6max-main" } else { "l6max-dual" };
         let machine = audio_id.map_or_else(
-            || "l6max-dual".to_owned(),
-            |id| format!("l6max-dual,audiodev={id}"),
+            || machine_type.to_owned(),
+            |id| format!("{machine_type},audiodev={id}"),
         );
         let mut command = Command::new(&qemu);
         command
@@ -363,11 +376,18 @@ impl Engine {
         if let Some(plugin) = env::var_os("L6_QEMU_PLUGIN") {
             command.arg("-plugin").arg(plugin);
         }
-        if let Some(icount) = options.timing.icount() {
+        if split && model == l6fw::Model::L6 {
+            // L6's full-rate audio fits 4 ns per instruction, and it cannot
+            // hold real time during playback at 2 ns on one host thread.
+            command.args(["-icount", "shift=2,align=on,sleep=on"]);
+        } else if let Some(icount) = options.timing.icount() {
             command.args(["-icount", icount]);
         }
+        if !split {
+            command.args(["-smp", "2"]);
+        }
         command
-            .args(["-smp", "2", "-kernel"])
+            .arg("-kernel")
             .arg(firmware.join("main_firmware.bin"))
             .args([
                 "-S",
@@ -377,7 +397,7 @@ impl Engine {
                 "-monitor",
                 "none",
                 "-serial",
-                "none",
+                if split { "chardev:panel-link" } else { "none" },
                 "-chardev",
             ])
             .arg(format!("socket,id=management,fd={}", qmp_guest.as_raw_fd()))
@@ -413,6 +433,16 @@ impl Engine {
             .stderr(Stdio::from(
                 File::create(logs.join("engine.stderr")).map_err(|e| e.to_string())?,
             ));
+        if split {
+            command
+                .args(["-chardev"])
+                .arg(format!(
+                    "socket,id=panel-link,fd={},server=off",
+                    link_main.as_raw_fd()
+                ))
+                .env("L6_INPUT_FD", main_input_guest.as_raw_fd().to_string())
+                .env("L6_PANEL_CONTROL_FD", control_main.as_raw_fd().to_string());
+        }
         if let Some(spec) = &options.audio_device {
             command.args(["-audiodev", spec]);
         }
@@ -475,6 +505,89 @@ impl Engine {
                 let detail = fs::read_to_string(logs.join("engine.stderr")).unwrap_or_default();
                 format!("QMP handshake:{e}; QEMU: {detail}")
             })?);
+        if split {
+            let (qmp_parent, qmp_guest) = UnixStream::pair().map_err(|e| e.to_string())?;
+            let fds = [
+                panel_input_guest.as_raw_fd(),
+                qmp_guest.as_raw_fd(),
+                link_panel.as_raw_fd(),
+                control_panel.as_raw_fd(),
+            ];
+            let mut panel = Command::new(&qemu);
+            panel
+                .args(["-M", "l6max-panel", "-accel", options.timing.accelerator()])
+                // The firmware times its LED PWM pulses in software, so ring
+                // brightness scales with this cost; 64 ns per instruction
+                // reaches the rings' measured full scale on both models.
+                .args(["-icount", "shift=6,sleep=off", "-kernel"])
+                .arg(firmware.join("secondary_firmware.bin"))
+                .args(["-S", "-no-shutdown", "-display", "none", "-monitor", "none"])
+                .args(["-serial", "chardev:panel-link", "-chardev"])
+                .arg(format!(
+                    "socket,id=panel-link,fd={},server=off",
+                    link_panel.as_raw_fd()
+                ))
+                .arg("-chardev")
+                .arg(format!("socket,id=management,fd={}", qmp_guest.as_raw_fd()))
+                .args([
+                    "-object",
+                    "monitor-qmp,id=management-monitor,chardev=management",
+                    "-d",
+                    "guest_errors,unimp",
+                    "-D",
+                ])
+                .arg(logs.join("engine-panel.trace"))
+                .current_dir(&logs)
+                .env_clear()
+                .env(
+                    "L6_MODEL",
+                    if model == l6fw::Model::L6 {
+                        "l6"
+                    } else {
+                        "l6max"
+                    },
+                )
+                .env("L6_PANEL_REALTIME", "1")
+                .env("L6_INPUT_FD", panel_input_guest.as_raw_fd().to_string())
+                .env("L6_PANEL_CONTROL_FD", control_panel.as_raw_fd().to_string())
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::from(
+                    File::create(logs.join("engine-panel.stderr")).map_err(|e| e.to_string())?,
+                ));
+            if let Some(directory) = &options.state_dir {
+                panel.env(
+                    "L6_STATE_DIR",
+                    directory.canonicalize().map_err(|e| e.to_string())?,
+                );
+            }
+            // Only the selected IPC descriptors survive exec.
+            unsafe {
+                panel.pre_exec(move || {
+                    for &fd in &fds {
+                        let flags = libc::fcntl(fd, libc::F_GETFD);
+                        if flags < 0
+                            || libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0
+                        {
+                            return Err(io::Error::last_os_error());
+                        }
+                    }
+                    Ok(())
+                });
+            }
+            engine.children.push(
+                panel
+                    .spawn()
+                    .map_err(|e| format!("start panel QEMU engine:{e}"))?,
+            );
+            engine
+                .management
+                .push(QmpClient::connect(qmp_parent).map_err(|e| {
+                    let detail =
+                        fs::read_to_string(logs.join("engine-panel.stderr")).unwrap_or_default();
+                    format!("panel QMP handshake:{e}; QEMU: {detail}")
+                })?);
+        }
         if !engine.connected() {
             return Err("a firmware process exited during startup".into());
         }
@@ -493,7 +606,7 @@ impl Engine {
                     .map_err(|e| format!("resume guest: {e}"))?;
             }
         }
-        engine.inputs = Some(Arc::new(InputHub::new(main_input, panel_input)));
+        engine.inputs = Some(Arc::new(InputHub::new(main_input, panel_input, model)));
         if let Some(path) = options.control_socket.clone() {
             engine.control_server = Some(crate::control::ControlServer::start(
                 path,
@@ -601,7 +714,7 @@ impl Drop for Engine {
     fn drop(&mut self) {
         drop(self.control_server.take());
         drop(self.midi.take());
-        if let Some(management) = self.management.first() {
+        for management in &self.management {
             let _ = management.quit();
         }
         // Give QEMU's QMP quit path time to close audio backends and flush

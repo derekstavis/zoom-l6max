@@ -18,7 +18,7 @@ consumed through the same shared-memory display interface used by the GUI.
 
 Shared engine options include `--firmware-dir`, `--logs`, `--state-dir`,
 `--volatile`, `--sd-image`, `--no-sd`, `--update-bootloader`, `--usb`,
-`--midi`, `--trace-sd`, `--timing paced|adaptive`, `--gdb-socket`, and
+`--midi`, `--trace-sd`, `--timing paced|adaptive|split` (default `paced`), `--gdb-socket`, and
 `--control-socket PATH`. `--usb`
 and `--midi` only pick the connected state at startup — both can be
 connected or disconnected at any time while running; see

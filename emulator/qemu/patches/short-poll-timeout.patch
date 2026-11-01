@@ -1,0 +1,21 @@
+--- a/util/qemu-timer.c
++++ b/util/qemu-timer.c
+@@ -343,6 +343,18 @@
+         return ppoll((struct pollfd *)fds, nfds, &ts, NULL);
+     }
+ #else
++    /* Without ppoll, g_poll rounds a short timeout up to a millisecond, which
++     * starves timers that fire every 100 us on an otherwise idle guest. */
++    if (timeout > 0 && timeout < SCALE_MS) {
++        struct timespec delay = { .tv_nsec = timeout };
++        int ready = g_poll(fds, nfds, 0);
++
++        if (ready) {
++            return ready;
++        }
++        nanosleep(&delay, NULL);
++        return g_poll(fds, nfds, 0);
++    }
+     return g_poll(fds, nfds, qemu_timeout_ns_to_ms(timeout));
+ #endif
+ }

@@ -11,7 +11,7 @@ profile and compatibility exceptions do not establish physical RT1041 behavior.
 | --- | --- |
 | GPIO | QEMU's i.MX GPIO supplies direction, input, and interrupt state. A board adapter provides the RT atomic aliases and panel reset/boot wiring. IOMUX pad electrical behavior is not modeled. |
 | eDMA / DMAMUX | Models observed TCD layouts, request pacing, scatter/gather reload, completion, and interrupt state. Linked minor loops, MLOFF, unequal transfer widths, and unobserved request sources remain unsupported. |
-| SAI | Models FIFO state, frame timing, masks, and the exercised RX/TX paths. L6 ignores the reserved SAI3 FIFO-combine field. L6max uses a receive compatibility mode for the first 40.5 guest seconds, then switches to regular RX behavior; see [audio emulation](audio.md). |
+| SAI | Models FIFO state, frame timing, masks, and the exercised RX/TX paths. L6 ignores the reserved SAI3 FIFO-combine field. See [audio emulation](audio.md). |
 | CCM / CCM_ANALOG | Models relevant reset values, USB PLL control and lock state. The audio scheduler uses a nominal 24.576 MHz source and configured frame dividers. Bootloader-inherited clock roots and other peripheral rates remain unverified. |
 | LPSPI3 / external NOR | Models the L6 resource-NOR read and status commands and relevant register reset values. It is not a complete LPSPI controller or physical flash model. |
 | USDHC1 / SD | Reuses QEMU's i.MX USDHC/SDHCI and SD card models with a board adapter for clock, power, and register semantics. Full reset-state coverage remains open. |

@@ -1,7 +1,7 @@
 # Working in the tooling repository
 
 This repository owns the simulator, package/patch tools and executable tests.
-Keep changes on `l6` until the user approves a merge.
+Keep changes on a feature branch until the user approves a merge.
 
 Read `docs/development/current-status.md`, then `docs/development/testing.md`.
 Use `cargo run --offline --locked -p l6test -- list` and the consolidated driver.
@@ -29,5 +29,4 @@ commit or QEMU version string does not identify a QEMU executable. The driver
 pins external QEMU binaries and explicitly marks their source as unattested.
 
 Read the existing working-tree status before editing. Preserve unrelated changes.
-For the tooling-consolidation task, the user requested one final commit after
-verification, rather than checkpoint commits. Never merge or squash history implicitly.
+Never merge or squash history implicitly.

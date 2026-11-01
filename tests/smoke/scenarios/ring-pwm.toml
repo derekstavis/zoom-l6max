@@ -1,0 +1,23 @@
+version = 1
+name = "ring-pwm"
+models = ["l6", "l6max"]
+fixture = "prepared"
+
+[[step]]
+action = "include"
+path = "fragments/prepared-level.toml"
+
+[[step]]
+action = "encoder"
+channel = 1
+steps = 40
+gesture = "scroll"
+
+# Firmware times LED pulses in software, so a wrong panel instruction cost shows
+# up here and not in the lit or unlit ring masks. Full scale is about 41 on L6max
+# and 60 on L6, with up to 15% below that from single-process scheduling.
+[[step]]
+action = "expect-ring-level"
+channel = 1
+min = 30
+max = 72

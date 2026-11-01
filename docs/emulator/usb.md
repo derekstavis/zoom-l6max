@@ -53,6 +53,24 @@ adapter keeps them readable but out of the interrupt decision, so card
 insertion and removal interrupt only through INT_SIGNAL_EN. Card commands, DMA
 and controller interrupts continue through upstream QEMU.
 
+### Card layout
+
+Observed on L6max firmware 1.10 through the emulator, by pressing Record:
+
+| Card | Result |
+| --- | --- |
+| FAT16 with 2 KiB clusters, FAT32 with 4 or 8 KiB clusters | `Invalid SD Card!` |
+| FAT16, 16 KiB clusters, no `ZOOM_L6max.sys` | Opens the SD Card menu, which also blocks pad input |
+| FAT16, 16 KiB clusters, with `ZOOM_L6max.sys` | Records |
+| exFAT, 32 GiB or smaller | `Invalid SD Card!` |
+| exFAT, 33 GiB or larger, 128 KiB clusters, with `ZOOM_L6max.sys` | Records |
+
+Cards with small clusters still boot and play assigned pads. WAV files need the
+FAT archive attribute to appear in the firmware's file list. L6 has not been
+tested against this table.
+
+### Validation
+
 Validation covers CMD0/8, ACMD41, identification, card selection, CMD17/18
 reads, filesystem startup, and removal/reinsertion. With the tested FAT32
 image, the recorder changes from `No SD Card` to `No File`. Removing the
