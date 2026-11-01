@@ -19,6 +19,12 @@ models = ["l6", "l6max"]
 scenario = "scenarios/encoder.toml"
 
 [[case]]
+id = "ring-pwm"
+suites = ["regression", "full", "panel"]
+models = ["l6", "l6max"]
+scenario = "scenarios/ring-pwm.toml"
+
+[[case]]
 id = "mute"
 suites = []
 models = ["l6", "l6max"]
@@ -196,6 +202,16 @@ scenario = "scenarios/l6-panel-event-map.toml"
 volatile = true
 no_sd = true
 wall_timeout_s = 1800
+
+[[case]]
+id = "l6max-tap-handler"
+suites = ["quick", "full"]
+models = ["l6max"]
+scenario = "scenarios/l6max-tap-handler.toml"
+needs_configuration = true
+fixture = "prepared"
+no_sd = true
+wall_timeout_s = 900
 
 [[case]]
 id = "l6-main-gpio-events"
@@ -471,3 +487,48 @@ scenario = "scenarios/l6-volume-meter-playback.toml"
 fixture = "l6-volume-meter"
 environment = { L6_AUDIO_SAMPLE_TRACE = "1" }
 wall_timeout_s = 900
+
+[[case]]
+id = "l6-sound-pad-waveform"
+suites = []
+models = ["l6"]
+scenario = "scenarios/l6-sound-pad-waveform.toml"
+needs_configuration = true
+environment = { L6_AUDIO_SAMPLE_TRACE = "1", L6_AUDIO_RAW_CAPTURE = "{logs}/sai-output.s32", L6_AUDIO_TDM_CAPTURE = "{logs}/sai-tdm.l6td" }
+wall_timeout_s = 900
+
+[[case]]
+id = "l6max-sound-pad-waveform"
+suites = []
+models = ["l6max"]
+scenario = "scenarios/l6max-sound-pad-waveform.toml"
+needs_configuration = true
+environment = { L6_AUDIO_SAMPLE_TRACE = "1", L6_AUDIO_RAW_CAPTURE = "{logs}/sai-output.s32", L6_AUDIO_TDM_CAPTURE = "{logs}/sai-tdm.l6td" }
+wall_timeout_s = 1800
+
+[[case]]
+id = "l6max-switches-during-playback"
+suites = []
+models = ["l6max"]
+scenario = "scenarios/l6max-switches-during-playback.toml"
+needs_configuration = true
+environment = { L6_AUDIO_SAMPLE_TRACE = "1", L6_AUDIO_RAW_CAPTURE = "{logs}/sai-output.s32", L6_AUDIO_TDM_CAPTURE = "{logs}/sai-tdm.l6td" }
+wall_timeout_s = 1800
+
+[[case]]
+id = "l6-sound-pad-coreaudio"
+suites = []
+models = ["l6"]
+scenario = "scenarios/l6-sound-pad-coreaudio.toml"
+needs_configuration = true
+environment = { L6_AUDIO_SAMPLE_TRACE = "1", L6_AUDIO_COREAUDIO_CAPTURE = "{logs}/coreaudio.f32" }
+wall_timeout_s = 1800
+
+[[case]]
+id = "l6max-sound-pad-coreaudio"
+suites = []
+models = ["l6max"]
+scenario = "scenarios/l6max-sound-pad-coreaudio.toml"
+needs_configuration = true
+environment = { L6_AUDIO_SAMPLE_TRACE = "1", L6_AUDIO_COREAUDIO_CAPTURE = "{logs}/coreaudio.f32" }
+wall_timeout_s = 1800

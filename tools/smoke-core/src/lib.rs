@@ -5,6 +5,7 @@ mod runner;
 mod scenario;
 mod session;
 mod trace;
+mod waveform;
 pub use runner::{Progress, Runner};
 pub use scenario::{
     Action, Gesture, STATE_SPEC_ENV, Scenario, Step, control_target, is_switch, model_name,

@@ -790,7 +790,14 @@ fn main() {
     });
     #[cfg(target_os = "macos")]
     if options.audio_device.is_none() {
-        options.audio_device = Some("driver=coreaudio,id=l6-audio".into());
+        // Match the firmware's stream so QEMU's mixer does not resample it.
+        options.audio_device = Some(
+            "driver=coreaudio,id=l6-audio,out.frequency=48000,out.channels=2,out.format=f32,out.buffer-count=12"
+                .into(),
+        );
+    }
+    if options.smoke_scenario.is_none() && !args.iter().any(|arg| arg == "--timing") {
+        options.timing = l6max_host::engine::Timing::Split;
     }
     let bundle = bundle::Bundle::detect().unwrap_or_else(|error| {
         tracing::error!(%error, "Could not open app data");
@@ -875,7 +882,12 @@ fn main() {
     let run_tick = display.is_some() || bundle.is_some();
     let testing = options.smoke_scenario.is_some();
     let scenario_smoke = selected_scenario
-        .map(|scenario| smoke_core::Runner::new(scenario, model, options.logs.clone()))
+        .map(|scenario| {
+            smoke_core::Runner::new(scenario, model, options.logs.clone()).map(|mut runner| {
+                runner.set_separate_clocks(options.timing == l6max_host::engine::Timing::Split);
+                runner
+            })
+        })
         .transpose()
         .unwrap_or_else(|error| {
             tracing::error!(%error, "Invalid smoke scenario");

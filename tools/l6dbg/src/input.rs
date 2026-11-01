@@ -3636,10 +3636,10 @@ fn run_l6max_panel_key_probe(
         .map_err(|error| error.to_string())?;
     for code in 0x19..=0x1c {
         let offset = code * 8;
-        let sentinel = u32::from_le_bytes(lookup[offset..offset + 4].try_into().unwrap());
+        let bit = u32::from_le_bytes(lookup[offset..offset + 4].try_into().unwrap());
         let index = u32::from_le_bytes(lookup[offset + 4..offset + 8].try_into().unwrap());
         println!(
-            "L6max channel-control key code {code:#04x}: state-bit={sentinel:#010x}, word-index={index:#010x}"
+            "L6max channel-control key code {code:#04x}: state-bit={bit}, word-index={index:#010x}"
         );
     }
     let read_words = || -> Result<[u32; 6], String> {

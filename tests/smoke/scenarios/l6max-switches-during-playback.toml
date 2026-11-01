@@ -1,0 +1,197 @@
+version = 1
+name = "l6max-switches-during-playback"
+models = ["l6max"]
+fixture = "sound-pad-waveform"
+backends = ["gui"]
+
+[[step]]
+action = "wait"
+until = "mixer-ready"
+guest_timeout_ms = 60000
+wall_timeout_s = 900
+
+[[step]]
+action = "delay"
+guest_ms = 5000
+guest_timeout_ms = 10000
+wall_timeout_s = 300
+
+# Set the analog mixer controls before playback, with MASTER below clipping:
+# SOUND PAD, EFX RTN, MASTER, MONITOR and SUB-OUT.
+[[step]]
+action = "analog"
+channel = 1
+steps = 16
+
+[[step]]
+action = "expect-analog"
+channel = 1
+value = 1023
+
+[[step]]
+action = "analog"
+channel = 2
+steps = 16
+
+[[step]]
+action = "expect-analog"
+channel = 2
+value = 1023
+
+[[step]]
+action = "analog"
+channel = 3
+steps = 8
+
+[[step]]
+action = "expect-analog"
+channel = 3
+value = 768
+
+[[step]]
+action = "analog"
+channel = 4
+steps = 16
+
+[[step]]
+action = "expect-analog"
+channel = 4
+value = 1023
+
+[[step]]
+action = "analog"
+channel = 5
+steps = 16
+
+[[step]]
+action = "expect-analog"
+channel = 5
+value = 1023
+
+# Let the mixer controls settle before treating the current meter as baseline.
+[[step]]
+action = "delay"
+guest_ms = 1000
+guest_timeout_ms = 5000
+wall_timeout_s = 120
+
+# Click every persistent switch through the GUI while Pad 4 plays.
+[[step]]
+action = "press"
+control = "sound-pad-4"
+
+[[step]]
+action = "switch"
+control = "ch5-pad-switch"
+enabled = true
+
+[[step]]
+action = "expect-button-report"
+control = "ch5-pad-switch"
+
+[[step]]
+action = "switch"
+control = "ch5-pad-switch"
+enabled = false
+
+[[step]]
+action = "expect-button-report"
+control = "ch5-pad-switch"
+
+[[step]]
+action = "switch"
+control = "ch6-pad-switch"
+enabled = true
+
+[[step]]
+action = "expect-button-report"
+control = "ch6-pad-switch"
+
+[[step]]
+action = "switch"
+control = "ch6-pad-switch"
+enabled = false
+
+[[step]]
+action = "expect-button-report"
+control = "ch6-pad-switch"
+
+[[step]]
+action = "switch"
+control = "ch7-pad-switch"
+enabled = true
+
+[[step]]
+action = "expect-button-report"
+control = "ch7-pad-switch"
+
+[[step]]
+action = "switch"
+control = "ch7-pad-switch"
+enabled = false
+
+[[step]]
+action = "expect-button-report"
+control = "ch7-pad-switch"
+
+[[step]]
+action = "switch"
+control = "ch8-pad-switch"
+enabled = true
+
+[[step]]
+action = "expect-button-report"
+control = "ch8-pad-switch"
+
+[[step]]
+action = "switch"
+control = "ch8-pad-switch"
+enabled = false
+
+[[step]]
+action = "expect-button-report"
+control = "ch8-pad-switch"
+
+[[step]]
+action = "switch"
+control = "master-submix-switch"
+enabled = true
+
+[[step]]
+action = "expect-button-report"
+control = "master-submix-switch"
+
+[[step]]
+action = "switch"
+control = "master-submix-switch"
+enabled = false
+
+[[step]]
+action = "expect-button-report"
+control = "master-submix-switch"
+
+[[step]]
+action = "delay"
+guest_ms = 8000
+guest_timeout_ms = 20000
+wall_timeout_s = 120
+
+# The panel must still respond after the switch changes.
+[[step]]
+action = "encoder"
+channel = 1
+steps = 1
+
+[[step]]
+action = "expect-encoder-reports"
+
+# A later press records a second playback for comparison with its source.
+[[step]]
+action = "press"
+control = "sound-pad-4"
+
+[[step]]
+action = "delay"
+guest_ms = 8000
+guest_timeout_ms = 20000
+wall_timeout_s = 120

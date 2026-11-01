@@ -64,6 +64,10 @@ fn ring_settle() -> u32 {
 fn default_playback_window_ms() -> u32 {
     6000
 }
+
+fn default_max_residual_db() -> f64 {
+    -60.
+}
 fn guest_timeout() -> u32 {
     10_000
 }
@@ -174,6 +178,10 @@ pub enum Action {
         playback_window_ms: u32,
         #[serde(default)]
         require_stereo_meter: bool,
+        #[serde(default)]
+        expect_source: Option<String>,
+        #[serde(default = "default_max_residual_db")]
+        max_residual_db: f64,
     },
     L6RecorderPlayback {
         target: u32,
@@ -269,6 +277,7 @@ pub enum Action {
         target: u32,
         event: u8,
     },
+    L6maxTapHandler,
     L6UsbStartup,
     L6DinEventDispatch {
         group: u8,
@@ -292,6 +301,12 @@ pub enum Action {
         checkpoint: Option<String>,
         #[serde(default = "ring_settle")]
         settle_ms: u32,
+    },
+    /// The brightest segment of a ring must read this raw PWM level.
+    ExpectRingLevel {
+        channel: usize,
+        min: u8,
+        max: u8,
     },
     ExpectMute {
         channel: usize,
@@ -579,6 +594,12 @@ impl Scenario {
                         .into(),
                 );
             }
+            if matches!(step.action, Action::L6maxTapHandler)
+                && (value.models.iter().any(|m| m != "l6max")
+                    || step.models.iter().any(|m| m != "l6max"))
+            {
+                return Err("l6max-tap-handler requires L6max scope".into());
+            }
             if matches!(step.action, Action::L6UsbStartup)
                 && (value.models.iter().any(|m| m != "l6")
                     || step.models.iter().any(|m| m != "l6")
@@ -759,6 +780,7 @@ impl Scenario {
                 | Action::ExpectSettings { .. }
                 | Action::PanelEvent { .. }
                 | Action::L6MainGpioEvent { .. }
+                | Action::L6maxTapHandler
                 | Action::L6UsbStartup
                 | Action::L6DinEventDispatch { .. }
                 | Action::L6InputSweep
@@ -901,6 +923,9 @@ impl Scenario {
                             .into(),
                     );
                 }
+                Action::ExpectRingLevel { channel, min, max } if *channel == 0 || min > max => {
+                    return Err("ring level assertion needs a channel and min <= max".into());
+                }
                 Action::ExpectRing {
                     channel,
                     mask,
@@ -918,6 +943,7 @@ impl Scenario {
                 _ => {}
             }
             if let Action::Encoder { channel, .. }
+            | Action::ExpectRingLevel { channel, .. }
             | Action::ExpectRing { channel, .. }
             | Action::ExpectMute { channel } = &step.action
             {

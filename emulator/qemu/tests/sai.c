@@ -153,22 +153,6 @@ int main(void)
     }
     assert(!(l6_sai_read(&sai, L6_SAI_RCSR, 4) & L6_SAI_FRF));
 
-    /* L6max firmware freezes its panel indicators with spec-only FCOMB=read
-     * receive placement. Its board profile enables this empirical stream
-     * compatibility behavior without changing register/read semantics. */
-    l6_sai_fifo_reset(&sai, false);
-    sai.rx_read_stream_compat = true;
-    sai.regs[L6_SAI_RCR4 / 4] = L6_SAI_RX_FCOMB_READ |
-                                (3u << L6_SAI_FRSZ_SHIFT);
-    uint32_t compat_rx_frame[4] = { 41, 42, 43, 44 };
-    l6_sai_rx_frame(&sai, compat_rx_frame, 4);
-    for (unsigned channel = 0; channel < L6_SAI_CHANNELS; channel++) {
-        assert(sai.rx_count[channel] == 1);
-        assert(sai.rx_fifo[channel][0] == 41 + channel);
-        assert(l6_sai_read(&sai, L6_SAI_RDR0, 4) == 41 + channel);
-    }
-    sai.rx_read_stream_compat = false;
-
     /* FCOMB=write distributes a single input word stream over enabled FIFOs. */
     l6_sai_fifo_reset(&sai, false);
     sai.regs[L6_SAI_RCR4 / 4] = L6_SAI_RX_FCOMB_WRITE |

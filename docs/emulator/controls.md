@@ -27,7 +27,7 @@ model-specific maps are listed in the [board reference](board.md#display-and-inp
 ## Main GPIO controls
 
 L6max routes Menu and Record through GPIO5 bits 2 and 0, and TAP through
-GPIO2 bit 22. Its sound pads use the following active-low inputs:
+GPIO2 bit 31. Its sound pads use the following active-low inputs:
 
 | Sound pad | Input target | GPIO |
 | --- | ---: | --- |
@@ -53,13 +53,23 @@ the L6 file browser requires.
 The main MCU samples the output knobs as 10-bit ADC values. L6 has SOUND PAD,
 EFX RTN, MASTER, and MONITOR; L6max also has SUB-OUT.
 
-| Knob | ADC channel | Firmware event |
-| --- | ---: | --- |
-| SOUND PAD | 5 | `EV_VR_SOUNDPAD` (58) |
-| EFX RTN | 6 | `EV_VR_EFX` (61) |
-| MASTER | 4 | `EV_VR_MASTER` (60) |
-| MONITOR | 3 | `EV_VR_MONITOR` (59) |
-| SUB-OUT | 7 | `EV_VR_SUBOUT` (62) |
+| Knob | L6max ADC channel | L6 ADC channel | L6max firmware event |
+| --- | ---: | ---: | --- |
+| SOUND PAD | 3 | 5 | `EV_VR_SOUNDPAD` (58) |
+| EFX RTN | 4 | 6 | `EV_VR_EFX` (59) |
+| MASTER | 5 | 4 | `EV_VR_MASTER` (60) |
+| MONITOR | 6 | 3 | `EV_VR_MONITOR` (61) |
+| SUB-OUT | 7 | none | `EV_VR_SUBOUT` (62) |
+
+These assignments come from observing the firmware through the emulator. On L6max,
+each channel changes the SAI slots of its knob. On L6, channels 5, 4, and 6 submit
+SOUND PAD, MASTER, and EFX RTN events, and MONITOR is taken to be the remaining
+channel, 3. The L6 SOUND PAD and MASTER channels each silence the output, and its
+EFX RTN and MONITOR channels leave a dry signal unchanged.
+
+MASTER/SUB-MIX press and release reach the L6max sub-out handler, which updates its
+DSP routing value. A sound pad's sub-out level does not change with this switch.
+L6max TAP lights logical LED 33 on effect types 3, 4, and 5, and tapping interrupts it.
 
 Samples range from 0 to 1023 and start at 512. Each gesture step changes the
 sample by 32, clamped at either end. Knob artwork shows the simulated shaft

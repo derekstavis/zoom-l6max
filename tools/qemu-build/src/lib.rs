@@ -16,6 +16,8 @@ const MESON_ENTRY: &str = "arm_common_ss.add(files('l6max.c'))";
 const BOARD_SOURCES: &[&str] = &[
     "l6max.c",
     "l6-profile.h",
+    "l6-panel-gpio.h",
+    "l6-panel-timer.h",
     "l6max-display.h",
     "l6max-indicators.h",
     "l6max-usb.h",
@@ -34,15 +36,17 @@ fn install_board_sources(repository: &Path, source: &Path) -> Result<(), String>
     Ok(())
 }
 
-fn apply_coreaudio_patch(source: &Path, repository: &Path) -> Result<(), String> {
-    let patch = repository.join("emulator/qemu/patches/coreaudio-underrun.patch");
-    let coreaudio = fs::read_to_string(source.join("audio/coreaudio.m"))
-        .map_err(|error| format!("could not read QEMU CoreAudio source: {error}"))?;
-    if coreaudio.contains("kAudioFormatFlagsNativeFloatPacked")
-        && coreaudio.contains("core->underruns++")
-        && coreaudio.contains("playback had")
-        && coreaudio.contains("L6_AUDIO_COREAUDIO_CAPTURE")
-    {
+fn apply_patch(
+    source: &Path,
+    repository: &Path,
+    name: &str,
+    marker_file: &str,
+    markers: &[&str],
+) -> Result<(), String> {
+    let patch = repository.join("emulator/qemu/patches").join(name);
+    let patched = fs::read_to_string(source.join(marker_file))
+        .map_err(|error| format!("could not read QEMU {marker_file}: {error}"))?;
+    if markers.iter().all(|marker| patched.contains(marker)) {
         return Ok(());
     }
 
@@ -52,9 +56,9 @@ fn apply_coreaudio_patch(source: &Path, repository: &Path) -> Result<(), String>
         .arg("--input")
         .arg(&patch)
         .status()
-        .map_err(|error| format!("could not check the CoreAudio patch: {error}"))?;
+        .map_err(|error| format!("could not check {name}: {error}"))?;
     if !check.success() {
-        return Err("the CoreAudio underrun patch does not apply to this QEMU source".into());
+        return Err(format!("{name} does not apply to this QEMU source"));
     }
 
     let status = Command::new("patch")
@@ -63,12 +67,41 @@ fn apply_coreaudio_patch(source: &Path, repository: &Path) -> Result<(), String>
         .arg("--input")
         .arg(&patch)
         .status()
-        .map_err(|error| format!("could not apply the CoreAudio patch: {error}"))?;
+        .map_err(|error| format!("could not apply {name}: {error}"))?;
     if status.success() {
         Ok(())
     } else {
-        Err(format!("applying the CoreAudio patch exited with {status}"))
+        Err(format!("applying {name} exited with {status}"))
     }
+}
+
+fn apply_patches(source: &Path, repository: &Path) -> Result<(), String> {
+    apply_patch(
+        source,
+        repository,
+        "coreaudio-underrun.patch",
+        "audio/coreaudio.m",
+        &[
+            "kAudioFormatFlagsNativeFloatPacked",
+            "core->underruns++",
+            "playback had",
+            "L6_AUDIO_COREAUDIO_CAPTURE",
+        ],
+    )?;
+    apply_patch(
+        source,
+        repository,
+        "short-poll-timeout.patch",
+        "util/qemu-timer.c",
+        &["starves timers"],
+    )?;
+    apply_patch(
+        source,
+        repository,
+        "icount-deadline-notify.patch",
+        "accel/tcg/tcg-accel-ops-icount.c",
+        &["icount_timers_stay_on_vcpu"],
+    )
 }
 
 fn copy_source(source: &std::path::Path, target: &std::path::Path) -> Result<(), String> {
@@ -219,7 +252,7 @@ pub fn build(request: &Request) -> Result<PathBuf, String> {
     } else {
         source
     };
-    apply_coreaudio_patch(&source, &request.repository)?;
+    apply_patches(&source, &request.repository)?;
     install_board_sources(&request.repository, &source)?;
     let meson_path = source.join("hw/arm/meson.build");
     let meson = fs::read_to_string(&meson_path)

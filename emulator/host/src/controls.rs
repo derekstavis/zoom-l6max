@@ -6,8 +6,14 @@ pub struct Control {
     pub switch: bool,
 }
 pub const INPUT_COUNT: usize = 54;
-/// Physical ADC channels in UI order, following VR table 0x800c18cc.
-pub const ANALOG_CHANNELS: [u32; 5] = [5, 6, 4, 3, 7];
+/// Physical ADC channels in UI order: SOUND PAD, EFX RTN, MASTER, MONITOR, SUB-OUT.
+/// L6 has no SUB-OUT knob. See docs/emulator/controls.md.
+pub const fn analog_channels(model: l6fw::Model) -> [u32; 5] {
+    match model {
+        l6fw::Model::L6 => [5, 6, 4, 3, 7],
+        l6fw::Model::L6max => [3, 4, 5, 6, 7],
+    }
+}
 pub const ANALOG_COUNTS_PER_STEP: i64 = 32;
 pub const CONTROLS: &[Control] = &[
     Control {

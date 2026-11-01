@@ -2,8 +2,7 @@
 
 [Documentation index](../README.md)
 
-The emulator runs MAIN and panel firmware in separate address spaces within a
-shared QEMU process. MAIN handles mixer state, storage, USB, and L6max display
+The emulator runs MAIN and panel firmware in separate address spaces. MAIN handles mixer state, storage, USB, and L6max display
 rendering; the panel handles control scanning and indicators. Profiles and
 patches are specific to the model and supported firmware revision. See
 [model compatibility](../guides/model-compatibility.md) and

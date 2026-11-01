@@ -3,9 +3,10 @@
 [Documentation index](../README.md)
 
 The Rust/GPUI application composes the mixer from reusable native controls and displays the firmware framebuffer.
-It starts one `l6max-dual` QEMU process containing the Cortex-M7 and panel
-Cortex-M0, each with its own address space. Both CPUs use the same QEMU virtual
-clock and communicate through a modeled internal UART.
+It starts separate QEMU processes for the Cortex-M7 and panel Cortex-M0, linked by
+a modeled internal UART, so MAIN has a host thread to itself; see
+[live output](audio.md#live-output). `--timing paced` instead runs both CPUs in one
+`l6max-dual` process on a shared virtual clock.
 
 ## Run
 
@@ -23,7 +24,7 @@ The application owns QEMU's lifetime. Automatic setup builds the pinned QEMU
 when no executable is supplied. Use `--qemu PATH` or `L6_QEMU` to select an
 existing executable. Optional arguments are
 `--firmware-dir DIR`, `--logs DIR`, `--sd-image FILE`, and
-`--timing paced|adaptive` (default: `paced`).
+`--timing paced|adaptive|split` (the GUI defaults to `split`).
 Firmware is supplied locally and excluded from Git.
 
 The normal persistent visual UI creates a model-matched demo card on first
@@ -237,7 +238,8 @@ the cycle. `--volatile` discards device storage at power-off. See the
 [power lifecycle](power.md) for evidence and tests.
 
 SOUND PAD, EFX RTN, MASTER, MONITOR, and SUB-OUT gestures set main ADC1
-channels 5, 6, 4, 3, and 7 respectively. Samples range from 0 to 1023 and
+channels 3, 4, 5, 6, and 7 on L6max; L6's SOUND PAD, EFX RTN, MASTER, and
+MONITOR gestures set channels 5, 6, 4, and 3. Samples range from 0 to 1023 and
 start at 512; gesture steps change them by 32 counts. These finite-travel
 knobs use the same scroll and drag handling as the channel encoders. Their
 Native position marks rotate with simulated shaft position. The firmware applies
@@ -255,9 +257,9 @@ Panel runtime notifications include a 33 ms virtual-clock heartbeat
 (`0x80000008`). Input tests use it for guest-time waits; timestamps on changed
 LCD frames do not advance while the display is static.
 
-Panel TIM2 drives input scanning and firmware debounce. The engine uses
-single-threaded TCG with `-icount shift=2,align=on,sleep=on`; each instruction
-advances the shared virtual clock by 4 ns. QMP pause freezes both chips and
+Panel TIM2 drives input scanning and firmware debounce. In a single process, the
+engine uses single-threaded TCG with `-icount shift=1,align=on,sleep=on`; each instruction
+advances the shared virtual clock by 2 ns. QMP pause freezes both chips and
 device timers. Instruction timing is an emulator pacing model rather than a
 measurement of physical MCU cycles.
 

@@ -615,10 +615,18 @@ pub fn panel(
         let control_id = control.id;
         let (text, icon, indicator) = face(control.id);
         let visual = if control.id == 53 {
-            controls::power_with_press(region.width * s, s, {
-                let down = interactions.button_down.clone();
-                move || down(control_id, false)
-            })
+            controls::power_with_events(
+                region.width * s,
+                s,
+                {
+                    let down = interactions.button_down.clone();
+                    move || down(control_id, false)
+                },
+                {
+                    let up = interactions.button_up.clone();
+                    move || up(control_id)
+                },
+            )
             .into_any_element()
         } else if control.switch {
             let toggle = interactions.switch_toggle(control.id);

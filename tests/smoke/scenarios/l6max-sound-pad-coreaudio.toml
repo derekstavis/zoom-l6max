@@ -1,0 +1,87 @@
+version = 1
+name = "l6max-sound-pad-coreaudio"
+models = ["l6max"]
+fixture = "sound-pad-waveform"
+backends = ["headless"]
+
+[[step]]
+action = "wait"
+until = "mixer-ready"
+guest_timeout_ms = 60000
+wall_timeout_s = 900
+
+[[step]]
+action = "delay"
+guest_ms = 5000
+guest_timeout_ms = 10000
+wall_timeout_s = 300
+
+# Set the analog mixer controls before playback, with MASTER below clipping:
+# SOUND PAD, EFX RTN, MASTER, MONITOR and SUB-OUT.
+[[step]]
+action = "analog"
+channel = 1
+steps = 16
+
+[[step]]
+action = "expect-analog"
+channel = 1
+value = 1023
+
+[[step]]
+action = "analog"
+channel = 2
+steps = 16
+
+[[step]]
+action = "expect-analog"
+channel = 2
+value = 1023
+
+[[step]]
+action = "analog"
+channel = 3
+steps = 8
+
+[[step]]
+action = "expect-analog"
+channel = 3
+value = 768
+
+[[step]]
+action = "analog"
+channel = 4
+steps = 16
+
+[[step]]
+action = "expect-analog"
+channel = 4
+value = 1023
+
+[[step]]
+action = "analog"
+channel = 5
+steps = 16
+
+[[step]]
+action = "expect-analog"
+channel = 5
+value = 1023
+
+# Let the mixer controls settle before treating the current meter as baseline.
+[[step]]
+action = "delay"
+guest_ms = 1000
+guest_timeout_ms = 5000
+wall_timeout_s = 120
+
+# Press Pad 4's saved one-shot assignment. The case captures the CoreAudio callback for comparison with the source WAV.
+[[step]]
+action = "sound-pad-playback"
+pad = 3
+target = 52
+assignment = "saved-state"
+require_pad_led_change = false
+playback_window_ms = 30000
+guest_timeout_ms = 40000
+wall_timeout_s = 300

@@ -12,6 +12,7 @@ typedef struct L6Indicators {
     uint8_t initialized;
     uint64_t row_active_ns[8];
     uint64_t led_on_ns[8][24];
+    uint8_t pulse_history[8][24];
     uint8_t levels[8][24];
     uint8_t published[8][24];
     uint32_t generation;

@@ -3,9 +3,20 @@
 [Documentation index](../README.md)
 
 The custom `l6max-dual` machine runs either model's main Cortex-M7 and panel Cortex-M0
-with separate address spaces and a shared virtual clock. QEMU's Cortex-M0
+with separate address spaces and a shared virtual clock. For live audio,
+[`--timing split`](audio.md#live-output) runs each chip in its own QEMU process using
+the `l6max-main` and `l6max-panel` machines. QEMU's Cortex-M0
 stands in for the panel's Cortex-M0+. Internal UART links the chips, and the
 main firmware can program, verify, and restart the panel's executable flash.
+
+The panel MCU is reported as STM32G031C4T6 on both L6 and L6max. ST lists
+16 KiB flash and 8 KiB SRAM for that part. The QEMU panel maps 16 KiB
+flash and 8 KiB SRAM, and limits ROM updater flash access to 16 KiB. Its
+persistent flash image remains 64 KiB for state compatibility; only its first
+16 KiB are visible to the guest. See the [ST datasheet](https://www.st.com/resource/en/datasheet/stm32g031c6.pdf),
+[RM0444](https://www.st.com/resource/en/reference_manual/rm0444-stm32g0x1-advanced-armbased-32bit-mcus-stmicroelectronics.pdf),
+and the [panel manual audit](panel-manual-audit.md) for register-level findings
+and remaining work.
 
 The L6 MAIN processor is an i.MX RT1041. The L6max processor has not been
 identified; the two profiles share the emulated CPU topology without assuming
@@ -36,7 +47,7 @@ but its controller register maps differ from RT1041; see the
 | USDHC / SD | `imx-usdhc`, SDHCI, and QEMU SD bus | Existing controller and card infrastructure is already used by the board. |
 | USB OTG | Generic QEMU USB device framework | The board supplies an RT device-controller adapter for USB MIDI and storage. |
 | GPIO | i.MX GPIO controller and generic GPIO lines | Reuse GPIO primitives where register compatibility holds; board-specific pins and wiring remain profile data. |
-| LPUART | `imx.serial` (IMX31 UART) and STM32 LPUART models | Neither is an RT1041 LPUART register model. Keep the RT LPUART register behavior and firmware-specific UART routing in the board layer; use QEMU chardevs for byte-stream transport. The panel's STM32 USART already uses QEMU's STM32L4x5 USART model. |
+| LPUART | `imx.serial` (IMX31 UART) and STM32 LPUART models | Neither is an RT1041 LPUART register model. Keep the RT LPUART register behavior and firmware-specific UART routing in the board layer; use QEMU chardevs for byte-stream transport. The panel uses QEMU's STM32L4x5 USART as an approximation for the exercised registers, not as a complete STM32G031 USART model. |
 | Cortex-M7 / NVIC | QEMU `armv7m` device and ARM CPU models | The board reuses these CPU/NVIC blocks for both MAIN images, with profile-specific IRQ counts and priority bits. |
 | ADC, FlexSPI and clock control | Generic QEMU infrastructure | Board adapters model the exercised register and timing paths. |
 
@@ -97,7 +108,6 @@ below hold the detailed traces and validation evidence.
 
 | Item | Scope and evidence | Change or removal criterion |
 | --- | --- | --- |
-| SAI1 RX read-stream compatibility exception | L6max only: during the first 40.5 guest seconds, `FCOMB=2` distributes receive words across enabled FIFOs. The emulator then switches to regular receive behavior. This is a startup compatibility measure, not a claim about RT1040 silicon. | Revisit with physical SAI capture or a better-established receive model. See [audio emulation](audio.md). |
 | Power cutoff fallback | L6 only. QEMU cuts virtual power after a 500 ms press because the stock L6 shutdown GPIO edge/path is unconfirmed. The interval is synthetic. | Replace it when the L6 firmware power-switch input, shutdown callback and expected board power signal are established. See [power behavior](power.md). |
 | Codec and analog input | L6max codec addresses `0x4c`/`0x4d` accept observed writes through register-bank slaves; physical codec identity is not confirmed. ADC samples are host controlled, with conversion timing and analog sources approximated. SAI RX input is silent. | Expand or replace these models when component identity, register transactions, timing and physical signal routing are established. See [audio model](audio.md) and [manual audit](manual-audit.md). |
 | Partial peripheral behavior | RT eDMA/SAI/LPI2C/LPSPI/LPUART/ADC and FlexSPI use firmware-focused implementations because the pinned QEMU tree has no compatible RT1041 drop-in blocks. Observed paths are modeled, while unobserved commands, timing, flags and features remain incomplete; UART and LPI2C timing are approximate. | Implement additional semantics when firmware traces exercise them or manual-based checks require them. Do not treat a passing firmware smoke as full peripheral conformance; use the [manual audit](manual-audit.md) to track coverage. |
@@ -152,10 +162,11 @@ button/encoder commands, and guest-time acknowledgments. QMP management uses
 a separate inherited socket. See the [native UI architecture](frontend.md)
 for ownership and transport details.
 
-The engine uses single-threaded TCG with
-`-icount shift=2,align=on,sleep=on` to enforce virtual timer deadlines and pace
-execution against wall time. `--timing adaptive` selects the previous automatic
-instruction clock. See [CPU consumption](frontend.md#cpu-consumption)
+In a single process, the engine uses single-threaded TCG with
+`-icount shift=1,align=on,sleep=on` to enforce virtual timer deadlines and pace
+execution against wall time. L6max's full-rate audio task starves lower-priority
+tasks at `shift=2`. Paced execution can run slower than wall time.
+`--timing adaptive` selects QEMU's automatic instruction clock. See [CPU consumption](frontend.md#cpu-consumption)
 for the idle-loop findings and comparison harness. Panel TIM2 derives its period from the firmware's
 registers at 48 MHz; the current configuration gives 50 µs. Button holds and
 release gaps default to 50 ms of guest time. QMP pause freezes both chips and
@@ -210,8 +221,7 @@ The host input socket uses targets 7–30 for matrix positions in row-major orde
 (`7 + row * 3 + column`) and targets 1, 2, 3, 6, and 47 for the five direct
 switches in scan order. Encoder targets 0–5 drive the six L6 rotary encoders;
 target 6 is rejected. These are simulator input IDs, not printed control
-labels. Analysis of the supplied L6 1.10 MAIN image identified its
-panel-report-to-event table: report columns 1–3 map matrix positions to logical
+labels. L6 1.10 MAIN maps panel reports to events as follows: report columns 1–3 map matrix positions to logical
 event indices `7,0–5,20`, `12–19`, and `26,6,27–29,31` (in row order); column 0
 maps direct rows 1–4 to indices 8–11. MAIN submits a press as event state 0 and
 a release as state 1. Column-0 row 0 and matrix-column-3 rows 6–7 have no
