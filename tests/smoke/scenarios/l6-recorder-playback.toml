@@ -12,12 +12,12 @@ until = "boot-ready"
 guest_timeout_ms = 600000
 wall_timeout_s = 1800
 
-# The saved recorder mode must already select a valid MASTER.WAV. This value
-# was recovered from the L6 mode-0 file scanner and prevents a silent false pass.
+# The firmware selects the card's MASTER.WAV at boot; this holds its frame count.
+# Checking it prevents a silent false pass.
 [[step]]
 action = "expect-memory"
 address = 0x806101a8
-bytes = [128, 187, 0, 0, 0, 0, 0, 0]
+bytes = [0, 166, 14, 0, 0, 0, 0, 0]
 
 [[step]]
 action = "delay"

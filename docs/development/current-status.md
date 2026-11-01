@@ -31,9 +31,7 @@ analog audio behavior, and physical jack routing remain unverified.
   using saved assignments. The waveform cases compare SAI output with the
   source WAV. Cards must meet the firmware's
   [layout requirements](../emulator/usb.md#card-layout). The Editor-assigned
-  pad scenarios need further qualification. On generated project cards, L6max
-  recorder playback loads the project and reads the stream but its output stays
-  silent, and the L6 case selects the recording but does not reach the Play handler. Recorder playback requires prepared media and state;
+  pad scenarios need further qualification. Recorder playback requires prepared media and state;
   recording to a file remains unresolved.
 - L6max sound-pad key-bit assertions and DIN/Editor scenarios need live
   qualification. Physical control wiring is not established by emulator tests.

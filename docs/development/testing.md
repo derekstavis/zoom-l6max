@@ -116,7 +116,8 @@ Fixture details:
   `high_hz`, `seconds`, `amplitude`), `levels` (`hz` and `steps`, each with `seconds`,
   `left`, and `right`), `copy` (a host path relative to the spec), or `text`. Generated
   audio is 48 kHz stereo 32-bit float. On L6max, each `[[project]]` (`name`, `hz`,
-  `seconds`, `amplitude`) writes a recorder project under `RECORDER`, with its settings
+  `seconds`, `amplitude`, and optional `level`, the mixer level of every channel,
+  default 0, which plays silently) writes a recorder project under `RECORDER`, with its settings
   file, eight tracks, and a master.
 
   ```toml

@@ -6312,6 +6312,10 @@ fn run_l6_recorder_playback(
             "L6 class-0 dispatcher received an unexpected event (state={event_state}, class={event_class}, code={event_code:#x}, bytes={event:02x?})"
         )).into());
     }
+    // A breakpoint left at the current PC would stop here again.
+    debugger
+        .breakpoint(0x8002_c9d8, false)
+        .map_err(|error| std::io::Error::other(format!("clearing dispatcher: {error}")))?;
     debugger
         .continue_until_stop(Duration::from_secs(10))
         .map_err(|error| std::io::Error::other(format!("waiting for L6 Play handler: {error}")))?;
@@ -6336,6 +6340,9 @@ fn run_l6_recorder_playback(
         ))
         .into());
     }
+    debugger
+        .breakpoint(0x8000_8a08, false)
+        .map_err(|error| std::io::Error::other(format!("clearing Play handler: {error}")))?;
     debugger
         .continue_until_stop(Duration::from_secs(10))
         .map_err(|error| {

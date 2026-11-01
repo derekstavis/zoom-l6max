@@ -57,6 +57,10 @@ pub struct Project {
     pub hz: f64,
     pub seconds: f64,
     pub amplitude: f64,
+    /// Mixer level of every channel when the project loads, 0..127. New projects
+    /// the firmware writes hold 0, which plays silently.
+    #[serde(default)]
+    pub level: u8,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -186,7 +190,7 @@ impl Content {
 }
 
 /// The firmware's project settings as it writes them for a new recording.
-fn project_settings() -> Vec<u8> {
+fn project_settings(level: u8) -> Vec<u8> {
     let mut bytes = vec![0; 3388];
     bytes[..47].copy_from_slice(format!("{:<47}", "ZOOM L6MAX   PROJECT DATA VER0001").as_bytes());
     const VALUES: [u8; 34] = [
@@ -199,6 +203,7 @@ fn project_settings() -> Vec<u8> {
             bytes[offset + 0x32..offset + 0x39].fill(0x40);
             bytes[offset + 0x46..offset + 0x48].fill(1);
         }
+        bytes[base + 0x150..base + 0x15c].fill(level);
         bytes[base + 0x160..base + 0x160 + VALUES.len()].copy_from_slice(&VALUES);
     }
     bytes[0x15e] = 5;
@@ -212,7 +217,10 @@ impl Project {
         const PAD_BYTES: u32 = 858;
         let folder = format!("RECORDER/{}", self.name);
         create_parents(volume, &format!("{folder}/"))?;
-        volume.write(&format!("{folder}/L6MAXPRJDATA.prj"), &project_settings())?;
+        volume.write(
+            &format!("{folder}/L6MAXPRJDATA.prj"),
+            &project_settings(self.level),
+        )?;
         let stereo_samples = stereo(self.seconds, self.amplitude, |time| {
             let value = (TAU * self.hz * time).sin();
             (value, value)
@@ -241,6 +249,9 @@ impl CardSpec {
         crate::pad_settings::validate(&spec.sound_pad)?;
         if !spec.project.is_empty() && spec.model != "l6max" {
             return Err(format!("{}: project requires model l6max", path.display()));
+        }
+        if spec.project.iter().any(|project| project.level > 127) {
+            return Err(format!("{}: project level must be 0..127", path.display()));
         }
         for name in spec
             .directory
@@ -398,6 +409,7 @@ name = "260101_000000"
 hz = 440.0
 seconds = 0.1
 amplitude = 0.25
+level = 64
 "#,
             )
             .map_err(|e| e.to_string())?;
@@ -426,7 +438,8 @@ amplitude = 0.25
             let settings = volume.read(&format!("{folder}/L6MAXPRJDATA.prj")).unwrap();
             assert_eq!(settings.len(), 3388);
             assert!(settings.starts_with(b"ZOOM L6MAX   PROJECT DATA VER0001"));
-            assert_eq!(settings.iter().filter(|byte| **byte != 0).count(), 306);
+            assert_eq!(settings.iter().filter(|byte| **byte != 0).count(), 306 + 24);
+            assert_eq!(settings[0x150..0x15c], [64; 12]);
             let names = volume.entries(folder).unwrap();
             assert_eq!(names.len(), 10);
             let track = volume.read(&format!("{folder}/TRACK01_01.wav")).unwrap();

@@ -1,9 +1,10 @@
-# A project for the recorder to load at boot and play.
+# A project for the recorder to load at boot, longer than the case samples it.
 version = 1
 model = "l6max"
 
 [[project]]
 name = "260101_000000"
 hz = 440.0
-seconds = 6.0
-amplitude = 0.25
+seconds = 20.0
+amplitude = 0.05
+level = 64
