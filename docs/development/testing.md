@@ -84,7 +84,7 @@ It has these top-level blocks:
 Fixture details:
 
 - `model` is `l6` or `l6max`. `timing` is `paced` (default), `adaptive`,
-  `host-clock`, or `host-clock-multi`.
+  `host-clock`, `host-clock-multi`, or `split`.
 - `patches` applies named guarded patches to a stock `firmware_package` before
   the driver creates its fixture copy. It cannot be combined with
   `firmware_dir`.
@@ -301,6 +301,19 @@ cargo test --offline --locked -p smoke-core -p l6test -p l6max-host -p l6max-gui
 These firmware-free checks verify parsing, sequencing, deadlines, snapshots,
 transport, gesture handling and process cleanup. They do not establish guest
 firmware behavior. See [CI](ci.md) for hosted checks.
+
+The panel register check uses the built QEMU test accelerator and a synthetic
+image; it needs neither firmware nor an SD card:
+
+```sh
+python3 emulator/qemu/tests/panel-qtest.py emulator/qemu/build-source/build/qemu-system-arm
+```
+
+It exercises both panel profiles, flash boundaries and existing 64 KiB saved
+flash, plus GPIO and timer registers, pending interrupts and timer overflows.
+It does not establish behavior on physical hardware. The smaller C tests in
+`emulator/qemu/tests/panel-gpio.c` and `panel-timer.c` cover shared register
+logic independently of QEMU.
 
 ## Input, display, and LEDs
 

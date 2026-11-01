@@ -107,11 +107,10 @@ launch: `emulator/state/sd-card.img` for L6max and
 `emulator/state/sd-card-l6.img` for L6. It contains four generated sample WAVs,
 an additional snare sample under Pad 1, and the locally supplied update
 package. Existing cards are reused without overwriting their contents. The
-macOS GUI routes L6 SAI1 playback to CoreAudio
-by default. Headless runs can set `L6_AUDIODEV='driver=coreaudio,id=l6-audio'`;
-both models now route firmware output to the host backend using their SAI1 TDM
-stereo slots. The L6max snare playback path has been verified with QEMU's WAV
-and CoreAudio backends. The corrected signal level is under listening review.
+macOS GUI routes SAI1 playback to CoreAudio by default. Headless runs can set
+`L6_AUDIODEV='driver=coreaudio,id=l6-audio'`. Both models route firmware output to
+the host backend using their SAI1 TDM stereo slots; see
+[audio emulation](emulator/audio.md).
 
 Flash and RTC settings also persist in `emulator/state/`. For an independent
 device, select another state directory:

@@ -1,0 +1,22 @@
+--- a/accel/tcg/tcg-accel-ops-icount.c
++++ b/accel/tcg/tcg-accel-ops-icount.c
+@@ -66,10 +66,18 @@
+     }
+ }
+ 
++/*
++ * Set by a machine whose virtual timers all run on this thread, where waking
++ * the main loop for each one only contends for the BQL.
++ */
++bool icount_timers_stay_on_vcpu;
++
+ static void icount_notify_aio_contexts(void)
+ {
+     /* Wake up other AioContexts.  */
+-    qemu_clock_notify(QEMU_CLOCK_VIRTUAL);
++    if (!icount_timers_stay_on_vcpu) {
++        qemu_clock_notify(QEMU_CLOCK_VIRTUAL);
++    }
+     qemu_clock_run_timers(QEMU_CLOCK_VIRTUAL);
+ }
+ 

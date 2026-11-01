@@ -1,6 +1,9 @@
 --- a/audio/coreaudio.m
 +++ b/audio/coreaudio.m
-@@ -51,0 +52,7 @@
+@@ -49,6 +49,13 @@
+     UInt32 device_frame_size;
+     AudioDeviceIOProcID ioprocid;
+     bool enabled;
 +    uint64_t underruns;
 +    uint64_t callback_frames;
 +    uint64_t device_mismatches;
@@ -8,17 +11,34 @@
 +    uint8_t *capture_data;
 +    size_t capture_frames;
 +    size_t capture_capacity;
-@@ -318,0 +326,3 @@
+ } CoreaudioVoiceOut;
+ 
+ static const AudioObjectPropertyAddress voice_out_addr = {
+@@ -316,20 +323,40 @@
+     size_t len;
+ 
+     if (coreaudio_voice_out_buf_lock(core, "out_device_ioproc")) {
 +        /* CoreAudio owns this buffer; never return stale device memory. */
 +        memset(out, 0, outOutputData->mBuffers[0].mDataByteSize);
 +        core->underruns++;
-@@ -323,0 +334,3 @@
+         inInputTime = 0;
+         return 0;
+     }
+ 
+     if (inDevice != core->device_id) {
 +        memset(out, 0, outOutputData->mBuffers[0].mDataByteSize);
 +        core->underruns++;
 +        core->device_mismatches++;
-@@ -328,0 +342 @@
+         coreaudio_voice_out_buf_unlock(core, "out_device_ioproc(old device)");
+         return 0;
+     }
+ 
+     frame_size = core->device_frame_size;
 +    core->callback_frames += frame_size;
-@@ -332,0 +347,13 @@
+     pending_frames = hw->pending_emul / hw->info.bytes_per_frame;
+ 
+     /* if there are not enough samples, set signal and return */
+     if (pending_frames < frame_size) {
 +        /* The device buffer belongs to CoreAudio and is not guaranteed to
 +         * contain silence. Leaving it untouched can replay stale/undefined
 +         * samples as audible distortion on an output underrun. */
@@ -32,9 +52,13 @@
 +                   0, bytes);
 +            core->capture_frames += frames;
 +        }
-@@ -351,0 +379,9 @@
-+    }
-+
+         inInputTime = 0;
+         coreaudio_voice_out_buf_unlock(core, "out_device_ioproc(empty)");
+         return 0;
+@@ -351,8 +378,39 @@
+         out += write_len;
+     }
+ 
 +    if (core->capture_data && core->capture_frames < core->capture_capacity) {
 +        size_t frames = MIN(frame_size,
 +                            core->capture_capacity - core->capture_frames);
@@ -42,12 +66,52 @@
 +        memcpy(core->capture_data + core->capture_frames * hw->info.bytes_per_frame,
 +               outOutputData->mBuffers[0].mData, bytes);
 +        core->capture_frames += frames;
-@@ -371 +407 @@
++    }
++
+     coreaudio_voice_out_buf_unlock(core, "out_device_ioproc");
+     return 0;
++}
++
++/* QEMU exits on SIGTERM without closing voices, so also finish at exit. */
++static CoreaudioVoiceOut *capture_voice;
++
++static void coreaudio_capture_finish(void)
++{
++    CoreaudioVoiceOut *core = capture_voice;
++
++    capture_voice = NULL;
++    if (!core || !core->capture) {
++        return;
++    }
++    error_report("coreaudio: capture finalized; callback_frames=%" PRIu64
++                 " captured_frames=%zu underruns=%" PRIu64
++                 " device_mismatches=%" PRIu64,
++                 core->callback_frames, core->capture_frames,
++                 core->underruns, core->device_mismatches);
++    fwrite(core->capture_data, core->hw.info.bytes_per_frame,
++           core->capture_frames, core->capture);
++    fclose(core->capture);
++    core->capture = NULL;
+ }
+ 
+ static OSStatus init_out_device(CoreaudioVoiceOut *core)
+@@ -368,7 +426,7 @@
+         .mBytesPerFrame = core->hw.info.bytes_per_frame,
+         .mBytesPerPacket = core->hw.info.bytes_per_frame,
+         .mChannelsPerFrame = core->hw.info.nchannels,
 -        .mFormatFlags = kLinearPCMFormatFlagIsFloat,
 +        .mFormatFlags = kAudioFormatFlagsNativeFloatPacked,
-@@ -590,0 +627,19 @@
+         .mFormatID = kAudioFormatLinearPCM,
+         .mFramesPerPacket = 1,
+         .mSampleRate = core->hw.info.freq
+@@ -588,6 +646,27 @@
+     as->fmt = AUDIO_FORMAT_F32;
+     audio_pcm_init_info(&hw->info, as);
+ 
 +    const char *capture_path = g_getenv("L6_AUDIO_COREAUDIO_CAPTURE");
 +    if (capture_path && *capture_path) {
++        capture_voice = core;
++        atexit(coreaudio_capture_finish);
 +        core->capture = fopen(capture_path, "wb");
 +        if (!core->capture) {
 +            warn_report("coreaudio: could not open capture '%s': %s",
@@ -65,26 +129,20 @@
 +        }
 +    }
 +
-@@ -627,0 +683,3 @@
-+    if (core->capture) {
-+        error_report("coreaudio: capture shutdown entered");
-+    }
-@@ -636,0 +695,18 @@
-+
-+    if (core->capture) {
-+        error_report("coreaudio: output device stopped");
-+        error_report("coreaudio: capture finalized; callback_frames=%" PRIu64
-+                     " captured_frames=%zu underruns=%" PRIu64
-+                     " device_mismatches=%" PRIu64,
-+                     core->callback_frames, core->capture_frames,
-+                     core->underruns, core->device_mismatches);
-+        fwrite(core->capture_data, hw->info.bytes_per_frame,
-+               core->capture_frames, core->capture);
-+        fclose(core->capture);
-+    }
-+    g_free(core->capture_data);
+     core->frame_size_setting = audio_buffer_frames(
+         qapi_AudiodevCoreaudioPerDirectionOptions_base(cpdo), as, 11610);
+ 
+@@ -635,6 +714,13 @@
+ 
+     fini_out_device(core);
+ 
++    coreaudio_capture_finish();
 +
 +    if (core->underruns) {
 +        error_report("coreaudio: playback had %" PRIu64 " buffer underruns",
 +                     core->underruns);
 +    }
++
+     /* destroy mutex */
+     err = pthread_mutex_destroy(&core->buf_mutex);
+     if (err) {

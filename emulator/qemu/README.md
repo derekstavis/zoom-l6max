@@ -13,8 +13,8 @@ Initialize the pinned upstream source with
 leaving the upstream submodule clean.
 
 QEMU overlays under patches/ are applied to the staged source during builds.
-The CoreAudio underrun fix is maintained there, keeping the pinned upstream
-submodule pristine.
+The CoreAudio underrun fix and sub-millisecond poll timeouts are maintained there,
+keeping the pinned upstream submodule pristine.
 
 - [Board build, model coverage, and diagnostics](../../docs/emulator/board.md)
 - [Control and LED wiring](../../docs/emulator/controls.md)

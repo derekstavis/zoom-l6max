@@ -1,0 +1,16 @@
+version = 1
+name = "l6max-tap-handler"
+models = ["l6max"]
+fixture = "prepared"
+backends = ["headless"]
+
+[[step]]
+action = "wait"
+until = "boot-ready"
+guest_timeout_ms = 600000
+wall_timeout_s = 1800
+
+[[step]]
+action = "l6max-tap-handler"
+guest_timeout_ms = 30000
+wall_timeout_s = 60

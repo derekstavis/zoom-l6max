@@ -551,7 +551,7 @@ pub fn panel(
     panel = panel
         .child(button_in_region(
             Region::centered(904.0, 422.0, 54.0, 28.0),
-            40,
+            9,
             s,
             "SEL",
             None,

@@ -71,9 +71,6 @@ typedef struct L6Sai {
     /* RT1041 implements FIFO-combine fields on SAI1 only; SAI2/SAI3
      * reserve these bits. */
     bool supports_combine;
-    /* L6max firmware expects RX FCOMB=read input to be distributed like
-     * write-combine, although the register/read behavior stays read-combine. */
-    bool rx_read_stream_compat;
     uint32_t tx_fifo[L6_SAI_CHANNELS][L6_SAI_FIFO_DEPTH];
     uint32_t rx_fifo[L6_SAI_CHANNELS][L6_SAI_FIFO_DEPTH];
     unsigned tx_read[L6_SAI_CHANNELS];
@@ -233,8 +230,7 @@ static inline void l6_sai_rx_frame(L6Sai *s, const uint32_t *samples,
     uint32_t combine = s->regs[L6_SAI_RCR4 / 4] & L6_SAI_FCOMB_MASK;
     bool combine_write = s->supports_combine &&
         (combine == L6_SAI_RX_FCOMB_WRITE ||
-         combine == L6_SAI_RX_FCOMB_READ_WRITE ||
-         (s->rx_read_stream_compat && combine == L6_SAI_RX_FCOMB_READ));
+         combine == L6_SAI_RX_FCOMB_READ_WRITE);
 
     /* RX FCOMB=read changes software FIFO reads only: the receive shifter
      * still writes each data line's words to that line's FIFO. FCOMB=write

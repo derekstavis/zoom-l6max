@@ -1,0 +1,23 @@
+version = 1
+name = "l6-sound-pad-waveform"
+models = ["l6"]
+fixture = "sound-pad-waveform"
+backends = ["headless"]
+
+[[step]]
+action = "delay"
+guest_ms = 16000
+guest_timeout_ms = 21000
+wall_timeout_s = 900
+
+# Press Pad 1's saved one-shot assignment. Its SAI output must match the source WAV.
+[[step]]
+action = "sound-pad-playback"
+pad = 0
+target = 49
+assignment = "saved-state"
+require_pad_led_change = false
+expect_source = "SOUND_PAD/PAD1/SWEEP.WAV"
+playback_window_ms = 10000
+guest_timeout_ms = 30000
+wall_timeout_s = 300

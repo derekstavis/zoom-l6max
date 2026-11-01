@@ -29,10 +29,12 @@ models = ["l6"]
 action = "include"
 path = "fragments/l6-gui-controls.toml"
 
+# A brief press: the GUI's default POWER click holds long enough to power off.
 [[step]]
 models = ["l6max"]
-action = "press"
+action = "hold"
 control = "power"
+duration_ms = 100
 
 [[step]]
 models = ["l6max"]

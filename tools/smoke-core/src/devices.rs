@@ -1,5 +1,5 @@
 //! Typed peripheral operations. Sequencing, timing and artifacts stay in the runner.
-use crate::{Scenario, Session, scenario::PadAssignmentSource};
+use crate::{Scenario, Session, scenario::PadAssignmentSource, waveform};
 use l6max_host::{engine::Options, headless::Headless};
 use serde_json::{Value, json};
 use std::{
@@ -52,6 +52,8 @@ pub enum Operation {
         require_pad_led_change: bool,
         playback_window_ms: u32,
         require_stereo_meter: bool,
+        expect_source: Option<String>,
+        max_residual_db: f64,
     },
     L6RecorderPlayback {
         target: u32,
@@ -97,6 +99,7 @@ pub enum Operation {
         cc: u8,
         value: u8,
     },
+    L6maxTapHandler,
     L6InputSweep,
     L6DinSweep,
     L6maxInputTiming,
@@ -222,6 +225,22 @@ pub fn prepare(scenario: &Scenario, options: &mut Options) -> Result<(), String>
             return Err("l6-main-gpio-event requires the hash-verified stock L6 MAIN image".into());
         }
         options.gdb_socket = Some(options.logs.join("l6-main-gpio-event.gdb.sock"));
+    }
+    if scenario
+        .step
+        .iter()
+        .any(|s| matches!(s.action, crate::Action::L6maxTapHandler))
+    {
+        use sha2::{Digest, Sha256};
+        let main =
+            fs::read(options.firmware_dir.join("main_firmware.bin")).map_err(|e| e.to_string())?;
+        let hash = format!("{:x}", Sha256::digest(main));
+        if hash != "980d92272c1f84bed200b4d2f83575202f6a00082c928d99b9e8b53af8d44461" {
+            return Err(
+                "l6max-tap-handler requires the hash-verified stock L6max MAIN image".into(),
+            );
+        }
+        options.gdb_socket = Some(options.logs.join("l6max-tap-handler.gdb.sock"));
     }
     if scenario
         .step
@@ -1723,8 +1742,10 @@ fn run_l6max_panel_key_map(session: &Session, wall_timeout_s: u64) -> Result<Val
         let lookup = qmp
             .read_memory(0, KEY_TABLE + code * 8, 8)
             .map_err(|error| error.to_string())?;
-        let mask = u32::from_le_bytes(lookup[..4].try_into().unwrap());
+        // The table stores the key's bit number within its state word.
+        let bit = u32::from_le_bytes(lookup[..4].try_into().unwrap());
         let word_index = u32::from_le_bytes(lookup[4..].try_into().unwrap()) as usize;
+        let mask = 1u32.checked_shl(bit).unwrap_or(0);
         let expected_mask = 1u32 << (code - 0x18);
         if mask != expected_mask || word_index != 4 {
             return Err(format!(
@@ -3543,6 +3564,53 @@ impl State {
                 }
                 Ok(json!({"target":target,"column":column,"row":row,"event":event,"report":bytes}))
             }
+            Operation::L6maxTapHandler => {
+                const TAP_TARGET: u32 = 48;
+                const TAP_PRESS_HANDLER: u32 = 0x80055468;
+                let inputs = &session.engine.inputs.as_ref().unwrap().main;
+                let qmp = &session.engine.management[0];
+                let socket = options
+                    .gdb_socket
+                    .as_ref()
+                    .ok_or("l6max-tap-handler requires a configured GDB socket")?;
+                if self.gdb.is_none() {
+                    self.gdb = Some(l6max_diagnostics::gdb::Gdb::connect(socket)?);
+                }
+                let gdb = self.gdb.as_mut().unwrap();
+                qmp.stop()?;
+                gdb.breakpoint(TAP_PRESS_HANDLER, true)?;
+                let applied = inputs.snapshot().applied;
+                inputs.down(TAP_TARGET, 0)?;
+                wait_l6_input(
+                    session,
+                    || inputs.snapshot().applied > applied,
+                    "TAP press acknowledgement",
+                )?;
+                let stopped = gdb.continue_until_stop(Duration::from_secs(15));
+                if let Err(error) = stopped {
+                    let _ = gdb.interrupt();
+                    let _ = gdb.breakpoint(TAP_PRESS_HANDLER, false);
+                    let _ = qmp.resume();
+                    return Err(format!("TAP press did not reach its handler: {error}").into());
+                }
+                let pc = gdb.read_register(15)? & !1;
+                gdb.breakpoint(TAP_PRESS_HANDLER, false)?;
+                qmp.resume()?;
+                if pc != TAP_PRESS_HANDLER {
+                    return Err(format!(
+                        "TAP press stopped at {pc:#010x}, expected {TAP_PRESS_HANDLER:#010x}"
+                    )
+                    .into());
+                }
+                let applied = inputs.snapshot().applied;
+                inputs.up(TAP_TARGET)?;
+                wait_l6_input(
+                    session,
+                    || inputs.snapshot().applied > applied,
+                    "TAP release acknowledgement",
+                )?;
+                Ok(json!({"target":TAP_TARGET,"handler":TAP_PRESS_HANDLER}))
+            }
             Operation::L6MainGpioEvent { target, event } => {
                 const EVENT_SUBMIT: u32 = 0x80020ca0;
                 const SOUND_PAD_EVENT_HANDLER: u32 = 0x800408b0;
@@ -3743,7 +3811,10 @@ impl State {
                     {
                         return Err("RTC fields changed across restart".into());
                     }
-                    let trace = fs::read_to_string(options.logs.join("engine.trace"))?;
+                    let mut trace = fs::read_to_string(options.logs.join("engine.trace"))?;
+                    if let Ok(panel) = fs::read_to_string(options.logs.join("engine-panel.trace")) {
+                        trace.push_str(&panel);
+                    }
                     if trace.contains("l6 panel ROM write") {
                         return Err("panel reprogrammed on restart".into());
                     }
@@ -4083,6 +4154,8 @@ impl State {
                 require_pad_led_change,
                 playback_window_ms,
                 require_stereo_meter,
+                expect_source,
+                max_residual_db,
             } => run_sound_pad_playback(
                 session,
                 options,
@@ -4092,6 +4165,8 @@ impl State {
                 require_pad_led_change,
                 playback_window_ms,
                 require_stereo_meter,
+                expect_source.as_deref(),
+                max_residual_db,
                 guest_timeout_ms,
                 wall_timeout_s,
             ),
@@ -5874,10 +5949,23 @@ fn run_sound_pad_playback(
     require_pad_led_change: bool,
     playback_window_ms: u32,
     require_stereo_meter: bool,
+    expect_source: Option<&str>,
+    max_residual_db: f64,
     guest_timeout_ms: u32,
     wall_timeout_s: u64,
 ) -> Result<Value, Box<dyn std::error::Error>> {
     let model = session.engine.model();
+    let capture_path = std::env::var_os("L6_AUDIO_RAW_CAPTURE");
+    if expect_source.is_some() && capture_path.is_none() {
+        return Err(std::io::Error::other(
+            "sound-pad-playback expect_source requires L6_AUDIO_RAW_CAPTURE in the case environment",
+        )
+        .into());
+    }
+    let capture_baseline = match &capture_path {
+        Some(path) => fs::metadata(path)?.len() as usize,
+        None => 0,
+    };
     if pad > 3 || target != 49 + u32::from(pad) {
         return Err(std::io::Error::other(
             "sound-pad-playback target must match pad (pad 0..3 maps to target 49..52)",
@@ -6065,7 +6153,18 @@ fn run_sound_pad_playback(
     });
     let left_only = isolated_levels[0].len() >= 2;
     let right_only = isolated_levels[1].len() >= 2;
+    let waveform = expect_source
+        .map(|source| {
+            let capture = fs::read(capture_path.as_ref().unwrap())?;
+            compare_pad_waveform(
+                &options.logs.join("card.img"),
+                source,
+                &capture[capture_baseline.min(capture.len())..],
+            )
+        })
+        .transpose()?;
     let evidence = json!({
+        "waveform": waveform,
         "stereo_meter": {"required": require_stereo_meter, "left_only": left_only, "right_only": right_only, "isolated_levels": isolated_levels},
         "pad": pad + 1,
         "target": target,
@@ -6087,6 +6186,15 @@ fn run_sound_pad_playback(
         options.logs.join("sound-pad-playback.json"),
         serde_json::to_vec_pretty(&evidence)?,
     )?;
+    if let Some(waveform) = &waveform {
+        let residual = waveform["residual_db"].as_f64().unwrap_or(f64::INFINITY);
+        if residual > max_residual_db {
+            return Err(std::io::Error::other(format!(
+                "sound-pad waveform residual {residual:.1} dB exceeds {max_residual_db:.1} dB: {waveform}"
+            ))
+            .into());
+        }
+    }
     if !nonzero_audio
         || (require_pad_led_change && !pad_led_changed)
         || (require_stereo_meter && !(left_only && right_only))
@@ -6096,6 +6204,20 @@ fn run_sound_pad_playback(
         )).into());
     }
     Ok(evidence)
+}
+
+fn compare_pad_waveform(
+    card: &std::path::Path,
+    source: &str,
+    capture: &[u8],
+) -> Result<Value, Box<dyn std::error::Error>> {
+    let volume = fatfs::FileSystem::new(fs::File::open(card)?, fatfs::FsOptions::new())?;
+    use std::io::Read;
+    let mut wav = Vec::new();
+    volume.root_dir().open_file(source)?.read_to_end(&mut wav)?;
+    let source = waveform::decode_wav(&wav).map_err(std::io::Error::other)?;
+    waveform::compare(&source, &waveform::decode_capture(capture))
+        .map_err(|error| std::io::Error::other(error).into())
 }
 
 fn master_meter_levels(model: l6fw::Model, levels: [[u8; 24]; 8]) -> [u8; 2] {

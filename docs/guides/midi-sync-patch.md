@@ -10,8 +10,8 @@ official ZOOM release.
 
 **Status:** the L6max payload is CPU-simulated and confirmed live in QEMU,
 alone and combined with `knob-dialog` + `din-mixer-control`. An L6-specific
-payload now builds, repacks as `L6.BIN`, passes CPU simulation and boots in
-QEMU. A GDB-injected QEMU smoke now confirms that its hook sends all enabled
+payload builds, repacks as `L6.BIN`, passes CPU simulation and boots in
+QEMU. A GDB-injected QEMU smoke confirms that its hook sends all enabled
 mapped CCs through the stock L6 queue sender. Stock L6 USB enumeration and
 basic MIDI IN/OUT, plus stock DIN-to-mixer behavior, also pass in QEMU.
 The `l6-direct-midi-sync` driver case also verifies all 54 mapped replies from

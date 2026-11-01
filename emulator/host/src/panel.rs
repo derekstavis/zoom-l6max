@@ -79,7 +79,11 @@ mod tests {
         writer[..1024].fill(0x55);
         let (main, mut main_peer) = EngineInput::pair().unwrap();
         let (panel, mut panel_peer) = EngineInput::pair().unwrap();
-        let inputs = Arc::new(InputHub::new(main.clone(), panel.clone()));
+        let inputs = Arc::new(InputHub::new(
+            main.clone(),
+            panel.clone(),
+            l6fw::Model::L6max,
+        ));
         let feed = PanelFeed {
             display: PublishedDisplay::new(memory.map(), main.clone()).unwrap(),
             inputs,

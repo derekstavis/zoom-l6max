@@ -288,8 +288,14 @@ fn load_config(path: &Path) -> Result<Config, String> {
     let mut keys = BTreeSet::new();
     for fixture in &mut config.fixture {
         if !["l6", "l6max"].contains(&fixture.model.as_str())
-            || !["paced", "adaptive", "host-clock", "host-clock-multi"]
-                .contains(&fixture.timing.as_str())
+            || ![
+                "paced",
+                "adaptive",
+                "host-clock",
+                "host-clock-multi",
+                "split",
+            ]
+            .contains(&fixture.timing.as_str())
             || !keys.insert((fixture.name.clone(), fixture.model.clone()))
         {
             return Err("invalid or duplicate fixture/model/timing".into());
@@ -520,6 +526,7 @@ fn engine_args(options: &Options) -> Vec<String> {
             l6max_host::engine::Timing::Adaptive => "adaptive",
             l6max_host::engine::Timing::HostClock => "host-clock",
             l6max_host::engine::Timing::HostClockMulti => "host-clock-multi",
+            l6max_host::engine::Timing::Split => "split",
         }
         .into(),
     ];
