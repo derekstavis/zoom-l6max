@@ -41,8 +41,8 @@ Guest writes persist in that copy and never sync back into the original folder.
 Choose the folder again to import newer host contents into another card copy.
 Previously imported cards are retained in Application Support.
 
-- Capacity is chosen automatically from 128 to 512 MiB, with 16 KiB clusters.
-- Nested directories and long Unicode filenames are preserved within FAT limits.
+- Cards are 4 GiB FAT32, and use only the disk space their files need.
+- Nested directories and long Unicode filenames are preserved within FAT name limits.
 - Symbolic links, special files, invalid FAT names, and case-insensitive filename
   collisions are rejected before changing the running guest.
 - Audio playback remains unmodeled; the card still exercises firmware browsing,

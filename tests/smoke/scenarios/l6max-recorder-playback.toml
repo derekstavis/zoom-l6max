@@ -3,10 +3,22 @@ name = "l6max-recorder-playback"
 models = ["l6max"]
 backends = ["headless"]
 fixture = "l6max-recorder-playback"
+card = "recorder-project"
 main_sha256 = "980d92272c1f84bed200b4d2f83575202f6a00082c928d99b9e8b53af8d44461"
 
-# The saved state must already be past date, battery, and SD-card setup, with a
-# playable recorder track selected. Let the startup audio stream settle first.
+# The firmware selects the card's project at boot. Let the audio stream settle first.
+[[step]]
+action = "wait"
+until = "boot-ready"
+guest_timeout_ms = 120000
+wall_timeout_s = 600
+
+[[step]]
+action = "wait"
+until = "mixer-ready"
+guest_timeout_ms = 30000
+wall_timeout_s = 180
+
 [[step]]
 action = "delay"
 guest_ms = 3000

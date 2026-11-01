@@ -7,7 +7,7 @@ use l6max_host::{
 use std::{
     ffi::OsString,
     fs::File,
-    io::{self, Write},
+    io::Write,
     time::{Duration, Instant},
 };
 pub fn run(args: Vec<OsString>) -> Result<(), Box<dyn std::error::Error>> {
@@ -54,47 +54,31 @@ pub fn run(args: Vec<OsString>) -> Result<(), Box<dyn std::error::Error>> {
     let endpoints = config
         .storage
         .ok_or("firmware is not in USB File Transfer mode")?;
-    let mut disk = UsbDisk::new(MassStorage::new(usb, endpoints))?;
-    let filesystem = fatfs::FileSystem::new(&mut disk, fatfs::FsOptions::new())?;
-    {
-        let root = filesystem.root_dir();
-        let path = |s: &str| s.trim_start_matches('/').to_owned();
-        match command.as_slice() {
-            ["list"] | ["list", _] => {
-                let requested = command.get(1).map(|s| path(s)).unwrap_or_default();
-                let directory = if !requested.is_empty() {
-                    root.open_dir(&requested)?
-                } else {
-                    root
-                };
-                for entry in directory.iter() {
-                    let e = entry?;
-                    println!(
-                        "{} {:>10} {}",
-                        if e.is_dir() { "dir " } else { "file" },
-                        e.len(),
-                        e.file_name()
-                    );
-                }
+    let disk = UsbDisk::new(MassStorage::new(usb, endpoints))?;
+    let mut volume = sd_image::Volume::open(disk)?;
+    match command.as_slice() {
+        ["list"] | ["list", _] => {
+            for entry in volume.entries(command.get(1).copied().unwrap_or("/"))? {
+                println!(
+                    "{} {:>10} {}",
+                    if entry.directory { "dir " } else { "file" },
+                    entry.length,
+                    entry.name
+                );
             }
-            ["get", sd, host] => {
-                let mut source = root.open_file(&path(sd))?;
-                let mut destination = File::create(host)?;
-                let bytes = io::copy(&mut source, &mut destination)?;
-                println!("Read {bytes} bytes from {sd}");
-            }
-            ["put", host, sd] => {
-                let mut source = File::open(host)?;
-                let mut destination = root.create_file(&path(sd))?;
-                destination.truncate()?;
-                let bytes = io::copy(&mut source, &mut destination)?;
-                destination.flush()?;
-                println!("Wrote {bytes} bytes to {sd}");
-            }
-            _ => unreachable!(),
         }
+        ["get", sd, host] => {
+            let bytes = volume.read(sd)?;
+            File::create(host)?.write_all(&bytes)?;
+            println!("Read {} bytes from {sd}", bytes.len());
+        }
+        ["put", host, sd] => {
+            let bytes = std::fs::read(host)?;
+            volume.write(sd, &bytes)?;
+            println!("Wrote {} bytes to {sd}", bytes.len());
+        }
+        _ => unreachable!(),
     }
-    filesystem.unmount()?;
-    disk.flush()?;
+    volume.flush()?;
     Ok(())
 }

@@ -1,0 +1,7 @@
+# A one-second recording in the folder layout the L6 recorder scans at boot.
+version = 1
+model = "l6"
+
+[[file]]
+path = "RECORDER/260101_000000/MASTER.WAV"
+tone = { hz = 440.0, seconds = 1.0, amplitude = 0.25 }

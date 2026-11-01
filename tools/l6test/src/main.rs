@@ -1,7 +1,6 @@
 //! Reproducible suite driver. All guest runners are supervised child processes.
 mod gui_capture;
 mod gui_probe;
-mod pad_state;
 mod screen_gif;
 
 use l6max_host::engine::Options;
@@ -12,7 +11,7 @@ use smoke_core::{CaseResult, Scenario, model_name};
 use std::{
     collections::{BTreeMap, BTreeSet},
     env, fs,
-    io::{Read, Write},
+    io::{Read, Seek, Write},
     os::unix::process::CommandExt,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
@@ -46,8 +45,9 @@ struct Fixture {
     state_recipe: Option<PathBuf>,
     state_spec: Option<PathBuf>,
     sd_image: Option<PathBuf>,
+    card_spec: Option<PathBuf>,
     #[serde(default)]
-    sound_pad: Vec<pad_state::SoundPad>,
+    sound_pad: Vec<sd_image::pad_settings::SoundPad>,
     audio_device: Option<String>,
     #[serde(default)]
     gdb: bool,
@@ -210,6 +210,64 @@ fn hash(path: &Path) -> Result<String, String> {
     }
     Ok(format!("{:x}", sha.finalize()))
 }
+/// Hash a sparse card image by its allocated extents and total length, so a
+/// large image costs only what it stores. Compare only hashes from this function.
+/// A scenario's `card`, resolved for one model.
+fn card_spec_path(catalog_dir: &Path, model: &str, card: &str) -> PathBuf {
+    catalog_dir
+        .join("cards")
+        .join(format!("{model}-{card}.toml"))
+}
+
+fn fixture_model(model: &str) -> Result<l6fw::Model, String> {
+    match model {
+        "l6" => Ok(l6fw::Model::L6),
+        "l6max" => Ok(l6fw::Model::L6max),
+        _ => Err(format!("unknown fixture model {model}")),
+    }
+}
+
+fn hash_sparse(path: &Path) -> Result<String, String> {
+    use std::os::fd::AsRawFd;
+    let mut file = fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let length = file.metadata().map_err(|e| e.to_string())?.len();
+    let fd = file.as_raw_fd();
+    let mut sha = Sha256::new();
+    sha.update(length.to_le_bytes());
+    let mut buffer = vec![0; 1024 * 1024];
+    let mut position = 0;
+    while position < length {
+        let data = unsafe { libc::lseek(fd, position as libc::off_t, libc::SEEK_DATA) };
+        if data < 0 {
+            let error = std::io::Error::last_os_error();
+            if error.raw_os_error() == Some(libc::ENXIO) {
+                break;
+            }
+            return Err(format!("{}: {error}", path.display()));
+        }
+        let hole = unsafe { libc::lseek(fd, data, libc::SEEK_HOLE) };
+        if hole < 0 {
+            return Err(format!(
+                "{}: {}",
+                path.display(),
+                std::io::Error::last_os_error()
+            ));
+        }
+        file.seek(std::io::SeekFrom::Start(data as u64))
+            .map_err(|e| e.to_string())?;
+        sha.update((data as u64).to_le_bytes());
+        let mut remaining = (hole - data) as u64;
+        while remaining > 0 {
+            let count = remaining.min(buffer.len() as u64) as usize;
+            file.read_exact(&mut buffer[..count])
+                .map_err(|e| e.to_string())?;
+            sha.update(&buffer[..count]);
+            remaining -= count as u64;
+        }
+        position = hole as u64;
+    }
+    Ok(format!("{:x}", sha.finalize()))
+}
 fn files(root: &Path) -> Result<BTreeMap<String, String>, String> {
     fn visit(
         root: &Path,
@@ -306,9 +364,15 @@ fn load_config(path: &Path) -> Result<Config, String> {
         if !fixture.patches.is_empty() && fixture.firmware_package.is_none() {
             return Err("patches require a stock firmware_package".into());
         }
-        pad_state::validate(&fixture.sound_pad)?;
-        if !fixture.sound_pad.is_empty() && fixture.sd_image.is_none() {
-            return Err("sound_pad requires an sd_image fixture".into());
+        sd_image::pad_settings::validate(&fixture.sound_pad)?;
+        if fixture.sd_image.is_some() && fixture.card_spec.is_some() {
+            return Err("choose sd_image or card_spec, not both".into());
+        }
+        if !fixture.sound_pad.is_empty()
+            && fixture.sd_image.is_none()
+            && fixture.card_spec.is_none()
+        {
+            return Err("sound_pad requires an sd_image or card_spec fixture".into());
         }
         if fixture.state_template.is_some() && fixture.state_recipe.is_some() {
             return Err("choose state_template or state_recipe, not both".into());
@@ -324,6 +388,7 @@ fn load_config(path: &Path) -> Result<Config, String> {
             &mut fixture.state_recipe,
             &mut fixture.state_spec,
             &mut fixture.sd_image,
+            &mut fixture.card_spec,
         ]
         .into_iter()
         .flatten()
@@ -335,6 +400,17 @@ fn load_config(path: &Path) -> Result<Config, String> {
             if spec.model != fixture.model {
                 return Err(format!(
                     "state spec {} is for {}, not the {} fixture",
+                    path.display(),
+                    spec.model,
+                    fixture.model
+                ));
+            }
+        }
+        if let Some(path) = &fixture.card_spec {
+            let spec = sd_image::spec::CardSpec::load(path)?;
+            if spec.model != fixture.model {
+                return Err(format!(
+                    "card spec {} is for {}, not the {} fixture",
                     path.display(),
                     spec.model,
                     fixture.model
@@ -481,14 +557,24 @@ fn fixture_options(
     if fixture.gdb {
         args.extend(["--gdb-socket".into(), gdb_socket_path().into_os_string()]);
     }
-    let sd_hash = if let Some(card) = &fixture.sd_image {
+    let sd_hash = if fixture.sd_image.is_some() || fixture.card_spec.is_some() {
         let target = dir.join("card.img");
-        fs::copy(card, &target).map_err(|e| e.to_string())?;
+        if let Some(card) = &fixture.sd_image {
+            fs::copy(card, &target).map_err(|e| e.to_string())?;
+        } else if let Some(spec) = &fixture.card_spec {
+            sd_image::spec::CardSpec::load(spec)?
+                .build(&target, spec.parent().unwrap_or(Path::new(".")))
+                .map_err(|e| e.to_string())?;
+        }
         if !fixture.sound_pad.is_empty() {
-            pad_state::apply(&target, &fixture.model, &fixture.sound_pad)?;
+            sd_image::pad_settings::apply(
+                &target,
+                fixture_model(&fixture.model)?,
+                &fixture.sound_pad,
+            )?;
         }
         args.extend(["--sd-image".into(), target.clone().into_os_string()]);
-        Some(hash(&target)?)
+        Some(hash_sparse(&target)?)
     } else {
         args.push("--no-sd".into());
         None
@@ -788,6 +874,13 @@ fn run_case(
             return Err("QEMU changed since preflight".into());
         }
         let mut selected_fixture = fixture.clone();
+        if let Some(path) = &case.scenario
+            && let Some(card) = Scenario::load(&catalog_dir.join(path))?.card
+        {
+            selected_fixture.sd_image = None;
+            selected_fixture.sound_pad.clear();
+            selected_fixture.card_spec = Some(card_spec_path(catalog_dir, &fixture.model, &card));
+        }
         if case.volatile {
             if selected_fixture.state_recipe.is_some() {
                 return Err("volatile cases cannot use a state recipe".into());
@@ -798,6 +891,7 @@ fn run_case(
         }
         if case.no_sd {
             selected_fixture.sd_image = None;
+            selected_fixture.card_spec = None;
         }
         let (mut options, mut manifest) = fixture_options(config, &selected_fixture, dir)?;
         if case.volatile && selected_fixture.state_spec.is_none() {
@@ -829,7 +923,7 @@ fn run_case(
         manifest["execution_sd_sha256"] = options
             .sd_image
             .as_ref()
-            .map(|path| hash(path))
+            .map(|path| hash_sparse(path))
             .transpose()?
             .map_or(Value::Null, |value| json!(value));
         manifest["execution_state_sha256"] = options
@@ -1513,6 +1607,7 @@ mod tests {
             state_recipe: None,
             state_spec: None,
             sd_image: None,
+            card_spec: None,
             sound_pad: vec![],
             audio_device: Some("driver=wav,id=l6-audio,path={logs}/audio.wav".into()),
             gdb: true,
@@ -1582,6 +1677,62 @@ mod tests {
         );
         fs::remove_dir_all(dir).unwrap();
     }
+    #[test]
+    fn every_scenario_card_has_a_valid_spec_for_each_model() {
+        let catalog_dir = l6max_host::paths::repository_root().join("tests/smoke");
+        let mut cards = 0;
+        for entry in fs::read_dir(catalog_dir.join("scenarios")).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_none_or(|extension| extension != "toml") {
+                continue;
+            }
+            let scenario = Scenario::load(&path).unwrap();
+            let Some(card) = &scenario.card else {
+                continue;
+            };
+            for model in &scenario.models {
+                let spec_path = card_spec_path(&catalog_dir, model, card);
+                let spec = sd_image::spec::CardSpec::load(&spec_path).unwrap();
+                assert_eq!(&spec.model, model, "{}", spec_path.display());
+                cards += 1;
+            }
+        }
+        assert!(cards > 0);
+    }
+
+    #[test]
+    fn card_spec_fixtures_are_validated() {
+        let dir = temp();
+        fs::write(dir.join("qemu"), b"qemu").unwrap();
+        let qemu_hash = format!("{:x}", Sha256::digest(b"qemu"));
+        let header = format!("version=1\nqemu='qemu'\nqemu_sha256='{qemu_hash}'\n");
+        let fixture = "[[fixture]]\nname='prepared'\nmodel='l6'\nfirmware_package='firmware.bin'\n";
+        fs::write(dir.join("firmware.bin"), b"").unwrap();
+        fs::write(dir.join("card.toml"), "version=1\nmodel='l6max'\n").unwrap();
+        let config = dir.join("fixtures.toml");
+        fs::write(
+            &config,
+            format!("{header}{fixture}sd_image='card.img'\ncard_spec='card.toml'\n"),
+        )
+        .unwrap();
+        assert!(
+            load_config(&config)
+                .err()
+                .unwrap()
+                .contains("sd_image or card_spec")
+        );
+        fs::write(&config, format!("{header}{fixture}card_spec='card.toml'\n")).unwrap();
+        assert!(
+            load_config(&config)
+                .err()
+                .unwrap()
+                .contains("not the l6 fixture")
+        );
+        fs::write(dir.join("card.toml"), "version=1\nmodel='l6'\n").unwrap();
+        assert!(load_config(&config).is_ok());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn fixture_rejects_conflicting_state_and_patch_inputs() {
         let dir = temp();
@@ -1740,6 +1891,7 @@ mod tests {
             state_recipe: None,
             state_spec: None,
             sd_image: None,
+            card_spec: None,
             sound_pad: vec![],
             audio_device: None,
             gdb: false,

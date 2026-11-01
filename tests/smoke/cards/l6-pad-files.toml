@@ -1,0 +1,19 @@
+# A WAV in each pad folder, unassigned, for cases that browse or assign them.
+version = 1
+model = "l6"
+
+[[file]]
+path = "SOUND_PAD/PAD1/TONE220.WAV"
+tone = { hz = 220.0, seconds = 1.0, amplitude = 0.5 }
+
+[[file]]
+path = "SOUND_PAD/PAD2/TONE330.WAV"
+tone = { hz = 330.0, seconds = 1.0, amplitude = 0.5 }
+
+[[file]]
+path = "SOUND_PAD/PAD3/TONE440.WAV"
+tone = { hz = 440.0, seconds = 1.0, amplitude = 0.5 }
+
+[[file]]
+path = "SOUND_PAD/PAD4/TONE660.WAV"
+tone = { hz = 660.0, seconds = 1.0, amplitude = 0.5 }

@@ -538,6 +538,11 @@ impl Runner {
                         event,
                     }));
                 }
+                Action::ExpectCardEntry { path } => {
+                    return Ok(Progress::Device(devices::Operation::ExpectCardEntry {
+                        path: path.clone(),
+                    }));
+                }
                 Action::L6maxTapHandler => {
                     return Ok(Progress::Device(devices::Operation::L6maxTapHandler));
                 }

@@ -1,0 +1,9 @@
+# A project for the recorder to load at boot and play.
+version = 1
+model = "l6max"
+
+[[project]]
+name = "260101_000000"
+hz = 440.0
+seconds = 6.0
+amplitude = 0.25

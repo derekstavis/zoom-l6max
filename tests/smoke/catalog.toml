@@ -356,6 +356,15 @@ models = ["l6", "l6max"]
 scenario = "scenarios/power.toml"
 
 [[case]]
+id = "card-record"
+suites = ["devices", "full"]
+models = ["l6", "l6max"]
+scenario = "scenarios/card-record.toml"
+needs_configuration = true
+fixture = "prepared"
+wall_timeout_s = 900
+
+[[case]]
 id = "storage"
 suites = ["devices", "full"]
 models = ["l6", "l6max"]

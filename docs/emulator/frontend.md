@@ -31,7 +31,7 @@ The normal persistent visual UI creates a model-matched demo card on first
 launch and reuses it thereafter. The L6max card is `emulator/state/sd-card.img`;
 the L6 card is `emulator/state/sd-card-l6.img`. With `--state-dir DIR`, those
 names are `DIR/sd-card.img` and `DIR/sd-card-l6.img`, respectively.
-It is a 128 MiB FAT16 card with 16 KiB clusters, a copy of the selected local
+It is a 4 GiB sparse FAT32 card with 32 KiB clusters, a copy of the selected local
 firmware package at `/L6.BIN` or `/L6max.BIN` according to its detected model,
 and four generated one-second mono 48 kHz / 16-bit WAV tones in
 `/SOUND_PAD/PAD1` through `/SOUND_PAD/PAD4`.

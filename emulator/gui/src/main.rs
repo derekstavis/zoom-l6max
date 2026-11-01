@@ -369,10 +369,12 @@ impl NativePanel {
                 .ok()
                 .flatten();
             if let (Some(folder), Some(image)) = (path, image) {
+                let model = this.update(cx, |panel, _| panel.model).ok();
+                let model = model.unwrap_or(l6fw::Model::L6max);
                 let result = cx
                     .background_executor()
                     .spawn(async move {
-                        l6max_host::demo_sd::from_directory(&image, &folder)
+                        l6max_host::demo_sd::from_directory(&image, &folder, model)
                             .map(|()| image)
                             .map_err(|error| error.to_string())
                     })

@@ -44,6 +44,7 @@ tables. Unknown header fields fail parsing.
 | `name` | yes | Nonempty scenario name used in reports. |
 | `models` | yes | One or both of `"l6"` and `"l6max"`. |
 | `fixture` | yes | Named local fixture the scenario expects. |
+| `card` | no | Card to build for each run, from `tests/smoke/cards/<model>-<card>.toml`; replaces the fixture's card and pad assignments. |
 | `main_sha256` | no | Exact 64-character hexadecimal MAIN firmware hash for revision-specific operations. |
 | `main_sha256_any` | no | Additional explicitly allowed MAIN hashes for the same guarded operations. |
 | `backends` | no | `"headless"` and/or `"gui"`; defaults to both. Typed device/GDB operations require headless. |
@@ -156,6 +157,7 @@ Scenarios default to `backends = ["headless", "gui"]`. Typed device steps requir
 | `l6max-channel-signal-pwm` | — | Seed the twelve firmware channel-level accumulators and verify five distinct increasing sampled PWM levels on all eight green SIGNAL lamps; requires L6max MAIN 1.10 and GDB. This qualifies the firmware-to-panel brightness path, not audio-input routing. |
 | `l6-level-meter-pwm` | — | Seed ten L6 1.10 level accumulators at the measured brightness thresholds and sample the raw panel matrix; require at least one output cell with five distinct nonzero duty means. Uses GDB and no SD, USB, MIDI, or host audio. |
 | `l6-main-gpio-event` | `target`, `event` | Hash-guarded L6 GDB check that Tap target 48 submits event `0x19` and Sound Pad targets 49–52 submit `0x15`–`0x18` |
+| `expect-card-entry` | `path` | Wait until the firmware has created `path` on the SD card, within `wall_timeout_s` |
 | `l6max-tap-handler` | none | Hash-guarded L6max GDB check that Tap target 48 reaches the firmware's TAP press handler. |
 | `l6-din-event-dispatch` | `group`, `cc`, `value` | Hash-guarded L6 check of DIN CC-to-event dispatch |
 | `l6-usb-startup` | — | First step only; exact-hash L6 probe replays the startup USB-enable sequence, verifies three firmware entry points and controller writes |

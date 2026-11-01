@@ -100,6 +100,9 @@ pub enum Operation {
         value: u8,
     },
     L6maxTapHandler,
+    ExpectCardEntry {
+        path: String,
+    },
     L6InputSweep,
     L6DinSweep,
     L6maxInputTiming,
@@ -800,30 +803,12 @@ fn run_l6max_update(options: &Options, main: &[u8]) -> Result<(), String> {
             package[0x1fc] ^= 1;
         }
         let card = directory.join("card.img");
-        let mut file = fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create_new(true)
-            .open(&card)
-            .map_err(|e| e.to_string())?;
-        file.set_len(128 * 1024 * 1024).map_err(|e| e.to_string())?;
-        fatfs::format_volume(
-            &mut file,
-            fatfs::FormatVolumeOptions::new()
-                .fat_type(fatfs::FatType::Fat16)
-                .bytes_per_cluster(16384),
-        )
-        .map_err(|e| e.to_string())?;
-        let volume = fatfs::FileSystem::new(&mut file, fatfs::FsOptions::new())
-            .map_err(|e| e.to_string())?;
+        let mut volume = sd_image::create_empty(&card, "L6MAX").map_err(|e| e.to_string())?;
         volume
-            .root_dir()
-            .create_file("L6max.BIN")
-            .and_then(|mut output| output.write_all(&package))
+            .write("L6max.BIN", &package)
+            .and_then(|()| volume.flush())
             .map_err(|e| e.to_string())?;
-        volume.unmount().map_err(|e| e.to_string())?;
-        file.sync_all().map_err(|e| e.to_string())?;
-        drop(file);
+        drop(volume);
         let mut local = options.clone();
         local.sd_image = Some(card);
         local.no_sd = false;
@@ -1008,33 +993,14 @@ fn run_l6max_update(options: &Options, main: &[u8]) -> Result<(), String> {
 }
 
 fn create_factory_card(card: &std::path::Path) -> Result<(), String> {
-    let mut file = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create_new(true)
-        .open(&card)
-        .map_err(|error| error.to_string())?;
-    file.set_len(64 * 1024 * 1024)
-        .map_err(|error| error.to_string())?;
-    fatfs::format_volume(
-        &mut file,
-        fatfs::FormatVolumeOptions::new().fat_type(fatfs::FatType::Fat32),
-    )
-    .map_err(|error| error.to_string())?;
-    {
-        let volume = fatfs::FileSystem::new(&mut file, fatfs::FsOptions::new())
-            .map_err(|error| error.to_string())?;
-        volume
-            .root_dir()
-            .create_file("D445_JIG_000.txt")
-            .and_then(|mut fixture| {
-                fixture.write_all(b"emulator fixture; no calibration parameters\n")
-            })
-            .map_err(|error| error.to_string())?;
-        volume.unmount().map_err(|error| error.to_string())?;
-    }
-    file.sync_all().map_err(|error| error.to_string())?;
-    Ok(())
+    let mut volume = sd_image::create_empty(card, "L6MAX").map_err(|e| e.to_string())?;
+    volume
+        .write(
+            "D445_JIG_000.txt",
+            b"emulator fixture; no calibration parameters\n",
+        )
+        .and_then(|()| volume.flush())
+        .map_err(|error| error.to_string())
 }
 
 #[derive(Default)]
@@ -3564,6 +3530,23 @@ impl State {
                 }
                 Ok(json!({"target":target,"column":column,"row":row,"event":event,"report":bytes}))
             }
+            Operation::ExpectCardEntry { path } => {
+                let card = options
+                    .sd_image
+                    .as_ref()
+                    .ok_or("expect-card-entry requires an SD card")?;
+                let deadline =
+                    std::time::Instant::now() + std::time::Duration::from_secs(wall_timeout_s);
+                loop {
+                    if sd_image::entry_exists(card, &path)? {
+                        return Ok(json!({ "card_entry": path }));
+                    }
+                    if std::time::Instant::now() >= deadline {
+                        return Err(format!("{path} did not appear on the SD card").into());
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(250));
+                }
+            }
             Operation::L6maxTapHandler => {
                 const TAP_TARGET: u32 = 48;
                 const TAP_PRESS_HANDLER: u32 = 0x80055468;
@@ -4217,38 +4200,28 @@ impl State {
                 if disk.read_sector((blocks - 1) as u32)? != original {
                     return Err("USB sector write/read mismatch".into());
                 }
-                let mut disk = l6max_host::usb_storage::UsbDisk::new(disk)?;
-                let filesystem = fatfs::FileSystem::new(&mut disk, fatfs::FsOptions::new())?;
+                let disk = l6max_host::usb_storage::UsbDisk::new(disk)?;
+                let mut volume = sd_image::Volume::open(disk)?;
                 let filename = format!("L6T{:05X}.TXT", std::process::id() & 0xfffff);
                 let expected = (0..1537)
                     .map(|index| ((index * 37 + 11) % 256) as u8)
                     .collect::<Vec<_>>();
-                {
-                    let root = filesystem.root_dir();
-                    match root.open_file(&filename) {
-                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                        _ => return Err("USB FAT roundtrip filename already exists".into()),
-                    }
-                    {
-                        let mut file = root.create_file(&filename)?;
-                        file.write_all(&expected)?;
-                        file.flush()?;
-                    }
-                    use std::io::Read;
-                    let mut actual = Vec::new();
-                    root.open_file(&filename)?.read_to_end(&mut actual)?;
-                    root.remove(&filename)?;
-                    if expected != actual {
-                        return Err(format!(
-                            "USB FAT file roundtrip mismatch: wrote {} bytes, read {} bytes",
-                            expected.len(),
-                            actual.len()
-                        )
-                        .into());
-                    }
+                if volume.exists(&filename) {
+                    return Err("USB FAT roundtrip filename already exists".into());
                 }
-                filesystem.unmount()?;
-                disk.flush()?;
+                volume.write(&filename, &expected)?;
+                volume.flush()?;
+                let actual = volume.read(&filename)?;
+                volume.remove(&filename)?;
+                if expected != actual {
+                    return Err(format!(
+                        "USB FAT file roundtrip mismatch: wrote {} bytes, read {} bytes",
+                        expected.len(),
+                        actual.len()
+                    )
+                    .into());
+                }
+                volume.flush()?;
                 Ok(
                     json!({"inquiry":String::from_utf8_lossy(&inquiry[8..36]),"blocks":blocks,"sector_size":size,"sector_round_trip":true,"fat_file_round_trip_bytes":expected.len()}),
                 )
@@ -6211,10 +6184,7 @@ fn compare_pad_waveform(
     source: &str,
     capture: &[u8],
 ) -> Result<Value, Box<dyn std::error::Error>> {
-    let volume = fatfs::FileSystem::new(fs::File::open(card)?, fatfs::FsOptions::new())?;
-    use std::io::Read;
-    let mut wav = Vec::new();
-    volume.root_dir().open_file(source)?.read_to_end(&mut wav)?;
+    let wav = sd_image::read_file(card, source, u64::MAX)?;
     let source = waveform::decode_wav(&wav).map_err(std::io::Error::other)?;
     waveform::compare(&source, &waveform::decode_capture(capture))
         .map_err(|error| std::io::Error::other(error).into())
@@ -6677,7 +6647,6 @@ mod tests {
     use l6fw::Model;
     use std::{
         fs,
-        io::Read,
         time::{SystemTime, UNIX_EPOCH},
     };
 
@@ -6703,22 +6672,11 @@ mod tests {
         let path =
             std::env::temp_dir().join(format!("factory-jig-{}-{nonce}.img", std::process::id()));
         create_factory_card(&path).unwrap();
-        let mut image = fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(&path)
-            .unwrap();
-        let volume = fatfs::FileSystem::new(&mut image, fatfs::FsOptions::new()).unwrap();
-        let mut contents = String::new();
-        volume
-            .root_dir()
-            .open_file("D445_JIG_000.txt")
+        let contents = sd_image::open(&path)
             .unwrap()
-            .read_to_string(&mut contents)
+            .read("D445_JIG_000.txt")
             .unwrap();
-        assert_eq!(contents, "emulator fixture; no calibration parameters\n");
-        volume.unmount().unwrap();
-        drop(image);
+        assert_eq!(contents, b"emulator fixture; no calibration parameters\n");
         fs::remove_file(path).unwrap();
     }
 

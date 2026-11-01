@@ -2,6 +2,7 @@ version = 1
 name = "editor-pad-assignments"
 models = ["l6", "l6max"]
 fixture = "prepared"
+card = "pad-files"
 backends = ["headless"]
 
 [[step]]

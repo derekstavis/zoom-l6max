@@ -21,6 +21,9 @@ pub struct Scenario {
     pub name: String,
     pub models: Vec<String>,
     pub fixture: String,
+    /// Build the case's card from `cards/<model>-<card>.toml` beside the catalog,
+    /// replacing any card the fixture names.
+    pub card: Option<String>,
     pub main_sha256: Option<String>,
     #[serde(default)]
     pub main_sha256_any: Vec<String>,
@@ -278,6 +281,10 @@ pub enum Action {
         event: u8,
     },
     L6maxTapHandler,
+    /// Wait until an entry appears on the card, written by the firmware.
+    ExpectCardEntry {
+        path: String,
+    },
     L6UsbStartup,
     L6DinEventDispatch {
         group: u8,
@@ -781,6 +788,7 @@ impl Scenario {
                 | Action::PanelEvent { .. }
                 | Action::L6MainGpioEvent { .. }
                 | Action::L6maxTapHandler
+                | Action::ExpectCardEntry { .. }
                 | Action::L6UsbStartup
                 | Action::L6DinEventDispatch { .. }
                 | Action::L6InputSweep

@@ -9,20 +9,18 @@ qemu_sha256 = "REPLACE_WITH_SHA256_FROM_shasum_-a_256"
 name = "prepared"
 model = "l6"
 firmware_package = "/absolute/path/to/L6.BIN"
-state_template = "/absolute/path/to/known-l6-state"
-# An empty card suffices for storage cases:
-# cargo run --offline --locked -p l6fs -- card create l6-card.img --size-mib 128
-sd_image = "/absolute/path/to/l6-card.img"
+state_spec = "/absolute/path/to/tests/smoke/states/l6-settings-defaults.toml"
+card_spec = "/absolute/path/to/tests/smoke/cards/l6-empty.toml"
 timing = "paced"
 
 [[fixture]]
 name = "prepared"
 model = "l6max"
 firmware_package = "/absolute/path/to/L6max.bin"
-state_template = "/absolute/path/to/known-l6max-state"
-# Use an empty card here too: after reinsertion, a card with recorder projects
-# shows a new project name, which the storage case's display check rejects.
-sd_image = "/absolute/path/to/l6max-card.img"
+state_spec = "/absolute/path/to/tests/smoke/states/l6max-setup-complete.toml"
+# Use an empty card: after reinsertion, a card with recorder projects shows a new
+# project name, which the storage case's display check rejects.
+card_spec = "/absolute/path/to/tests/smoke/cards/l6max-empty.toml"
 timing = "paced"
 
 # The L6 recorder playback test needs the normal QEMU audio queue service; it
@@ -31,19 +29,16 @@ timing = "paced"
 name = "l6-recorder-playback"
 model = "l6"
 firmware_package = "/absolute/path/to/L6.BIN"
-state_template = "/absolute/path/to/mode-0-recorder-state"
-sd_image = "/absolute/path/to/card-with-RECORDER-recording-MASTER.WAV.img"
+state_spec = "/absolute/path/to/tests/smoke/states/l6-settings-defaults.toml"
 audio_device = "driver=wav,id=l6-audio,path={logs}/audio.wav"
 gdb = true
 
-# L6max recorder playback assertion; the saved state must already be past
-# date/battery/card setup, with a valid recorder track selected.
+# L6max recorder playback assertion. The scenario builds its own project card.
 # [[fixture]]
 # name = "l6max-recorder-playback"
 # model = "l6max"
 # firmware_package = "/absolute/path/to/L6max.bin"
-# state_template = "/absolute/path/to/mode-0-l6max-recorder-state"
-# sd_image = "/absolute/path/to/l6max-card-with-recording.img"
+# state_spec = "/absolute/path/to/tests/smoke/states/l6max-setup-complete.toml"
 # gdb = true
 
 # No state_template means create an empty isolated state directory.

@@ -3,6 +3,7 @@ name = "storage"
 models = ["l6", "l6max"]
 backends = ["headless"]
 fixture = "prepared"
+card = "empty"
 
 [[step]]
 action = "include"

@@ -8,5 +8,5 @@ license.workspace = true
 [dependencies]
 l6max-host.workspace = true
 sd-image.workspace = true
-fatfs.workspace = true
+l6fw.workspace = true
 libc.workspace = true

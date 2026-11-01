@@ -2,6 +2,7 @@ version = 1
 name = "l6max-switches-during-playback"
 models = ["l6max"]
 fixture = "sound-pad-waveform"
+card = "sound-pads"
 backends = ["gui"]
 
 [[step]]

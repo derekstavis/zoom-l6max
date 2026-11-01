@@ -77,7 +77,7 @@ It has these top-level blocks:
 | Block | Fields | Purpose |
 | --- | --- | --- |
 | top level | `version = 1`, `qemu`, `qemu_sha256` | Pin the exact QEMU executable. `qemu` is resolved relative to this TOML file; the SHA-256 must match before any run. |
-| `[[fixture]]` | `name`, `model`, exactly one of `firmware_dir` / `firmware_package`; optional `patches`, `update_package`, `state_template`, `state_recipe`, `state_spec`, `sd_image`, `sound_pad`, `audio_device`, `gdb`, `timing`, `update_bootloader` | Define local firmware and starting state for a named model fixture. Names may repeat for different models, but `(name, model)` must be unique. |
+| `[[fixture]]` | `name`, `model`, exactly one of `firmware_dir` / `firmware_package`; optional `patches`, `update_package`, `state_template`, `state_recipe`, `state_spec`, `sd_image`, `card_spec`, `sound_pad`, `audio_device`, `gdb`, `timing`, `update_bootloader` | Define local firmware and starting state for a named model fixture. Names may repeat for different models, but `(name, model)` must be unique. |
 | `[legacy."CASE-ID"]` | optional `fixture`, `executable`, `executable_sha256`, `arguments`, `environment` | Configure a legacy executable required by a catalog case. An executable requires a matching hash. `arguments` and environment values support `{firmware_dir}`, `{logs}`, `{qemu}`, and `{package}` substitutions. |
 | `[[expected_failure]]` | `case`, `model`, `step`, `contains`, `reason` | Match a known failure only at the exact scenario step and when its error contains the specified text. A matching failure is XFAIL; an unexpected pass is XPASS. |
 
@@ -95,11 +95,45 @@ Fixture details:
   NOR settings, RTC and panel state without a setup guest, alone or on top of
   a template; it must name the fixture's model.
 - If `state_template` is omitted, the driver creates fresh isolated state.
-  `sd_image` is copied for each case. `audio_device` accepts QEMU audio-device
+  `sd_image` is copied for each case, and `card_spec` builds a new card for each
+  case instead; choose one. `audio_device` accepts QEMU audio-device
   syntax and `{logs}` expands to the per-case log directory. `gdb` enables the
   fixture's debugger socket. `update_bootloader` enables that update path.
+- Prefer `state_spec` for `prepared` fixtures: a spec boots without the startup prompts,
+  so the scenario's `setup_input` steps are skipped. Use saved pad assignments from a
+  card spec unless the Editor or menu is what the case tests.
+- A scenario can name its own card with a top-level `card`. The driver builds
+  `tests/smoke/cards/<model>-<card>.toml` for each run, replacing the fixture's
+  `sd_image`, `card_spec`, and `sound_pad`, so these cases need no local card.
+- A `card_spec` is a TOML file declaring a card's contents, like the ones in
+  [`tests/smoke/cards`](../../tests/smoke/cards). It names `version = 1` and `model`,
+  which must match the fixture, with optional `directory` (a list of paths).
+  `system_file` defaults to `true`; `false` leaves the file out (see
+  [card layout](../emulator/usb.md#card-layout)). `[[sound_pad]]` blocks take the same
+  fields as `[[fixture.sound_pad]]` and name files on the card.
+  Each `[[file]]` has a `path` from the card root, with parent directories created as
+  needed, and one source: `tone` (`hz`, `seconds`, `amplitude`), `sweep` (`low_hz`,
+  `high_hz`, `seconds`, `amplitude`), `levels` (`hz` and `steps`, each with `seconds`,
+  `left`, and `right`), `copy` (a host path relative to the spec), or `text`. Generated
+  audio is 48 kHz stereo 32-bit float. On L6max, each `[[project]]` (`name`, `hz`,
+  `seconds`, `amplitude`) writes a recorder project under `RECORDER`, with its settings
+  file, eight tracks, and a master.
+
+  ```toml
+  version = 1
+  model = "l6max"
+
+  [[file]]
+  path = "SOUND_PAD/PAD4/SWEEP.WAV"
+  sweep = { low_hz = 100.0, high_hz = 8000.0, seconds = 6.0, amplitude = 0.7 }
+
+  [[sound_pad]]
+  pad = 4
+  file = "SOUND_PAD/PAD4/SWEEP.WAV"
+  level = 30
+  ```
 - Add one or more `[[fixture.sound_pad]]` blocks to prepare assignments on the
-  disposable `sd_image` copy. Each block takes `pad` (1–4), `file` (a path
+  disposable card. Each block takes `pad` (1–4), `file` (a path
   relative to the card root), optional `mode` (`one-shot`, `loop`, or `hold`;
   default `one-shot`), and optional `level` (0–59; default 49). The WAV must
   already exist on the card. The driver creates or updates the model's saved

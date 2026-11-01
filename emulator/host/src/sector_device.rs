@@ -88,7 +88,8 @@ impl<D: SectorDevice> SectorDisk<D> {
         let boot = device.read_sector(0)?;
         let mut first = 0;
         let mut volume_blocks = blocks;
-        if u16::from_le_bytes([boot[11], boot[12]]) != SECTOR as u16 {
+        if boot[3..11] != *b"EXFAT   " && u16::from_le_bytes([boot[11], boot[12]]) != SECTOR as u16
+        {
             if boot[510..] != [0x55, 0xaa] {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
@@ -97,7 +98,7 @@ impl<D: SectorDevice> SectorDisk<D> {
             }
             let p = boot[446..510]
                 .chunks_exact(16)
-                .find(|p| matches!(p[4], 1 | 4 | 6 | 0xb | 0xc | 0xe))
+                .find(|p| matches!(p[4], 1 | 4 | 6 | 7 | 0xb | 0xc | 0xe))
                 .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "no FAT partition"))?;
             first = u32::from_le_bytes(p[8..12].try_into().unwrap());
             volume_blocks = u32::from_le_bytes(p[12..16].try_into().unwrap()) as u64;
@@ -195,6 +196,19 @@ impl<D: SectorDevice> Seek for SectorDisk<D> {
     }
 }
 
+impl<D: SectorDevice + Send> sd_image::BlockDevice for SectorDisk<D> {
+    fn block_size(&self) -> u32 {
+        SECTOR as u32
+    }
+    fn total_size(&self) -> u64 {
+        self.length
+    }
+    fn sync(&mut self) -> Result<(), sd_image::DeviceError> {
+        Write::flush(self)?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -202,9 +216,7 @@ mod tests {
 
     /// A formatted FAT volume of `sectors` sectors.
     fn volume(sectors: usize) -> Vec<u8> {
-        let mut bytes = Cursor::new(vec![0; sectors * SECTOR]);
-        fatfs::format_volume(&mut bytes, fatfs::FormatVolumeOptions::new()).unwrap();
-        bytes.into_inner()
+        sd_image::blank_volume_bytes((sectors * SECTOR) as u64, false).unwrap()
     }
     /// One MBR with a single FAT32 (LBA) partition at sector 2048.
     fn partitioned(volume: &[u8]) -> Vec<u8> {
@@ -220,24 +232,21 @@ mod tests {
     fn round_trip(image: Vec<u8>) {
         let mut device = StreamSectors::new(Cursor::new(image)).unwrap();
         {
-            let mut disk = SectorDisk::open(&mut device).unwrap();
-            let fs = fatfs::FileSystem::new(&mut disk, fatfs::FsOptions::new()).unwrap();
-            let mut file = fs.root_dir().create_file("TRACK.WAV").unwrap();
+            let disk = SectorDisk::open(&mut device).unwrap();
+            let mut volume = sd_image::Volume::open(disk).unwrap();
             // Crosses several sectors and a cluster boundary.
-            file.write_all(&(0..3000u32).map(|i| i as u8).collect::<Vec<_>>())
+            volume
+                .write(
+                    "TRACK.WAV",
+                    &(0..3000u32).map(|i| i as u8).collect::<Vec<_>>(),
+                )
                 .unwrap();
-            file.flush().unwrap();
-            drop(file);
-            fs.unmount().unwrap();
-            disk.flush().unwrap();
+            volume.flush().unwrap();
         }
-        let mut disk = SectorDisk::open(&mut device).unwrap();
-        let fs = fatfs::FileSystem::new(&mut disk, fatfs::FsOptions::new()).unwrap();
-        let mut content = Vec::new();
-        fs.root_dir()
-            .open_file("TRACK.WAV")
+        let disk = SectorDisk::open(&mut device).unwrap();
+        let content = sd_image::Volume::open(disk)
             .unwrap()
-            .read_to_end(&mut content)
+            .read("TRACK.WAV")
             .unwrap();
         assert_eq!(content.len(), 3000);
         assert!(content.iter().enumerate().all(|(i, &b)| b == i as u8));
@@ -255,6 +264,10 @@ mod tests {
         fn flush(&mut self) -> io::Result<()> {
             (**self).flush()
         }
+    }
+    #[test]
+    fn exfat_files_round_trip_on_a_whole_disk_volume() {
+        round_trip(sd_image::blank_volume_bytes(16 * 1024 * 1024, true).unwrap());
     }
     #[test]
     fn fat_files_round_trip_on_a_whole_disk_volume() {
