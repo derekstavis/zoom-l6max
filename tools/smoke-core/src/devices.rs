@@ -2181,13 +2181,17 @@ fn run_l6max_input_timing(session: &Session, options: &Options) -> Result<Value,
         Ok(trace.matches(pattern).count())
     };
     let current = session.poll()?;
-    let input_before = inputs.panel.snapshot();
-    let presses_before = report_count("l6 panel USART1 TX 91\n")?;
-    let releases_before = report_count("l6 panel USART1 TX 90\n")?;
     let qmp_clients = &session.engine.management;
     for client in qmp_clients {
         client.stop().map_err(|error| error.to_string())?;
     }
+    // Take the baseline once paused: a heartbeat sent just before the pause can
+    // still arrive after it, and would read as the clock advancing while paused.
+    thread::sleep(Duration::from_millis(100));
+    session.poll()?;
+    let input_before = inputs.panel.snapshot();
+    let presses_before = report_count("l6 panel USART1 TX 91\n")?;
+    let releases_before = report_count("l6 panel USART1 TX 90\n")?;
     let send_result = (|| -> Result<(), String> {
         inputs
             .panel

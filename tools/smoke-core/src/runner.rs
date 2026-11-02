@@ -30,7 +30,6 @@ struct Observation {
 struct SceneSaveState {
     scene: usize,
     target: u32,
-    before: [bool; 3],
     press_pattern: String,
     release_pattern: String,
     press_count: u64,
@@ -706,7 +705,6 @@ impl Runner {
                         let state = SceneSaveState {
                             scene,
                             target,
-                            before: l6max_host::indicators::l6_scene_leds(obs.data.indicators),
                             press_count: obs.traces.get(&press_pattern).copied().unwrap_or(0),
                             release_count: obs.traces.get(&release_pattern).copied().unwrap_or(0),
                             press_pattern,
@@ -742,12 +740,12 @@ impl Runner {
                             if press_delta > 1 {
                                 return Err(format!("duplicate L6 scene {scene} press report"));
                             }
-                            let mut expected = state.before;
-                            expected[scene - 1] = true;
+                            // Only this scene's lamp: another just saved can still be
+                            // flashing, so the others are not a stable baseline.
                             if self.acknowledged(&obs)?
                                 && press_delta == 1
                                 && l6max_host::indicators::l6_scene_leds(obs.data.indicators)
-                                    == expected
+                                    [scene - 1]
                             {
                                 return self.dispatch(Command::Release { target }, obs);
                             }
