@@ -798,9 +798,6 @@ fn main() {
                 .into(),
         );
     }
-    if options.smoke_scenario.is_none() && !args.iter().any(|arg| arg == "--timing") {
-        options.timing = l6max_host::engine::Timing::Split;
-    }
     let bundle = bundle::Bundle::detect().unwrap_or_else(|error| {
         tracing::error!(%error, "Could not open app data");
         std::process::exit(1);
@@ -885,10 +882,7 @@ fn main() {
     let testing = options.smoke_scenario.is_some();
     let scenario_smoke = selected_scenario
         .map(|scenario| {
-            smoke_core::Runner::new(scenario, model, options.logs.clone()).map(|mut runner| {
-                runner.set_separate_clocks(options.timing == l6max_host::engine::Timing::Split);
-                runner
-            })
+            smoke_core::Runner::new(scenario, model, options.logs.clone()).map(|mut runner| runner)
         })
         .transpose()
         .unwrap_or_else(|error| {

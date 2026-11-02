@@ -49,7 +49,6 @@ struct Fixture {
     card_spec: Option<PathBuf>,
     audio_device: Option<String>,
     gdb: bool,
-    timing: String,
 }
 static CANCELLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 extern "C" fn interrupt(_: libc::c_int) {
@@ -336,7 +335,6 @@ fn case_fixture(
         card_spec: card.map(|name| spec("cards", name)),
         audio_device: scenario.and_then(|s| s.audio_device.clone()),
         gdb: scenario.is_some_and(|s| s.gdb),
-        timing: scenario.map_or_else(|| "split".into(), |s| s.timing.clone()),
     })
 }
 
@@ -500,8 +498,6 @@ fn fixture_options(
         dir.as_os_str().to_owned(),
         "--audio-device".into(),
         audio_device.clone().into(),
-        "--timing".into(),
-        fixture.timing.clone().into(),
     ];
     if fixture.gdb {
         args.extend(["--gdb-socket".into(), gdb_socket_path().into_os_string()]);
@@ -527,7 +523,7 @@ fn fixture_options(
         args.extend(["--update-package".into(), package.clone().into_os_string()]);
     }
     let options = Options::parse_args(args)?;
-    let manifest = json!({"fixture":fixture.name,"model":fixture.model,"firmware":files(&firmware)?,"package_sha256":selected_package.as_ref().map(|p|hash(p)).transpose()?,"patches":fixture.patches,"update_package_sha256":fixture.update_package.as_ref().map(|p|hash(p)).transpose()? ,"state_spec":state_spec,"sd_sha256":sd_hash,"audio_device":audio_device,"timing":fixture.timing,"qemu_sha256":config.qemu_sha256});
+    let manifest = json!({"fixture":fixture.name,"model":fixture.model,"firmware":files(&firmware)?,"package_sha256":selected_package.as_ref().map(|p|hash(p)).transpose()?,"patches":fixture.patches,"update_package_sha256":fixture.update_package.as_ref().map(|p|hash(p)).transpose()? ,"state_spec":state_spec,"sd_sha256":sd_hash,"audio_device":audio_device,"qemu_sha256":config.qemu_sha256});
     Ok((options, manifest))
 }
 fn engine_args(options: &Options) -> Vec<String> {
@@ -541,12 +537,6 @@ fn engine_args(options: &Options) -> Vec<String> {
         options.logs.display().to_string(),
         "--audio-device".into(),
         options.audio_device.clone().unwrap(),
-        "--timing".into(),
-        match options.timing {
-            l6max_host::engine::Timing::Paced => "paced",
-            l6max_host::engine::Timing::Split => "split",
-        }
-        .into(),
     ];
     if let Some(socket) = &options.gdb_socket {
         result.extend(["--gdb-socket".into(), socket.display().to_string()]);
@@ -1426,7 +1416,6 @@ mod tests {
             card_spec: None,
             audio_device: Some("driver=wav,id=l6-audio,path={logs}/audio.wav".into()),
             gdb: true,
-            timing: "paced".into(),
         };
         assert_eq!(
             audio_device_spec(&fixture, Path::new("/tmp/case-logs")),

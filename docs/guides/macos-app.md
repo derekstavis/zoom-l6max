@@ -87,7 +87,7 @@ Use `--debug` for a faster local build, or `--output DIR` for another destinatio
 Existing app/ZIP outputs are rejected; use a new output directory for another build.
 The bundle targets the build machine's architecture, not a universal GUI binary.
 
-The packager verifies that QEMU contains `l6max-dual`, copies native dependencies
+The packager verifies that QEMU contains `l6max-main`, copies native dependencies
 recursively, rewrites their loader paths, includes the original app icon and
 license notices, and applies/verifies an ad-hoc signature before creating the ZIP.
 It never copies firmware or device state. Native and Rust dependency inventories

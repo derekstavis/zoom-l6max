@@ -28,7 +28,6 @@ Each scenario declares what it runs from, so the local file only supplies firmwa
 | `patches` | Apply named guarded patches to the model's package, using the same implementation as the browser patcher. |
 | `update_patches` | Build the case's update package from the model's package, per model, for example `{ l6 = ["midi-sync"] }`. |
 | `gdb` | Enable the case's debugger socket. |
-| `timing` | `split` (default) or `paced`. |
 | `audio_device` | QEMU audio-device syntax, with `{logs}` as the case's log directory. |
 
 A state spec seeds MAIN NOR from the case's firmware and commits the declared settings

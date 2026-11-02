@@ -5,8 +5,7 @@
 The Rust/GPUI application composes the mixer from reusable native controls and displays the firmware framebuffer.
 It starts separate QEMU processes for the Cortex-M7 and panel Cortex-M0, linked by
 a modeled internal UART, so MAIN has a host thread to itself; see
-[live output](audio.md#live-output). `--timing paced` instead runs both CPUs in one
-`l6max-dual` process on a shared virtual clock.
+[live output](audio.md#live-output).
 
 ## Run
 
@@ -23,8 +22,7 @@ cargo run -p l6max-gui -- /path/to/qemu-system-arm
 The application owns QEMU's lifetime. Automatic setup builds the pinned QEMU
 when no executable is supplied. Use `--qemu PATH` or `L6_QEMU` to select an
 existing executable. Optional arguments are
-`--firmware-dir DIR`, `--logs DIR`, `--sd-image FILE`, and
-`--timing paced|split` (the GUI defaults to `split`).
+`--firmware-dir DIR`, `--logs DIR`, and `--sd-image FILE`.
 Firmware is supplied locally and excluded from Git.
 
 The normal persistent visual UI creates a model-matched demo card on first
@@ -257,10 +255,8 @@ Panel runtime notifications include a 33 ms virtual-clock heartbeat
 (`0x80000008`). Input tests use it for guest-time waits; timestamps on changed
 LCD frames do not advance while the display is static.
 
-Panel TIM2 drives input scanning and firmware debounce. In a single process, the
-engine uses single-threaded TCG with `-icount shift=1,align=on,sleep=on`; each instruction
-advances the shared virtual clock by 2 ns. QMP pause freezes both chips and
-device timers. Instruction timing is an emulator pacing model rather than a
+Panel TIM2 drives input scanning and firmware debounce. QMP pause freezes the chip it
+is sent to and that chip's device timers. Instruction timing is an emulator pacing model rather than a
 measurement of physical MCU cycles.
 
 Enabling UART receive interrupts during panel startup asserts the interrupt if a

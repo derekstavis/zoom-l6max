@@ -3,7 +3,7 @@
 The maintained user and agent reference is
 [`docs/development/tools/l6dbg.md`](../../docs/development/tools/l6dbg.md). It
 documents all recipe fields and focused subcommands (`input`, `midi`,
-`popup-trigger`, and `uart-startup`). This directory contains the checked-in
+and `popup-trigger`). This directory contains the checked-in
 example recipe and its implementation.
 
 `l6dbg` runs a headless emulator and records observations from a TOML

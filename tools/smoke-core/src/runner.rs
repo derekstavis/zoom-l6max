@@ -69,7 +69,6 @@ pub struct Runner {
     last_progress: Instant,
     panel_quiet: Option<([u32; 8], u32)>,
     ring_quiet: Option<([u32; 8], u32)>,
-    separate_clocks: bool,
     last_report_guest: u32,
     checkpoints: BTreeMap<String, Observation>,
     scene_save: Option<SceneSaveState>,
@@ -141,7 +140,6 @@ impl Runner {
             last_progress: Instant::now(),
             panel_quiet: None,
             ring_quiet: None,
-            separate_clocks: false,
             last_report_guest: 0,
             checkpoints: Default::default(),
             scene_save: None,
@@ -923,22 +921,17 @@ impl Runner {
                         >= settle_ms;
                     reports_ready
                         && settled
-                        && checkpoint.as_ref().is_none_or(|name| {
-                            // Firmware accelerates encoders by report spacing, which
-                            // only repeats exactly when both MCUs share one clock.
-                            if self.separate_clocks {
-                                let moved = after[channel - 1].count_ones() as i64
-                                    - before[channel - 1].count_ones() as i64;
-                                return match self.last_command {
-                                    Some(Command::Encoder { steps, .. }) => {
-                                        moved.signum() == i64::from(steps.signum())
-                                    }
-                                    _ => moved == 0,
-                                };
+                        // Firmware accelerates encoders by report spacing, so
+                        // assert the direction of a turn and not its exact mask.
+                        && checkpoint.as_ref().is_none_or(|_| {
+                            let moved = after[channel - 1].count_ones() as i64
+                                - before[channel - 1].count_ones() as i64;
+                            match self.last_command {
+                                Some(Command::Encoder { steps, .. }) => {
+                                    moved.signum() == i64::from(steps.signum())
+                                }
+                                _ => moved == 0,
                             }
-                            self.checkpoints.get(name).is_some_and(|o| {
-                                rings(o.data.indicators)[channel - 1] == after[channel - 1]
-                            })
                         })
                         && mask.is_none_or(|v| after[channel - 1] == v)
                         && (!changed || before[channel - 1] != after[channel - 1])
@@ -998,9 +991,6 @@ impl Runner {
             return Err(format!("duplicate encoder reports: {delta}"));
         }
         Ok(delta == u64::from(steps.unsigned_abs()))
-    }
-    pub fn set_separate_clocks(&mut self, separate: bool) {
-        self.separate_clocks = separate;
     }
     pub(crate) fn trace_file(&mut self, path: PathBuf) {
         self.trace_path = path;

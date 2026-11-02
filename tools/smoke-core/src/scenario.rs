@@ -32,8 +32,6 @@ pub struct Scenario {
     pub update_patches: std::collections::BTreeMap<String, Vec<String>>,
     #[serde(default)]
     pub gdb: bool,
-    #[serde(default = "default_timing")]
-    pub timing: String,
     pub audio_device: Option<String>,
     pub main_sha256: Option<String>,
     #[serde(default)]
@@ -62,9 +60,6 @@ pub struct Step {
     pub wall_timeout_s: u64,
     #[serde(flatten)]
     pub action: Action,
-}
-fn default_timing() -> String {
-    "split".into()
 }
 fn default_backends() -> Vec<String> {
     vec!["headless".into(), "gui".into()]

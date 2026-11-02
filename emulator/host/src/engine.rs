@@ -48,7 +48,6 @@ pub struct Options {
     /// Connect the DIN/TRS MIDI IN/OUT jacks as soon as the engine starts,
     /// rather than waiting for a later [`Engine::connect_midi`] call.
     pub midi_enabled: bool,
-    pub timing: Timing,
     pub smoke_scenario: Option<PathBuf>,
     pub update_bootloader: bool,
     /// Optional local GDB socket for deterministic firmware diagnostics.
@@ -58,15 +57,6 @@ pub struct Options {
     /// Leave all guest CPUs paused after QMP setup so a diagnostic can attach
     /// GDB breakpoints before firmware execution begins.
     pub start_paused: bool,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Timing {
-    /// 2 ns per instruction, with QEMU sleeping when ahead of wall time.
-    Paced,
-    /// Run MAIN and the panel in separate paced QEMU processes, each with its
-    /// own instruction rate and host thread. Runs are not deterministic.
-    Split,
 }
 
 const ACCELERATOR: &str = "tcg,thread=single";
@@ -122,7 +112,6 @@ impl Options {
             usb_enabled: false,
             usb_cable_at_start: false,
             midi_enabled: false,
-            timing: Timing::Paced,
             smoke_scenario: None,
             update_bootloader: false,
             gdb_socket: None,
@@ -169,16 +158,9 @@ impl Options {
                 "--no-sd" => options.no_sd = true,
                 "--state-dir" => options.state_dir = Some(take_path(&mut args, "--state-dir")?),
                 "--volatile" => options.state_dir = None,
-                "--timing" => {
-                    options.timing = match args.next().as_deref().and_then(|value| value.to_str()) {
-                        Some("paced") => Timing::Paced,
-                        Some("split") => Timing::Split,
-                        _ => return Err("--timing requires paced or split".into()),
-                    };
-                }
                 "--help" | "-h" => {
                     println!(
-                        "Engine options: [QEMU] [--qemu PATH] [--audio-device 'driver=...,id=...'] [--firmware-dir DIR | --firmware-package PACKAGE] [--update-package PACKAGE] [--no-auto-setup] [--logs DIR] [--state-dir DIR | --volatile] [--sd-image FILE | --no-sd] [--update-bootloader] [--usb] [--midi] [--trace-sd] [--timing paced|split] [--smoke-scenario FILE] [--gdb-socket PATH] [--control-socket PATH] [--start-paused]"
+                        "Engine options: [QEMU] [--qemu PATH] [--audio-device 'driver=...,id=...'] [--firmware-dir DIR | --firmware-package PACKAGE] [--update-package PACKAGE] [--no-auto-setup] [--logs DIR] [--state-dir DIR | --volatile] [--sd-image FILE | --no-sd] [--update-bootloader] [--usb] [--midi] [--trace-sd] [--smoke-scenario FILE] [--gdb-socket PATH] [--control-socket PATH] [--start-paused]"
                     );
                     std::process::exit(0);
                 }
@@ -291,7 +273,6 @@ impl Engine {
         let (qmp_parent, qmp_guest) = UnixStream::pair().map_err(|e| e.to_string())?;
         let (usb_host, usb_guest) = UnixStream::pair().map_err(|e| e.to_string())?;
         let (din_midi_host, din_midi_guest) = UnixStream::pair().map_err(|e| e.to_string())?;
-        let split = options.timing == Timing::Split;
         let (link_main, link_panel) = UnixStream::pair().map_err(|e| e.to_string())?;
         let (control_main, control_panel) = UnixStream::pair().map_err(|e| e.to_string())?;
         // Both the USB and DIN MIDI sockets are always inherited, like the
@@ -306,10 +287,8 @@ impl Engine {
             usb_guest.as_raw_fd(),
             din_midi_guest.as_raw_fd(),
         ];
-        if split {
-            fds.retain(|&fd| fd != panel_input_guest.as_raw_fd());
-            fds.extend([link_main.as_raw_fd(), control_main.as_raw_fd()]);
-        }
+        fds.retain(|&fd| fd != panel_input_guest.as_raw_fd());
+        fds.extend([link_main.as_raw_fd(), control_main.as_raw_fd()]);
         let audio_id = options
             .audio_device
             .as_deref()
@@ -320,7 +299,7 @@ impl Engine {
                     .ok_or("--audio-device must contain a nonempty id= field")
             })
             .transpose()?;
-        let machine_type = if split { "l6max-main" } else { "l6max-dual" };
+        let machine_type = "l6max-main";
         let machine = audio_id.map_or_else(
             || machine_type.to_owned(),
             |id| format!("{machine_type},audiodev={id}"),
@@ -333,15 +312,12 @@ impl Engine {
         if let Some(plugin) = env::var_os("L6_QEMU_PLUGIN") {
             command.arg("-plugin").arg(plugin);
         }
-        if split && model == l6fw::Model::L6 {
+        if model == l6fw::Model::L6 {
             // L6's full-rate audio fits 4 ns per instruction, and it cannot
             // hold real time during playback at 2 ns on one host thread.
             command.args(["-icount", "shift=2,align=on,sleep=on"]);
         } else {
             command.args(["-icount", MAIN_ICOUNT]);
-        }
-        if !split {
-            command.args(["-smp", "2"]);
         }
         command
             .arg("-kernel")
@@ -354,7 +330,7 @@ impl Engine {
                 "-monitor",
                 "none",
                 "-serial",
-                if split { "chardev:panel-link" } else { "none" },
+                "chardev:panel-link",
                 "-chardev",
             ])
             .arg(format!("socket,id=management,fd={}", qmp_guest.as_raw_fd()))
@@ -369,18 +345,12 @@ impl Engine {
             .current_dir(&logs)
             .env("L6_PANEL_FIRMWARE", firmware.join("secondary_firmware.bin"))
             .env_remove("L6_MODEL")
-            .env("L6_MAIN_INPUT_FD", main_input_guest.as_raw_fd().to_string())
-            .env(
-                "L6_PANEL_INPUT_FD",
-                panel_input_guest.as_raw_fd().to_string(),
-            )
             .env("L6_DISPLAY_FD", display_fd.to_string())
             .env_remove("L6_EXTERNAL_RAM_FD")
             .env(
                 "L6_SERVICE_AUDIO_QUEUE",
                 env::var("L6_SERVICE_AUDIO_QUEUE").unwrap_or_else(|_| "1".into()),
             )
-            .env_remove("L6_INPUT_FD")
             .env_remove("L6_BUTTON_CONTROL_FILE")
             .env_remove("L6_EXTERNAL_RAM_FILE")
             .env_remove("L6_PANEL_KEYS")
@@ -390,16 +360,14 @@ impl Engine {
             .stderr(Stdio::from(
                 File::create(logs.join("engine.stderr")).map_err(|e| e.to_string())?,
             ));
-        if split {
-            command
-                .args(["-chardev"])
-                .arg(format!(
-                    "socket,id=panel-link,fd={},server=off",
-                    link_main.as_raw_fd()
-                ))
-                .env("L6_INPUT_FD", main_input_guest.as_raw_fd().to_string())
-                .env("L6_PANEL_CONTROL_FD", control_main.as_raw_fd().to_string());
-        }
+        command
+            .args(["-chardev"])
+            .arg(format!(
+                "socket,id=panel-link,fd={},server=off",
+                link_main.as_raw_fd()
+            ))
+            .env("L6_INPUT_FD", main_input_guest.as_raw_fd().to_string())
+            .env("L6_PANEL_CONTROL_FD", control_main.as_raw_fd().to_string());
         if let Some(spec) = &options.audio_device {
             command.args(["-audiodev", spec]);
         }
@@ -462,89 +430,85 @@ impl Engine {
                 let detail = fs::read_to_string(logs.join("engine.stderr")).unwrap_or_default();
                 format!("QMP handshake:{e}; QEMU: {detail}")
             })?);
-        if split {
-            let (qmp_parent, qmp_guest) = UnixStream::pair().map_err(|e| e.to_string())?;
-            let fds = [
-                panel_input_guest.as_raw_fd(),
-                qmp_guest.as_raw_fd(),
-                link_panel.as_raw_fd(),
-                control_panel.as_raw_fd(),
-            ];
-            let mut panel = Command::new(&qemu);
-            panel
-                .args(["-M", "l6max-panel", "-accel", ACCELERATOR])
-                // The firmware times its LED PWM pulses in software, so ring
-                // brightness scales with this cost; 64 ns per instruction
-                // reaches the rings' measured full scale on both models.
-                .args(["-icount", "shift=6,sleep=off", "-kernel"])
-                .arg(firmware.join("secondary_firmware.bin"))
-                .args(["-S", "-no-shutdown", "-display", "none", "-monitor", "none"])
-                .args(["-serial", "chardev:panel-link", "-chardev"])
-                .arg(format!(
-                    "socket,id=panel-link,fd={},server=off",
-                    link_panel.as_raw_fd()
-                ))
-                .arg("-chardev")
-                .arg(format!("socket,id=management,fd={}", qmp_guest.as_raw_fd()))
-                .args([
-                    "-object",
-                    "monitor-qmp,id=management-monitor,chardev=management",
-                    "-d",
-                    "guest_errors,unimp",
-                    "-D",
-                ])
-                .arg(logs.join("engine-panel.trace"))
-                .current_dir(&logs)
-                .env_clear()
-                .env(
-                    "L6_MODEL",
-                    if model == l6fw::Model::L6 {
-                        "l6"
-                    } else {
-                        "l6max"
-                    },
-                )
-                .env("L6_PANEL_REALTIME", "1")
-                .env("L6_INPUT_FD", panel_input_guest.as_raw_fd().to_string())
-                .env("L6_PANEL_CONTROL_FD", control_panel.as_raw_fd().to_string())
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::from(
-                    File::create(logs.join("engine-panel.stderr")).map_err(|e| e.to_string())?,
-                ));
-            if let Some(directory) = &options.state_dir {
-                panel.env(
-                    "L6_STATE_DIR",
-                    directory.canonicalize().map_err(|e| e.to_string())?,
-                );
-            }
-            // Only the selected IPC descriptors survive exec.
-            unsafe {
-                panel.pre_exec(move || {
-                    for &fd in &fds {
-                        let flags = libc::fcntl(fd, libc::F_GETFD);
-                        if flags < 0
-                            || libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0
-                        {
-                            return Err(io::Error::last_os_error());
-                        }
-                    }
-                    Ok(())
-                });
-            }
-            engine.children.push(
-                panel
-                    .spawn()
-                    .map_err(|e| format!("start panel QEMU engine:{e}"))?,
+        let (qmp_parent, qmp_guest) = UnixStream::pair().map_err(|e| e.to_string())?;
+        let fds = [
+            panel_input_guest.as_raw_fd(),
+            qmp_guest.as_raw_fd(),
+            link_panel.as_raw_fd(),
+            control_panel.as_raw_fd(),
+        ];
+        let mut panel = Command::new(&qemu);
+        panel
+            .args(["-M", "l6max-panel", "-accel", ACCELERATOR])
+            // The firmware times its LED PWM pulses in software, so ring
+            // brightness scales with this cost; 64 ns per instruction
+            // reaches the rings' measured full scale on both models.
+            .args(["-icount", "shift=6,sleep=off", "-kernel"])
+            .arg(firmware.join("secondary_firmware.bin"))
+            .args(["-S", "-no-shutdown", "-display", "none", "-monitor", "none"])
+            .args(["-serial", "chardev:panel-link", "-chardev"])
+            .arg(format!(
+                "socket,id=panel-link,fd={},server=off",
+                link_panel.as_raw_fd()
+            ))
+            .arg("-chardev")
+            .arg(format!("socket,id=management,fd={}", qmp_guest.as_raw_fd()))
+            .args([
+                "-object",
+                "monitor-qmp,id=management-monitor,chardev=management",
+                "-d",
+                "guest_errors,unimp",
+                "-D",
+            ])
+            .arg(logs.join("engine-panel.trace"))
+            .current_dir(&logs)
+            .env_clear()
+            .env(
+                "L6_MODEL",
+                if model == l6fw::Model::L6 {
+                    "l6"
+                } else {
+                    "l6max"
+                },
+            )
+            .env("L6_PANEL_REALTIME", "1")
+            .env("L6_INPUT_FD", panel_input_guest.as_raw_fd().to_string())
+            .env("L6_PANEL_CONTROL_FD", control_panel.as_raw_fd().to_string())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::from(
+                File::create(logs.join("engine-panel.stderr")).map_err(|e| e.to_string())?,
+            ));
+        if let Some(directory) = &options.state_dir {
+            panel.env(
+                "L6_STATE_DIR",
+                directory.canonicalize().map_err(|e| e.to_string())?,
             );
-            engine
-                .management
-                .push(QmpClient::connect(qmp_parent).map_err(|e| {
-                    let detail =
-                        fs::read_to_string(logs.join("engine-panel.stderr")).unwrap_or_default();
-                    format!("panel QMP handshake:{e}; QEMU: {detail}")
-                })?);
         }
+        // Only the selected IPC descriptors survive exec.
+        unsafe {
+            panel.pre_exec(move || {
+                for &fd in &fds {
+                    let flags = libc::fcntl(fd, libc::F_GETFD);
+                    if flags < 0 || libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0 {
+                        return Err(io::Error::last_os_error());
+                    }
+                }
+                Ok(())
+            });
+        }
+        engine.children.push(
+            panel
+                .spawn()
+                .map_err(|e| format!("start panel QEMU engine:{e}"))?,
+        );
+        engine
+            .management
+            .push(QmpClient::connect(qmp_parent).map_err(|e| {
+                let detail =
+                    fs::read_to_string(logs.join("engine-panel.stderr")).unwrap_or_default();
+                format!("panel QMP handshake:{e}; QEMU: {detail}")
+            })?);
         if !engine.connected() {
             return Err("a firmware process exited during startup".into());
         }

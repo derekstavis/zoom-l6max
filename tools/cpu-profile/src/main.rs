@@ -137,11 +137,10 @@ fn run(arguments: impl IntoIterator<Item = OsString>) -> Result<(), String> {
     )
     .map_err(|e| e.to_string())?;
     println!(
-        "Warming up for {:.1}s, then measuring for {:.1}s at {:.0}ms samples; timing mode {:?}",
+        "Warming up for {:.1}s, then measuring for {:.1}s at {:.0}ms samples",
         profile.warmup.as_secs_f64(),
         profile.measure.as_secs_f64(),
         profile.sample_interval.as_secs_f64() * 1000.0,
-        options.timing
     );
     pump(&display, profile.warmup)?;
     let jit_before = engine.management[0]
