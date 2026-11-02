@@ -19,23 +19,18 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
+/// What the driver runs with: the configuration's firmware packages, and the QEMU
+/// and packaged app chosen for this run.
 struct Config {
-    version: u32,
-    /// The stock update package of each model.
-    #[serde(default)]
     firmware: BTreeMap<String, PathBuf>,
-    /// An external QEMU and its hash. Without them, the driver uses the repository's
-    /// own build and pins the hash it finds there for the run.
-    #[serde(default)]
     qemu: PathBuf,
-    #[serde(default)]
     qemu_sha256: String,
-    #[serde(default)]
-    legacy: BTreeMap<String, Legacy>,
-    #[serde(default)]
-    expected_failure: Vec<ExpectedFailure>,
+    app: Option<App>,
+}
+/// A packaged application, for the cases that test one.
+struct App {
+    executable: PathBuf,
+    qemu_sha256: String,
 }
 /// What one case runs from: the configured firmware and its scenario's declarations.
 #[derive(Clone)]
@@ -48,6 +43,7 @@ struct Fixture {
     state_spec: Option<PathBuf>,
     card_spec: Option<PathBuf>,
     audio_device: Option<String>,
+    audio_input: Vec<smoke_core::AudioInput>,
     gdb: bool,
 }
 static CANCELLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -80,10 +76,9 @@ struct Legacy {
     #[serde(default)]
     environment: BTreeMap<String, String>,
 }
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ExpectedFailure {
-    case: String,
     model: String,
     step: usize,
     contains: String,
@@ -98,6 +93,9 @@ struct Catalog {
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Case {
+    /// Known failures at an exact step and error. A pass becomes XPASS.
+    #[serde(default)]
+    expected_failure: Vec<ExpectedFailure>,
     id: String,
     suites: Vec<String>,
     models: Vec<String>,
@@ -132,6 +130,8 @@ struct Args {
     output: Option<PathBuf>,
     build: bool,
     jobs: usize,
+    qemu: Option<PathBuf>,
+    app: Option<PathBuf>,
 }
 /// Each guest runs one single-threaded TCG engine plus its scenario process.
 /// Leave headroom so concurrent guests keep up with real time.
@@ -143,7 +143,7 @@ fn parse_args() -> Result<Args, String> {
     let command = args.next().unwrap_or_else(|| "help".into());
     let mut result = Args {
         command,
-        config: PathBuf::from("smoke.local.toml"),
+        config: PathBuf::from(l6max_host::config::FILE_NAME),
         suite: "quick".into(),
         case: None,
         backend: "headless".into(),
@@ -151,6 +151,8 @@ fn parse_args() -> Result<Args, String> {
         output: None,
         build: true,
         jobs: default_jobs(),
+        qemu: None,
+        app: None,
     };
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -169,6 +171,14 @@ fn parse_args() -> Result<Args, String> {
                 ))
             }
             "--no-build" => result.build = false,
+            "--qemu" => {
+                result.qemu = Some(PathBuf::from(args.next().ok_or("--qemu needs a binary")?))
+            }
+            "--app" => {
+                result.app = Some(PathBuf::from(
+                    args.next().ok_or("--app needs a packaged application")?,
+                ))
+            }
             "--jobs" => {
                 result.jobs = args
                     .next()
@@ -334,63 +344,66 @@ fn case_fixture(
         state_spec: state.map(|name| spec("states", name)),
         card_spec: card.map(|name| spec("cards", name)),
         audio_device: scenario.and_then(|s| s.audio_device.clone()),
+        audio_input: scenario.map_or_else(Vec::new, |s| s.audio_input.clone()),
         gdb: scenario.is_some_and(|s| s.gdb),
     })
 }
 
-/// Use the configured QEMU, or the repository's own, building it if `build` is set
+/// Use the requested QEMU, or the repository's own, building it if `build` is set
 /// and it is missing or older than its sources.
-fn resolve_qemu(config: &mut Config, root: &Path, base: &Path, build: bool) -> Result<(), String> {
-    match (
-        config.qemu.as_os_str().is_empty(),
-        config.qemu_sha256.is_empty(),
-    ) {
-        (true, true) => {
-            let binary = qemu_build::default_binary(root);
-            if build && qemu_build::is_stale(root, &binary) {
-                qemu_build::build_locked(&qemu_build::Request {
-                    repository: root.to_owned(),
-                    source: None,
-                    minimal: false,
-                })?;
-            }
-            if !binary.is_file() {
-                return Err(format!(
-                    "{} is missing; run without --no-build or set qemu and qemu_sha256",
-                    binary.display()
-                ));
-            }
-            config.qemu_sha256 = hash(&binary)?;
-            config.qemu = binary;
-            Ok(())
-        }
-        (false, false) if config.qemu_sha256.len() == 64 => {
-            resolve(base, &mut config.qemu);
-            if hash(&config.qemu)? != config.qemu_sha256 {
-                return Err("QEMU binary does not match the configured SHA-256".into());
-            }
-            Ok(())
-        }
-        _ => Err("an external qemu needs a pinned 64-character qemu_sha256".into()),
+fn resolve_qemu(root: &Path, build: bool, requested: Option<&Path>) -> Result<PathBuf, String> {
+    if let Some(requested) = requested {
+        return fs::canonicalize(requested).map_err(|e| format!("{}: {e}", requested.display()));
     }
+    let binary = qemu_build::default_binary(root);
+    if build && qemu_build::is_stale(root, &binary) {
+        qemu_build::build_locked(&qemu_build::Request {
+            repository: root.to_owned(),
+            source: None,
+            minimal: false,
+        })?;
+    }
+    if !binary.is_file() {
+        return Err(format!(
+            "{} is missing; run without --no-build or pass --qemu",
+            binary.display()
+        ));
+    }
+    Ok(binary)
 }
 
-fn load_config(path: &Path, root: &Path, build: bool) -> Result<Config, String> {
-    let path = fs::canonicalize(path).map_err(|e| e.to_string())?;
-    let mut config: Config = toml::from_str(&fs::read_to_string(&path).map_err(|e| e.to_string())?)
-        .map_err(|e| e.to_string())?;
-    if config.version != 1 {
-        return Err("configuration requires version=1".into());
+/// Find the executable and QEMU inside a macOS `.app` or a Linux AppDir.
+fn resolve_app(path: &Path) -> Result<App, String> {
+    let (executable, qemu) = if path.join("Contents").is_dir() {
+        (
+            path.join("Contents/MacOS/l6max-gui"),
+            path.join("Contents/Resources/libexec/qemu-system-arm"),
+        )
+    } else {
+        (
+            path.join("usr/bin/l6max-gui"),
+            path.join("usr/share/l6max-emulator/libexec/qemu-system-arm"),
+        )
+    };
+    if !executable.is_file() || !qemu.is_file() {
+        return Err(format!("{} is not a packaged application", path.display()));
     }
-    let base = path.parent().unwrap();
-    resolve_qemu(&mut config, root, base, build)?;
-    for firmware in config.firmware.values_mut() {
-        resolve(base, firmware);
-    }
-    for (model, firmware) in &config.firmware {
-        if !["l6", "l6max"].contains(&model.as_str()) {
-            return Err(format!("unknown firmware model {model}"));
-        }
+    Ok(App {
+        executable: fs::canonicalize(executable).map_err(|e| e.to_string())?,
+        qemu_sha256: hash(&qemu)?,
+    })
+}
+
+fn load_config(
+    path: &Path,
+    root: &Path,
+    build: bool,
+    qemu: Option<&Path>,
+    app: Option<&Path>,
+) -> Result<Config, String> {
+    let path = fs::canonicalize(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let firmware = l6max_host::config::Config::load(&path)?.firmware;
+    for (model, firmware) in &firmware {
         if !firmware.is_file() {
             return Err(format!(
                 "firmware for {model} must be an update package: {}",
@@ -398,30 +411,13 @@ fn load_config(path: &Path, root: &Path, build: bool) -> Result<Config, String> 
             ));
         }
     }
-    for legacy in config.legacy.values_mut() {
-        if let Some(executable) = &mut legacy.executable {
-            resolve(base, executable);
-            if legacy
-                .executable_sha256
-                .as_deref()
-                .is_none_or(|sha| sha.len() != 64)
-                || hash(executable)? != legacy.executable_sha256.as_deref().unwrap()
-            {
-                return Err(format!(
-                    "configured legacy executable does not match its pinned SHA-256: {}",
-                    executable.display()
-                ));
-            }
-        } else if legacy.executable_sha256.is_some() {
-            return Err("legacy executable_sha256 requires executable".into());
-        }
-    }
-    for expected in &config.expected_failure {
-        if expected.reason.is_empty() || expected.contains.is_empty() || expected.step == 0 {
-            return Err("expected failures need an exact step, error substring and reason".into());
-        }
-    }
-    Ok(config)
+    let qemu = resolve_qemu(root, build, qemu)?;
+    Ok(Config {
+        firmware,
+        qemu_sha256: hash(&qemu)?,
+        qemu,
+        app: app.map(resolve_app).transpose()?,
+    })
 }
 fn fixture_options(
     config: &Config,
@@ -678,27 +674,8 @@ fn run_case(
                 return Err(format!("scenario does not support {backend} backend"));
             }
         }
-        if case.needs_configuration
-            && case.scenario.is_none()
-            && !config.legacy.contains_key(&case.id)
-        {
-            return Err(
-                "requires an explicit [legacy.\"case-id\"] entry; see the case catalog and testing guide"
-                    .into(),
-            );
-        }
-        if case.scenario.is_none()
-            && case.package.is_none()
-            && config
-                .legacy
-                .get(&case.id)
-                .and_then(|legacy| legacy.executable.as_ref())
-                .is_none()
-        {
-            return Err(format!(
-                "requires a hash-pinned executable in [legacy.\"{}\"]",
-                case.id
-            ));
+        if case.needs_configuration && case.scenario.is_none() && config.app.is_none() {
+            return Err("requires a packaged application; pass --app PATH".into());
         }
         if hash(&config.qemu)? != config.qemu_sha256 {
             return Err("QEMU changed since preflight".into());
@@ -763,9 +740,9 @@ fn run_case(
             serde_json::to_vec_pretty(&manifest).unwrap(),
         )
         .map_err(|e| e.to_string())?;
-        let local = config.legacy.get(&case.id);
-        let binary = if let Some(executable) = local.and_then(|legacy| legacy.executable.as_ref()) {
-            executable.clone()
+        let packaged = case.needs_configuration && case.scenario.is_none();
+        let binary = if let Some(app) = config.app.as_ref().filter(|_| packaged) {
+            app.executable.clone()
         } else {
             let name = if case.scenario.is_some() && backend == "headless" {
                 "l6test"
@@ -777,12 +754,6 @@ fn run_case(
             dir.parent().unwrap().join("bin").join(name)
         };
         let binary_sha256 = hash(&binary)?;
-        if local
-            .and_then(|legacy| legacy.executable_sha256.as_deref())
-            .is_some_and(|expected| expected != binary_sha256)
-        {
-            return Err("legacy executable changed since preflight".into());
-        }
         let mut command = Command::new(&binary);
         command.current_dir(root);
         for (key, _) in env::vars_os() {
@@ -806,12 +777,7 @@ fn run_case(
             "RUST_LOG",
             env::var("RUST_LOG").unwrap_or_else(|_| l6max_host::logging::DEFAULT_FILTER.into()),
         );
-        let arguments: Vec<String> = case
-            .arguments
-            .iter()
-            .chain(local.into_iter().flat_map(|s| s.arguments.iter()))
-            .map(|a| expand(a, &options))
-            .collect();
+        let arguments: Vec<String> = case.arguments.iter().map(|a| expand(a, &options)).collect();
         if arguments.iter().any(|a| a.contains('{')) {
             return Err("unresolved legacy argument placeholder; supply the required package/path explicitly".into());
         }
@@ -827,12 +793,34 @@ fn run_case(
             command.args(&arguments);
             command.args(engine_args(&options));
         }
-        for (key, value) in case
-            .environment
-            .iter()
-            .chain(local.into_iter().flat_map(|s| s.environment.iter()))
-        {
-            command.env(key, expand(value, &options));
+        if !selected_fixture.audio_input.is_empty() {
+            let directory = dir.join("audio-input");
+            for input in &selected_fixture.audio_input {
+                let bytes = input
+                    .content
+                    .bytes(catalog_dir)
+                    .map_err(|e| e.to_string())?;
+                l6max_host::audio_input::prepare_bytes(
+                    &directory,
+                    u32::from(input.channel),
+                    &bytes,
+                )
+                .map_err(|e| e.to_string())?;
+            }
+            command.env("L6_AUDIO_INPUT_DIR", directory);
+        }
+        for (key, value) in &case.environment {
+            let mut value = expand(value, &options);
+            if let Some(package) = config.firmware.get("l6") {
+                value = value.replace("{l6_package}", &package.display().to_string());
+            }
+            if let Some(app) = &config.app {
+                value = value.replace("{app_qemu_sha256}", &app.qemu_sha256);
+            }
+            if value.contains('{') {
+                return Err(format!("unresolved placeholder in {key}: {value}"));
+            }
+            command.env(key, value);
         }
         let invocation = json!({"binary":binary,"binary_sha256":hash(&binary)?,"arguments":command.get_args().map(|s|s.to_string_lossy().into_owned()).collect::<Vec<_>>(),"environment":command.get_envs().filter_map(|(k,v)|v.map(|v|(k.to_string_lossy().into_owned(),v.to_string_lossy().into_owned()))).collect::<BTreeMap<_,_>>()});
         fs::write(
@@ -870,7 +858,7 @@ fn run_case(
                     "child failed; inspect stdout.log and stderr.log"
                 })
                 .into();
-            apply_expected(&mut result, &scenario, config);
+            apply_expected(&mut result, &scenario, &case.expected_failure);
         }
         Err(error) => {
             result.detail = error;
@@ -887,12 +875,8 @@ fn run_case(
     result
 }
 
-fn apply_expected(result: &mut CaseResult, scenario: &Value, config: &Config) {
-    if let Some(expected) = config
-        .expected_failure
-        .iter()
-        .find(|e| e.case == result.case && e.model == result.model)
-    {
+fn apply_expected(result: &mut CaseResult, scenario: &Value, expected: &[ExpectedFailure]) {
+    if let Some(expected) = expected.iter().find(|e| e.model == result.model) {
         if result.outcome == "PASS" {
             result.outcome = "XPASS".into();
             result.detail = format!("unexpected pass: {}", expected.reason);
@@ -957,7 +941,7 @@ fn execute() -> Result<i32, String> {
     }
     if !["run", "check"].contains(&args.command.as_str()) {
         println!(
-            "Usage: cargo run -p l6test -- list | check | run [--config smoke.local.toml] [--suite NAME | --case ID] [--model l6|l6max|all] [--backend headless|gui|both] [--output NEW_DIR] [--no-build] [--jobs N]\n       cargo run -p l6test -- probe gui --keys TARGET,... --volatile [engine options]\n       cargo run -p l6test -- capture screen --out FILE.gif [capture options] --volatile [engine options]"
+            "Usage: cargo run -p l6test -- list | check | run [--config config.toml] [--suite NAME | --case ID] [--model l6|l6max|all] [--backend headless|gui|both] [--output NEW_DIR] [--no-build] [--jobs N] [--qemu BINARY] [--app PACKAGED_APP]\n       cargo run -p l6test -- probe gui --keys TARGET,... --volatile [engine options]\n       cargo run -p l6test -- capture screen --out FILE.gif [capture options] --volatile [engine options]"
         );
         return Ok(0);
     }
@@ -981,7 +965,13 @@ fn execute() -> Result<i32, String> {
     copy_tree(&catalog_dir, &output.join("spec"))?;
     let catalog_dir = output.join("spec");
     let preflight = || -> Result<(Config, Value), String> {
-        let config = load_config(&args.config, root, args.build)?;
+        let config = load_config(
+            &args.config,
+            root,
+            args.build,
+            args.qemu.as_deref(),
+            args.app.as_deref(),
+        )?;
         let _shared = l6max_host::shared_memory::SharedRam::new(2048).map_err(|e| {
             format!("shared memory unavailable: {e}; rerun with the required sandbox permissions")
         })?;
@@ -1042,9 +1032,7 @@ fn execute() -> Result<i32, String> {
     let mut packages = BTreeSet::new();
     for case in &cases {
         if case.blocked.is_some()
-            || case.needs_configuration
-                && case.scenario.is_none()
-                && !config.legacy.contains_key(&case.id)
+            || case.needs_configuration && case.scenario.is_none() && config.app.is_none()
         {
             continue;
         }
@@ -1415,6 +1403,7 @@ mod tests {
             state_spec: None,
             card_spec: None,
             audio_device: Some("driver=wav,id=l6-audio,path={logs}/audio.wav".into()),
+            audio_input: Vec::new(),
             gdb: true,
         };
         assert_eq!(
@@ -1423,6 +1412,7 @@ mod tests {
         );
         let default_fixture = Fixture {
             audio_device: None,
+            audio_input: Vec::new(),
             gdb: false,
             ..fixture
         };
@@ -1449,60 +1439,44 @@ mod tests {
         fs::remove_dir_all(dir).unwrap();
     }
     #[test]
-    fn an_external_qemu_needs_both_its_path_and_hash() {
+    fn firmware_must_be_a_package_and_fixtures_are_not_local() {
         let root = l6max_host::paths::repository_root();
         let dir = temp();
-        let config = dir.join("fixtures.toml");
-        fs::write(&config, "version=1\nqemu='qemu'\n").unwrap();
-        assert!(
-            load_config(&config, &root, false)
-                .err()
-                .unwrap()
-                .contains("qemu_sha256")
-        );
-        fs::write(
-            &config,
-            format!("version=1\nqemu_sha256='{}'\n", "0".repeat(64)),
-        )
-        .unwrap();
-        assert!(
-            load_config(&config, &root, false)
-                .err()
-                .unwrap()
-                .contains("qemu_sha256")
-        );
+        let qemu = dir.join("qemu");
+        fs::write(&qemu, b"qemu").unwrap();
+        fs::write(dir.join("L6max.bin"), b"").unwrap();
+        fs::create_dir(dir.join("unpacked")).unwrap();
+        let config = dir.join("local.toml");
+        let write = |body: &str| fs::write(&config, format!("version=1\n{body}")).unwrap();
+        let load = || load_config(&config, &root, false, Some(&qemu), None);
+        write("[firmware]\nl6max='L6max.bin'\n");
+        assert!(load().is_ok());
+        write("[firmware]\nl6max='L6max.bin'\n[emulator.l6max.input_patch]\n1='/missing.wav'\n");
+        assert!(load().is_ok(), "the driver ignores input patches");
+        write("[firmware]\nl6max='unpacked'\n");
+        assert!(load().err().unwrap().contains("update package"));
+        write("[firmware]\nother='L6max.bin'\n");
+        assert!(load().err().unwrap().contains("unknown model"));
+        write("[[fixture]]\nname='prepared'\nmodel='l6max'\n");
+        assert!(load().is_err());
         fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
-    fn firmware_must_be_a_package_and_fixtures_are_not_local() {
-        let root = l6max_host::paths::repository_root();
+    fn a_packaged_app_needs_its_executable_and_qemu() {
         let dir = temp();
-        fs::write(dir.join("qemu"), b"qemu").unwrap();
-        fs::write(dir.join("L6max.bin"), b"").unwrap();
-        fs::create_dir(dir.join("unpacked")).unwrap();
-        let hash = format!("{:x}", Sha256::digest(b"qemu"));
-        let header = format!("version=1\nqemu='qemu'\nqemu_sha256='{hash}'\n");
-        let config = dir.join("local.toml");
-        let write = |body: &str| fs::write(&config, format!("{header}{body}")).unwrap();
-        write("[firmware]\nl6max='L6max.bin'\n");
-        assert!(load_config(&config, &root, false).is_ok());
-        write("[firmware]\nl6max='unpacked'\n");
-        assert!(
-            load_config(&config, &root, false)
-                .err()
-                .unwrap()
-                .contains("update package")
-        );
-        write("[firmware]\nother='L6max.bin'\n");
-        assert!(
-            load_config(&config, &root, false)
-                .err()
-                .unwrap()
-                .contains("unknown firmware")
-        );
-        write("[[fixture]]\nname='prepared'\nmodel='l6max'\n");
-        assert!(load_config(&config, &root, false).is_err());
+        assert!(resolve_app(&dir).is_err());
+        fs::create_dir_all(dir.join("Contents/MacOS")).unwrap();
+        fs::create_dir_all(dir.join("Contents/Resources/libexec")).unwrap();
+        fs::write(dir.join("Contents/MacOS/l6max-gui"), b"gui").unwrap();
+        fs::write(
+            dir.join("Contents/Resources/libexec/qemu-system-arm"),
+            b"qemu",
+        )
+        .unwrap();
+        let app = resolve_app(&dir).unwrap();
+        assert!(app.executable.ends_with("Contents/MacOS/l6max-gui"));
+        assert_eq!(app.qemu_sha256, format!("{:x}", Sha256::digest(b"qemu")));
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -1511,12 +1485,10 @@ mod tests {
         let root = l6max_host::paths::repository_root();
         let catalog = root.join("tests/smoke");
         let config = Config {
-            version: 1,
             firmware: BTreeMap::from([("l6max".to_string(), PathBuf::from("L6max.bin"))]),
             qemu: PathBuf::new(),
             qemu_sha256: String::new(),
-            legacy: BTreeMap::new(),
-            expected_failure: vec![],
+            app: None,
         };
         let scenario = Scenario::load(&catalog.join("scenarios/host-midi-sync.toml")).unwrap();
         let fixture = case_fixture(
@@ -1549,12 +1521,10 @@ mod tests {
             let scenario = Scenario::load(&path).unwrap();
             for model in &scenario.models {
                 let fixture = Config {
-                    version: 1,
                     firmware: BTreeMap::from([(model.clone(), PathBuf::from("firmware.bin"))]),
                     qemu: PathBuf::new(),
                     qemu_sha256: String::new(),
-                    legacy: BTreeMap::new(),
-                    expected_failure: vec![],
+                    app: None,
                 };
                 let fixture = case_fixture(
                     &fixture,
@@ -1597,63 +1567,13 @@ mod tests {
         fs::remove_dir_all(dir).unwrap();
     }
     #[test]
-    fn wrong_binary_hash_is_blocked_before_any_guest_execution() {
-        let dir = temp();
-        fs::write(dir.join("qemu"), b"wrong binary").unwrap();
-        fs::write(
-            dir.join("fixtures.toml"),
-            format!("version=1\nqemu='qemu'\nqemu_sha256='{}'\n", "0".repeat(64)),
-        )
-        .unwrap();
-        assert!(
-            load_config(&dir.join("fixtures.toml"), &dir, false)
-                .err()
-                .unwrap()
-                .contains("SHA-256")
-        );
-        fs::remove_dir_all(dir).unwrap();
-    }
-    #[test]
-    fn external_legacy_executable_must_be_hash_pinned_and_resolves_from_config() {
-        let dir = temp();
-        fs::write(dir.join("qemu"), b"qemu").unwrap();
-        fs::write(dir.join("bundle-gui"), b"gui executable").unwrap();
-        let executable_hash = format!("{:x}", Sha256::digest(b"gui executable"));
-        fs::write(
-            dir.join("fixtures.toml"),
-            format!(
-                "version=1\nqemu='qemu'\nqemu_sha256='{}'\n[legacy.\"gui-menu\"]\nexecutable='bundle-gui'\nexecutable_sha256='{}'\n",
-                format!("{:x}", Sha256::digest(b"qemu")),
-                executable_hash
-            ),
-        )
-        .unwrap();
-        let config = load_config(&dir.join("fixtures.toml"), &dir, false).unwrap();
-        let legacy = &config.legacy["gui-menu"];
-        assert_eq!(
-            legacy.executable.as_deref(),
-            Some(fs::canonicalize(dir.join("bundle-gui")).unwrap().as_path())
-        );
-        assert_eq!(
-            legacy.executable_sha256.as_deref(),
-            Some(executable_hash.as_str())
-        );
-
-        fs::write(
-            dir.join("fixtures.toml"),
-            format!(
-                "version=1\nqemu='qemu'\nqemu_sha256='{}'\n[legacy.\"gui-menu\"]\nexecutable='bundle-gui'\nexecutable_sha256='{}'\n",
-                format!("{:x}", Sha256::digest(b"qemu")),
-                "0".repeat(64)
-            ),
-        )
-        .unwrap();
-        assert!(load_config(&dir.join("fixtures.toml"), &dir, false).is_err());
-        fs::remove_dir_all(dir).unwrap();
-    }
-    #[test]
     fn expected_failures_match_the_exact_step_and_error_and_expose_unexpected_passes() {
-        let config:Config=toml::from_str("version=1\nqemu='unused'\nqemu_sha256='unused'\n[[expected_failure]]\ncase='controls'\nmodel='l6'\nstep=10\ncontains='ExpectRing'\nreason='tracked issue'\n").unwrap();
+        let failures = [ExpectedFailure {
+            model: "l6".into(),
+            step: 10,
+            contains: "ExpectRing".into(),
+            reason: "Link to the tracked investigation".into(),
+        }];
         for (step, detail, initial, expected) in [
             (10, "ExpectRing timed out", "FAIL", "XFAIL"),
             (9, "ExpectRing timed out", "FAIL", "FAIL"),
@@ -1668,7 +1588,7 @@ mod tests {
                 detail: detail.into(),
                 artifacts: PathBuf::new(),
             };
-            apply_expected(&mut result, &json!({"failed_step":step}), &config);
+            apply_expected(&mut result, &json!({"failed_step":step}), &failures);
             assert_eq!(result.outcome, expected);
         }
     }

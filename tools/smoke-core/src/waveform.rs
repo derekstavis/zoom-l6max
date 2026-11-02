@@ -91,6 +91,21 @@ fn fit(source: &[[f64; 2]], capture: &[[f64; 2]]) -> ([f64; 2], f64) {
 }
 
 /// Locate the complete source in the capture and report how closely it fits.
+/// The level in dB relative to full scale of a tone in each channel.
+pub fn tone_levels_db(frames: &[[f64; 2]], hz: f64, rate: f64) -> [f64; 2] {
+    [0, 1].map(|channel| {
+        let step = std::f64::consts::TAU * hz / rate;
+        let (mut real, mut imaginary) = (0., 0.);
+        for (index, frame) in frames.iter().enumerate() {
+            let phase = step * index as f64;
+            real += frame[channel] * phase.cos();
+            imaginary += frame[channel] * phase.sin();
+        }
+        let amplitude = 2. * real.hypot(imaginary) / frames.len() as f64;
+        20. * amplitude.max(1e-10).log10()
+    })
+}
+
 pub fn compare(source: &[[f64; 2]], capture: &[[f64; 2]]) -> Result<Value, String> {
     const SEARCH: isize = 64;
     // Idle output can carry low-level firmware dither, so find the signal
@@ -161,6 +176,20 @@ mod tests {
         compare(source, capture).unwrap()["residual_db"]
             .as_f64()
             .unwrap()
+    }
+
+    #[test]
+    fn tone_levels_measure_each_channel() {
+        let frames: Vec<[f64; 2]> = (0..48000)
+            .map(|n| {
+                let phase = std::f64::consts::TAU * 1000. * n as f64 / 48000.;
+                [0.5 * phase.sin(), 0.]
+            })
+            .collect();
+        let [left, right] = tone_levels_db(&frames, 1000., 48000.);
+        assert!((left + 6.02).abs() < 0.01, "{left}");
+        assert!(right < -150., "{right}");
+        assert!(tone_levels_db(&frames, 2000., 48000.)[0] < -100.);
     }
 
     #[test]

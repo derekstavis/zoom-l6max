@@ -106,11 +106,11 @@ distributions (`sudo usermod -aG audio "$USER"`, then log in again).
 
 ```sh
 cargo run -p l6patch -- unpacked firmware-knob-midi-v113 --patch knob-dialog --patch midi-sync
-cargo run --offline --locked -p l6test -- run --case knob-dialog --model l6max --config smoke.local.toml
+cargo run --offline --locked -p l6test -- run --case knob-dialog --model l6max --config config.toml
 ```
 
 These cases use the QEMU binary and patched firmware pinned in
-`smoke.local.toml`. The direct USB case runs without the host MIDI service; the
+`config.toml`. The direct USB case runs without the host MIDI service; the
 native case exercises ALSA and checks the model's configured MIDI-sync reply
 map.
 

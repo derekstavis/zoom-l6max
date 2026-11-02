@@ -52,10 +52,10 @@ firmware Power hold or create an update marker.
 ## Validation
 
 ```sh
-# Run from the repository root with smoke.local.toml configured.
-cargo run --offline --locked -p l6test -- run --config smoke.local.toml \
+# Run from the repository root with config.toml configured.
+cargo run --offline --locked -p l6test -- run --config config.toml \
   --case power --backend headless --output /tmp/power-headless
-cargo run --offline --locked -p l6test -- run --config smoke.local.toml \
+cargo run --offline --locked -p l6test -- run --config config.toml \
   --case gui-power --backend gui --output /tmp/power-gui
 ```
 

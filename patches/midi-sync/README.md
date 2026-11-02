@@ -152,11 +152,11 @@ numbers this yields.
 cargo test -p l6patch
 python3 -m pip install unicorn
 python3 patches/midi-sync/tests/cpu_sim.py firmware-midi-sync-v113/main_firmware.bin
-cargo run -p l6test -- run --config smoke.local.toml --case host-midi-sync --model l6max
-cargo run -p l6test -- run --config smoke.local.toml --case l6max-direct-midi-sync --model l6max
+cargo run -p l6test -- run --config config.toml --case host-midi-sync --model l6max
+cargo run -p l6test -- run --config config.toml --case l6max-direct-midi-sync --model l6max
 python3 patches/midi-sync/tests/cpu_sim_l6.py firmware-midi-sync-l6/main_firmware.bin
-cargo run -p l6test -- run --config smoke.local.toml --case l6-midi-sync --model l6
-cargo run -p l6test -- run --config smoke.local.toml --case l6-direct-midi-sync --model l6
+cargo run -p l6test -- run --config config.toml --case l6-midi-sync --model l6
+cargo run -p l6test -- run --config config.toml --case l6-direct-midi-sync --model l6
 ```
 
 Configure the model's `prepared` fixture with its stock package and

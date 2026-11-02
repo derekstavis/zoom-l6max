@@ -24,6 +24,16 @@ pub struct Options {
     pub qemu: Option<PathBuf>,
     /// Optional QEMU `-audiodev` specification, including its `id=` field.
     pub audio_device: Option<String>,
+    /// Prepared audio for the input channels. See [`crate::audio_input`].
+    pub audio_input_dir: Option<PathBuf>,
+    /// The local configuration, whose input patch the engine applies at start.
+    pub config: Option<crate::config::Config>,
+    /// The caller applies the input patch itself, without delaying the start.
+    pub defer_input_patch: bool,
+    /// Where the GUI saves its selections.
+    pub config_path: Option<PathBuf>,
+    /// Which configured firmware to run; L6max when both are configured.
+    pub model: Option<l6fw::Model>,
     pub firmware_dir: PathBuf,
     /// An L6 or L6max update package. When `firmware_dir` has no unpacked
     /// images, this (or a package found by [`Options::prepare`]) is unpacked.
@@ -92,6 +102,64 @@ fn take_path(args: &mut impl Iterator<Item = OsString>, flag: &str) -> Result<Pa
 }
 
 impl Options {
+    /// Where the engine keeps prepared input audio. It stays with the device's
+    /// state, so assignments survive restarts.
+    pub fn audio_input_directory(&self) -> PathBuf {
+        self.audio_input_dir.clone().unwrap_or_else(|| {
+            self.state_dir
+                .as_ref()
+                .unwrap_or(&self.logs)
+                .join("audio-input")
+        })
+    }
+
+    /// Runs that manage their own inputs, such as tests and packaged apps, turn
+    /// off auto setup and never read the working directory's configuration.
+    fn apply_config(
+        &mut self,
+        file: Option<PathBuf>,
+        workspace: &std::path::Path,
+    ) -> Result<(), String> {
+        let file = match file {
+            Some(file) => file,
+            None if self.auto_setup => env::current_dir()
+                .map_err(|e| e.to_string())?
+                .join(crate::config::FILE_NAME),
+            None => return Ok(()),
+        };
+        self.config_path = Some(file.clone());
+        if !file.is_file() {
+            return Ok(());
+        }
+        let config = crate::config::Config::load(&file)?;
+        let default_directory = workspace.join("unpacked");
+        if self.firmware_package.is_none() && self.firmware_dir == default_directory {
+            let package = match self.model.or(config.selected_model()) {
+                Some(model) => config.firmware(model),
+                None => config
+                    .firmware(l6fw::Model::L6max)
+                    .or(config.firmware(l6fw::Model::L6)),
+            };
+            if let Some(package) = package {
+                self.firmware_dir = crate::setup::unpack_cached(
+                    package,
+                    &workspace.join("emulator/state/firmware"),
+                )?;
+                self.firmware_package = Some(package.clone());
+            }
+        }
+        self.config = Some(config);
+        Ok(())
+    }
+
+    /// Reread the configuration after saving a change to it.
+    pub fn reload_config(&mut self) -> Result<(), String> {
+        if let Some(file) = &self.config_path {
+            self.config = Some(crate::config::Config::load(file)?);
+        }
+        Ok(())
+    }
+
     pub fn parse() -> Result<Self, String> {
         Self::parse_args(env::args_os().skip(1))
     }
@@ -100,6 +168,11 @@ impl Options {
         let mut options = Self {
             qemu: env::var_os("L6_QEMU").map(PathBuf::from),
             audio_device: env::var("L6_AUDIODEV").ok(),
+            audio_input_dir: env::var_os("L6_AUDIO_INPUT_DIR").map(PathBuf::from),
+            config: None,
+            defer_input_patch: false,
+            config_path: None,
+            model: None,
             firmware_dir: workspace.join("unpacked"),
             firmware_package: env::var_os("L6_FIRMWARE").map(PathBuf::from),
             update_package: None,
@@ -118,9 +191,15 @@ impl Options {
             control_socket: None,
             start_paused: false,
         };
+        let mut config_file = None;
         let mut args = arguments.into_iter();
         while let Some(arg) = args.next() {
             match arg.to_string_lossy().as_ref() {
+                "--config" => config_file = Some(take_path(&mut args, "--config")?),
+                "--model" => {
+                    let name = args.next().ok_or("--model requires l6 or l6max")?;
+                    options.model = Some(crate::config::parse_model(&name.to_string_lossy())?);
+                }
                 "--ui-input-smoke" => {
                     return Err("the standalone UI smoke was migrated; run `cargo run -p l6test -- run --case panel --model MODEL --backend gui` instead".into());
                 }
@@ -160,7 +239,7 @@ impl Options {
                 "--volatile" => options.state_dir = None,
                 "--help" | "-h" => {
                     println!(
-                        "Engine options: [QEMU] [--qemu PATH] [--audio-device 'driver=...,id=...'] [--firmware-dir DIR | --firmware-package PACKAGE] [--update-package PACKAGE] [--no-auto-setup] [--logs DIR] [--state-dir DIR | --volatile] [--sd-image FILE | --no-sd] [--update-bootloader] [--usb] [--midi] [--trace-sd] [--smoke-scenario FILE] [--gdb-socket PATH] [--control-socket PATH] [--start-paused]"
+                        "Engine options: [QEMU] [--qemu PATH] [--audio-device 'driver=...,id=...'] [--config FILE] [--model l6|l6max] [--firmware-dir DIR | --firmware-package PACKAGE] [--update-package PACKAGE] [--no-auto-setup] [--logs DIR] [--state-dir DIR | --volatile] [--sd-image FILE | --no-sd] [--update-bootloader] [--usb] [--midi] [--trace-sd] [--smoke-scenario FILE] [--gdb-socket PATH] [--control-socket PATH] [--start-paused]"
                     );
                     std::process::exit(0);
                 }
@@ -173,6 +252,7 @@ impl Options {
             return Err("--no-sd conflicts with --sd-image".into());
         }
         options.qemu = options.qemu.or_else(crate::setup::existing_qemu);
+        options.apply_config(config_file, &workspace)?;
         Ok(options)
     }
 }
@@ -253,6 +333,17 @@ impl Engine {
             None => l6fw::model_from_main(&main)?,
         };
         engine.model = model;
+        if let Some(config) = options
+            .config
+            .as_ref()
+            .filter(|_| !options.defer_input_patch)
+        {
+            crate::audio_input::apply_patch(
+                &options.audio_input_directory(),
+                crate::controls::audio_input_channels(model),
+                &config.input_patch(model)?.unwrap_or_default(),
+            )?;
+        }
         if options.update_bootloader {
             let state = options
                 .state_dir
@@ -368,6 +459,7 @@ impl Engine {
             ))
             .env("L6_INPUT_FD", main_input_guest.as_raw_fd().to_string())
             .env("L6_PANEL_CONTROL_FD", control_main.as_raw_fd().to_string());
+        command.env("L6_AUDIO_INPUT_DIR", options.audio_input_directory());
         if let Some(spec) = &options.audio_device {
             command.args(["-audiodev", spec]);
         }

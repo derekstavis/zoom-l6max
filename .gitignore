@@ -52,3 +52,4 @@ target/
 
 # Local firmware/state fixture configuration.
 /smoke.local.toml
+/config.toml

@@ -91,9 +91,9 @@ treated identically whether or not `midi-sync` is present.
 
 ```sh
 cargo run -p l6patch -- unpacked firmware-din-mixer-control-v113 --patch din-mixer-control
-cargo run --offline --locked -p l6test -- run --config smoke.local.toml \
+cargo run --offline --locked -p l6test -- run --config config.toml \
   --case l6max-din-mixer-control-patched --model l6max
-cargo run --offline --locked -p l6test -- run --config smoke.local.toml \
+cargo run --offline --locked -p l6test -- run --config config.toml \
   --case l6max-din-mixer-control --model l6max
 ```
 

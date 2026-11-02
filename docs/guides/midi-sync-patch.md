@@ -59,7 +59,7 @@ cargo run -p l6patch -- unpacked firmware-knob-midi-v113 --patch knob-dialog --p
 cargo run -p l6fw -- unpack /path/to/L6.BIN unpacked-l6
 cargo run -p l6patch -- unpacked-l6 firmware-midi-sync-l6-v113 --patch midi-sync
 python3 patches/midi-sync/tests/cpu_sim_l6.py firmware-midi-sync-l6-v113/main_firmware.bin
-cargo run --offline --locked -p l6test -- run --config smoke.local.toml \
+cargo run --offline --locked -p l6test -- run --config config.toml \
   --case l6-midi-sync --model l6
 ```
 
@@ -79,11 +79,11 @@ cargo test -p l6patch
 python3 -m pip install unicorn
 python3 patches/midi-sync/tests/cpu_sim.py firmware-midi-sync-v113/main_firmware.bin
 python3 patches/midi-sync/tests/cpu_sim_l6.py firmware-midi-sync-l6-v113/main_firmware.bin
-cargo run --offline --locked -p l6test -- run --config smoke.local.toml \
+cargo run --offline --locked -p l6test -- run --config config.toml \
   --case l6-midi-sync --model l6
-cargo run --offline --locked -p l6test -- run --config smoke.local.toml \
+cargo run --offline --locked -p l6test -- run --config config.toml \
   --case l6-direct-midi-sync --model l6
-cargo run --offline --locked -p l6test -- run --config smoke.local.toml \
+cargo run --offline --locked -p l6test -- run --config config.toml \
   --case l6max-direct-midi-sync --model l6max
 ```
 

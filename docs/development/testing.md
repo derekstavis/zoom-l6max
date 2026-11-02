@@ -7,9 +7,9 @@ This guide covers executable checks for the emulator and its tools.
 
 ```sh
 cargo run --offline --locked -p l6test -- list
-cp tests/smoke/fixtures.example.toml smoke.local.toml
-# Edit smoke.local.toml: set the paths to your stock L6 and L6max update packages.
-cargo run --offline --locked -p l6test -- check --config smoke.local.toml
+cp config.example.toml config.toml
+# Edit config.toml: set the paths to your stock L6 and L6max update packages.
+cargo run --offline --locked -p l6test -- check --config config.toml
 cargo run --offline --locked -p l6test -- run --suite quick --backend both
 ```
 
@@ -29,6 +29,7 @@ Each scenario declares what it runs from, so the local file only supplies firmwa
 | `update_patches` | Build the case's update package from the model's package, per model, for example `{ l6 = ["midi-sync"] }`. |
 | `gdb` | Enable the case's debugger socket. |
 | `audio_device` | QEMU audio-device syntax, with `{logs}` as the case's log directory. |
+| `audio_input` | Audio assigned to input channels; see [audio input](../emulator/audio.md#input). |
 
 A state spec seeds MAIN NOR from the case's firmware and commits the declared settings
 with the firmware's bank protocol. It also writes the declared panel RTC calendar and,
@@ -47,16 +48,18 @@ under the case artifact directory, and their hashes are recorded in `inputs.json
 
 ## Local configuration and catalog TOML
 
-`smoke.local.toml` is private machine configuration; the example is
-[`tests/smoke/fixtures.example.toml`](../../tests/smoke/fixtures.example.toml).
-It has these top-level blocks:
+`config.toml` is private machine configuration, shared with the emulator; the example is
+[`config.example.toml`](../../config.example.toml). The driver reads only its `[firmware]`
+table, with the stock update package of each model. Cases for a model without one are
+BLOCKED. Input audio, the SD card and device state come from each case's scenario.
 
-| Block | Fields | Purpose |
-| --- | --- | --- |
-| top level | `version = 1`; optional `qemu`, `qemu_sha256` | Without these, the driver uses the repository's QEMU, building it unless `--no-build` is given, and pins the hash it finds for the run. Set both to test an external binary, whose SHA-256 must match before any run. |
-| `[firmware]` | `l6`, `l6max` | The stock update package for each model. Cases for a model without one are BLOCKED. |
-| `[legacy."CASE-ID"]` | optional `executable`, `executable_sha256`, `arguments`, `environment` | Configure a legacy executable required by a catalog case. An executable requires a matching hash. `arguments` and environment values support `{firmware_dir}`, `{logs}`, `{qemu}`, and `{package}` substitutions. |
-| `[[expected_failure]]` | `case`, `model`, `step`, `contains`, `reason` | Match a known failure only at the exact scenario step and when its error contains the specified text. A matching failure is XFAIL; an unexpected pass is XPASS. |
+Options choose what a run tests, without editing files:
+
+| Option | Purpose |
+| --- | --- |
+| `--config FILE` | Use another configuration instead of `config.toml` in the working directory. |
+| `--qemu BINARY` | Test another QEMU. Without it, the driver uses the repository's, building it unless `--no-build` is given. The report records the hash of the binary used, and a run fails if it changes. |
+| `--app PATH` | The macOS `.app` or Linux AppDir for the packaged application cases. Without it, those cases are BLOCKED. |
 
 Card spec details:
 
@@ -68,7 +71,7 @@ Card spec details:
   optional `mode` (`one-shot`, `loop`, or `hold`; default `one-shot`), and optional
   `level` (0–59; default 49).
   Each `[[file]]` has a `path` from the card root, with parent directories created as
-  needed, and one source: `tone` (`hz`, `seconds`, `amplitude`), `sweep` (`low_hz`,
+  needed, and one source: `tone` (`hz`, `seconds`, `amplitude`), `loop-tone` (`hz`, `seconds`, `amplitude`; no fade, so it loops cleanly when each loop holds whole cycles), `sweep` (`low_hz`,
   `high_hz`, `seconds`, `amplitude`), `levels` (`hz` and `steps`, each with `seconds`,
   `left`, and `right`), `copy` (a host path relative to the spec), or `text`. Generated
   audio is 48 kHz stereo 32-bit float. On L6max, each `[[project]]` (`name`, `hz`,
@@ -101,10 +104,11 @@ Its top-level `version` is `1`; every `[[case]]` has:
 | `scenario` | one of `scenario`, `package`, or configured legacy executable | Path under `tests/smoke` to a scenario TOML file. |
 | `package` | optional | Named GUI package operation for built-in app/package cases. |
 | `arguments`, `environment` | optional | Arguments and environment for a package or legacy executable. |
-| `needs_configuration` | optional, default `false` | Keep the case BLOCKED until its local executable/configuration prerequisite is supplied. |
+| `needs_configuration` | optional, default `false` | Without a scenario, run the case from the packaged application, and keep it BLOCKED without `--app`. |
 | `gui` | optional, default `false` | Mark a GUI-only catalog case. |
 | `volatile` | optional, default `false` | Discard persistent-state templates for this case and run without persistent state, unless the scenario declares a `state`, which is rebuilt for the case. |
 | `no_sd` | optional, default `false` | Do not attach the scenario's SD card. |
+| `expected_failure` | optional | Array of tables with `model`, `step`, `contains` and `reason`. Match a known failure only at the exact scenario step and when its error contains the specified text. A matching failure is XFAIL; an unexpected pass is XPASS. |
 | `blocked` | optional | Human-readable reason to report this case as BLOCKED. |
 | `wall_timeout_s` | optional, default `900` | Per-case host wall limit. |
 
@@ -196,7 +200,7 @@ incrementally. Exit 0 means PASS or explicitly matched XFAIL, 1 means FAIL or
 XPASS, and 2 means BLOCKED. Read the outcome rather than inferring a clean pass
 from exit 0. Keep a baseline with XFAIL labeled as incomplete.
 
-Expected failures are optional local configuration entries matching an exact
+Expected failures are optional catalog entries on a case, matching an exact
 case/model/step and error substring, with a reason. A different failure remains
 FAIL; an unexpected pass becomes XPASS and requires review. No current device
 failure is hidden by a checked-in expected-failure rule.
@@ -214,15 +218,13 @@ and time limits. WASM patch parity runs as a typed host-side driver operation.
 The focused panel cases compose reusable fragments rather
 than copying setup or asserting results separately.
 
-Packaged application tests use the same supervisor and report format. Configure
-`[legacy."gui-bundle"]` and `[legacy."gui-menu"]` in `smoke.local.toml` with the
-packaged GUI executable and its SHA-256, each test's isolated `L6_APP_DATA`, and
-the bundled QEMU SHA-256. `tests/smoke/fixtures.example.toml` contains the environment
-variables and firmware paths for both cases. Run them on macOS with:
+Packaged application tests use the same supervisor and report format. Pass the packaged
+application with `--app`; the catalog gives each test an isolated `L6_APP_DATA`, and the
+driver checks the QEMU inside it. Run them on macOS with:
 
 ```sh
-cargo run --offline --locked -p l6test -- run --case gui-bundle --model l6max --backend gui
-cargo run --offline --locked -p l6test -- run --case gui-menu --model l6max --backend gui
+cargo run --offline --locked -p l6test -- run --case gui-bundle --model l6max --backend gui --app "/path/to/L6max Emulator.app"
+cargo run --offline --locked -p l6test -- run --case gui-menu --model l6max --backend gui --app "/path/to/L6max Emulator.app"
 ```
 
 `gui-bundle` imports L6 then L6max firmware and checks isolated persisted state;

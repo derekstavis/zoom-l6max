@@ -149,7 +149,7 @@ calendar. Persisted settings also avoid repeating Battery Type setup.
 From the repository root, use a fresh state directory:
 
 ```sh
-cargo run --offline --locked -p l6test -- run --case persistence --model l6max --config smoke.local.toml
+cargo run --offline --locked -p l6test -- run --case persistence --model l6max --config config.toml
 ```
 
 The harness uses GPIO inputs to edit all five date/time fields, closes QEMU,

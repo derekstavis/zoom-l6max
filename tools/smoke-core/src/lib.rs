@@ -8,7 +8,8 @@ mod trace;
 mod waveform;
 pub use runner::{Progress, Runner};
 pub use scenario::{
-    Action, Gesture, STATE_SPEC_ENV, Scenario, Step, control_target, is_switch, model_name,
+    Action, AudioInput, Gesture, STATE_SPEC_ENV, Scenario, Step, control_target, is_switch,
+    model_name,
 };
 use serde::Serialize;
 pub use session::{Command, Session, run};

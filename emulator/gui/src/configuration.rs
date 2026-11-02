@@ -63,54 +63,37 @@ fn default_card_path(state: &Path, model: l6fw::Model) -> PathBuf {
     }
 }
 
-fn model_state_path(state: &Path, model: l6fw::Model) -> PathBuf {
-    let model_name = match model {
-        l6fw::Model::L6 => "l6",
-        l6fw::Model::L6max => "l6max",
-    };
-    state.join("models").join(model_name)
+/// The configured card, or one a previous version saved beside the device state,
+/// which moves to the configuration.
+fn saved_card(
+    options: &mut Options,
+    state: &Path,
+    model: l6fw::Model,
+) -> io::Result<Option<PathBuf>> {
+    if let Some(card) = options
+        .config
+        .as_ref()
+        .and_then(|config| config.sd_card(model))
+    {
+        return Ok(Some(card.clone()).filter(|card| card.is_file()));
+    }
+    let selection = state.join("sd-card-selection.txt");
+    if !selection.is_file() {
+        return Ok(None);
+    }
+    let card = PathBuf::from(fs::read_to_string(&selection)?);
+    if !card.is_file() {
+        return Ok(None);
+    }
+    if let Some(path) = options.config_path.clone() {
+        l6max_host::config::save_sd_card(&path, model, &card)
+            .and_then(|()| options.reload_config())
+            .map_err(io::Error::other)?;
+        fs::remove_file(selection)?;
+    }
+    Ok(Some(card))
 }
 
-/// Keep an existing legacy state with its installed MAIN image. If the
-/// selected package targets the other model, use a separate persistent device
-/// directory so its NOR, panel flash, RTC, and SD selection cannot cross over.
-fn separate_model_state(state: &Path, model: l6fw::Model) -> io::Result<PathBuf> {
-    let model_state = model_state_path(state, model);
-    if model_state.is_dir() {
-        let main_nor = model_state.join("main-nor.bin");
-        if main_nor.is_file() {
-            let installed = l6fw::model_from_main_nor(&fs::read(main_nor)?)
-                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-            if installed != model {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "model-specific state contains firmware for a different device",
-                ));
-            }
-        }
-        return Ok(model_state);
-    }
-    let main_nor = state.join("main-nor.bin");
-    match fs::read(&main_nor) {
-        Ok(bytes) => {
-            let installed = l6fw::model_from_main_nor(&bytes)
-                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-            if installed != model {
-                return Ok(model_state);
-            }
-        }
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            if ["panel-flash.bin", "resource-nor.bin", "panel-rtc.bin"]
-                .iter()
-                .any(|name| state.join(name).exists())
-            {
-                return Ok(model_state);
-            }
-        }
-        Err(error) => return Err(error),
-    }
-    Ok(state.to_path_buf())
-}
 /// Apply visual UI defaults without changing disposable runs or explicit media.
 pub fn configure(options: &mut Options) -> io::Result<()> {
     let package = options.firmware_package.clone();
@@ -128,19 +111,13 @@ pub fn configure_with_package(
     let Some(state) = options.state_dir.clone() else {
         return Ok(());
     };
-    let state = separate_model_state(&state, model)?;
+    let state = l6max_host::setup::separate_model_state(&state, model)?;
     options.state_dir = Some(state.clone());
     if options.no_sd {
         return Ok(());
     }
     if options.sd_image.is_none() {
-        let selection = state.join("sd-card-selection.txt");
-        if selection.is_file() {
-            let card = std::path::PathBuf::from(std::fs::read_to_string(&selection)?);
-            if card.is_file() {
-                options.sd_image = Some(card);
-            }
-        }
+        options.sd_image = saved_card(options, &state, model)?;
     }
     if options.sd_image.is_none() {
         let card = default_card_path(&state, model);
@@ -210,9 +187,12 @@ mod tests {
         nor[0x50004..0x50008].copy_from_slice(&0x80001415u32.to_le_bytes());
         fs::write(dir.join("main-nor.bin"), nor).unwrap();
 
-        assert_eq!(separate_model_state(&dir, l6fw::Model::L6).unwrap(), dir);
         assert_eq!(
-            separate_model_state(&dir, l6fw::Model::L6max).unwrap(),
+            l6max_host::setup::separate_model_state(&dir, l6fw::Model::L6).unwrap(),
+            dir
+        );
+        assert_eq!(
+            l6max_host::setup::separate_model_state(&dir, l6fw::Model::L6max).unwrap(),
             dir.join("models/l6max")
         );
 

@@ -1,0 +1,153 @@
+version = 1
+name = "l6-audio-input"
+models = ["l6"]
+state = "volume-meter-ready"
+card = "empty"
+backends = ["headless"]
+
+[[audio_input]]
+channel = 1
+loop-tone = { hz = 300.0, seconds = 1.0, amplitude = 0.0004 }
+
+[[audio_input]]
+channel = 2
+loop-tone = { hz = 500.0, seconds = 1.0, amplitude = 0.05 }
+
+[[audio_input]]
+channel = 3
+loop-tone = { hz = 700.0, seconds = 1.0, amplitude = 0.002 }
+
+[[audio_input]]
+channel = 4
+loop-tone = { hz = 900.0, seconds = 1.0, amplitude = 0.002 }
+
+[[audio_input]]
+channel = 5
+loop-tone = { hz = 1100.0, seconds = 1.0, amplitude = 0.002 }
+
+[[audio_input]]
+channel = 6
+loop-tone = { hz = 1300.0, seconds = 1.0, amplitude = 0.002 }
+
+[[step]]
+action = "audio-input-transport"
+command = "play"
+
+[[step]]
+action = "wait"
+until = "mixer-ready"
+guest_timeout_ms = 60000
+wall_timeout_s = 900
+
+[[step]]
+action = "delay"
+guest_ms = 5000
+guest_timeout_ms = 10000
+wall_timeout_s = 300
+
+[[step]]
+action = "encoder"
+channel = 1
+steps = 30
+gesture = "scroll"
+
+[[step]]
+action = "encoder"
+channel = 2
+steps = 30
+gesture = "scroll"
+
+[[step]]
+action = "encoder"
+channel = 3
+steps = 30
+gesture = "scroll"
+
+[[step]]
+action = "encoder"
+channel = 4
+steps = 30
+gesture = "scroll"
+
+[[step]]
+action = "encoder"
+channel = 5
+steps = 30
+gesture = "scroll"
+
+[[step]]
+action = "encoder"
+channel = 6
+steps = 30
+gesture = "scroll"
+
+[[step]]
+action = "delay"
+guest_ms = 5000
+guest_timeout_ms = 20000
+wall_timeout_s = 300
+
+# Encoder acceleration varies with process timing, so levels are approximate.
+[[step]]
+action = "expect-output-tone"
+hz = 300.0
+left_db = -44.0
+right_db = -44.0
+tolerance_db = 2.0
+
+[[step]]
+action = "expect-output-tone"
+hz = 500.0
+left_db = -1.5
+right_db = -1.5
+tolerance_db = 2.0
+
+[[step]]
+action = "expect-output-tone"
+hz = 700.0
+left_db = -44.0
+right_db = -44.0
+tolerance_db = 2.0
+
+[[step]]
+action = "expect-output-tone"
+hz = 900.0
+left_db = -44.0
+right_db = -44.0
+tolerance_db = 2.0
+
+[[step]]
+action = "expect-output-tone"
+hz = 1100.0
+left_db = -44.0
+right_db = -44.0
+tolerance_db = 2.0
+
+[[step]]
+action = "expect-output-tone"
+hz = 1300.0
+left_db = -44.0
+right_db = -44.0
+tolerance_db = 2.0
+
+[[step]]
+action = "press"
+control = "channel.1.mute"
+
+[[step]]
+action = "delay"
+guest_ms = 2000
+guest_timeout_ms = 10000
+wall_timeout_s = 120
+
+[[step]]
+action = "expect-output-tone"
+hz = 300.0
+
+[[step]]
+action = "expect-output-tone"
+hz = 500.0
+left_db = -1.5
+right_db = -1.5
+tolerance_db = 2.0
+
