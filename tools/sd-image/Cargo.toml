@@ -10,3 +10,6 @@ l6fw.workspace = true
 fstool.workspace = true
 serde = { version = "1", features = ["derive"] }
 toml = "0.8.23"
+
+[lints]
+workspace = true

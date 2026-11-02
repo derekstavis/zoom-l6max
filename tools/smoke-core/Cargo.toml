@@ -26,3 +26,6 @@ coremidi = "0.9"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 alsa = "0.12"
+
+[lints]
+workspace = true
