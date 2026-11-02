@@ -1,5 +1,5 @@
 //! Exercise the real action dispatcher and native pickers without host input.
-use crate::{NativePanel, OpenAudioWindow, OpenFirmware, OpenSdFolder};
+use crate::{NativePanel, OpenAudioWindow, OpenFirmware, OpenPatchesWindow, OpenSdFolder};
 use l6max_host::protocol;
 use std::{
     path::PathBuf,
@@ -30,6 +30,16 @@ fn test_wav(seconds: u32) -> Vec<u8> {
     bytes.extend((samples.len() as u32).to_le_bytes());
     bytes.extend(samples);
     bytes
+}
+
+/// The device's saved flash must hold this application.
+fn check_installed(state: &std::path::Path, main: &std::path::Path) -> Result<(), String> {
+    let nor = std::fs::read(state.join("main-nor.bin")).map_err(|e| e.to_string())?;
+    let main = std::fs::read(main).map_err(|e| e.to_string())?;
+    if nor[0x50000..0x50000 + main.len()] != main[..] {
+        return Err("The device does not hold the selected application".into());
+    }
+    Ok(())
 }
 
 impl MenuSmoke {
@@ -197,6 +207,60 @@ impl MenuSmoke {
                     return Err("Cleared audio stayed in the configuration".into());
                 }
                 println!("PASS: clearing channels removes their audio and saved files");
+                window.dispatch_action(Box::new(OpenPatchesWindow), cx);
+                self.stage = 14;
+            }
+            14 if panel.patches_window.is_some() => {
+                let patches = panel.patches_window.unwrap();
+                // Applying updates the panel, which this tick is still updating.
+                cx.defer(move |cx| {
+                    let _ = patches.update(cx, |patches, window, cx| {
+                        patches.apply(vec!["midi-sync".to_owned()], window, cx)
+                    });
+                });
+                self.stage = 17;
+            }
+            17 if panel.applying_patches => {
+                let closed = panel
+                    .patches_window
+                    .unwrap()
+                    .update(cx, |_, _, _| ())
+                    .is_err();
+                if !closed {
+                    return Err("Applying did not close the patches window".into());
+                }
+                println!("PASS: applying closes the window and runs in the background");
+                self.stage = 15;
+            }
+            15 if !panel.applying_patches => {
+                if let Some(error) = &panel.patch_error {
+                    return Err(format!("Applying a patch failed: {error}"));
+                }
+                let state = panel.options.state_dir.clone().ok_or("No device state")?;
+                check_installed(&state, &state.join("patched-firmware/main_firmware.bin"))?;
+                if panel.saved_patches() != ["midi-sync"] || panel.controls.is_none() {
+                    return Err("Applying a patch did not restart and save it".into());
+                }
+                println!("PASS: applying a patch installs it, restarts and saves it");
+                panel.apply_patches(Vec::new(), cx);
+                self.stage = 16;
+            }
+            16 if !panel.applying_patches => {
+                if let Some(error) = &panel.patch_error {
+                    return Err(format!("Removing patches failed: {error}"));
+                }
+                let state = panel.options.state_dir.clone().ok_or("No device state")?;
+                check_installed(
+                    &state,
+                    &panel.options.firmware_dir.join("main_firmware.bin"),
+                )?;
+                if !panel.saved_patches().is_empty()
+                    || panel.controls.is_none()
+                    || state.join("patched-firmware").exists()
+                {
+                    return Err("Removing patches did not restore the stock firmware".into());
+                }
+                println!("PASS: removing patches restores the stock firmware");
                 return Ok(true);
             }
             _ => {}

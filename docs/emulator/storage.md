@@ -31,6 +31,12 @@ QEMU exclusively locks each file for its lifetime and rejects an existing
 file of the wrong size. Missing files are seeded from the supplied firmware
 and modeled peripheral defaults. Existing files retain their contents: changing
 `--firmware-dir` does not reinstall firmware in an existing device.
+Selecting firmware patches is the exception: before QEMU opens the file, the
+engine writes the resulting MAIN image, its trailer and the package footer to the
+device and leaves the rest of the NOR alone, including the panel region, settings
+and calibration. `installed-patches.sha256` records the patched image, and removing
+every patch writes the stock image back and deletes that file. The patched images
+are unpacked to `patched-firmware/`, replaced at each start.
 Main execution is loaded from the installed NOR application region; panel
 execution is loaded from panel flash.
 For L6, the external resource NOR is seeded from `resource_region.bin` on the

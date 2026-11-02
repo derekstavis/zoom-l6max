@@ -562,3 +562,21 @@ models = ["l6max"]
 scenario = "scenarios/l6max-audio-input-transport.toml"
 environment = { L6_AUDIO_RAW_CAPTURE = "{logs}/sai-output.s32" }
 wall_timeout_s = 600
+
+[[case]]
+id = "l6max-installed-patch"
+suites = ["full"]
+models = ["l6max"]
+scenario = "scenarios/l6max-installed-patch.toml"
+needs_configuration = true
+no_sd = true
+wall_timeout_s = 900
+
+[[case]]
+id = "l6-installed-patch"
+suites = ["full"]
+models = ["l6"]
+scenario = "scenarios/l6-installed-patch.toml"
+needs_configuration = true
+no_sd = true
+wall_timeout_s = 900

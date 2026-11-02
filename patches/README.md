@@ -12,6 +12,11 @@ in ignored output directories.
 | [midi-sync](midi-sync/README.md) | L6max 1.10; L6 1.10 | Send the channel mixer state as Control Change on request | `l6patch` |
 | [din-mixer-control](din-mixer-control/README.md) | L6max 1.10 | Let the physical MIDI IN/OUT jacks control the mixer when Mixer Control via MIDI is on, as documented but never implemented | `l6patch` |
 
+The emulator can run any of these on the stock 1.10 firmware, from **File →
+Firmware Patches…**, `patches` in `config.toml` or `--patch`. It applies the same
+precompiled templates as the browser patcher, so it needs no cross-compiler. See
+[getting started](../docs/getting-started.md).
+
 ## Directory layout
 
 ```text

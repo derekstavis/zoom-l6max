@@ -44,6 +44,7 @@ tables. Unknown header fields fail parsing.
 | `state` | no | Boot from `tests/smoke/states/<model>-<state>.toml`; first boot without it. |
 | `card` | no | Card to build for each run, from `tests/smoke/cards/<model>-<card>.toml`; no card without it. |
 | `patches` | no | Firmware patches applied to the model's package. |
+| `installed_patches` | no | Patches the engine installs on a device seeded with the model's stock package, as `--patch` does. |
 | `update_patches` | no | Patches per model for the case's update package, built from the model's package. |
 | `gdb` | no | Enable the debugger socket. |
 | `audio_device` | no | QEMU audio-device syntax; `{logs}` expands to the case's log directory. |
