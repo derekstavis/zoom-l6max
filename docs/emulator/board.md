@@ -166,7 +166,7 @@ In a single process, the engine uses single-threaded TCG with
 `-icount shift=1,align=on,sleep=on` to enforce virtual timer deadlines and pace
 execution against wall time. L6max's full-rate audio task starves lower-priority
 tasks at `shift=2`. Paced execution can run slower than wall time.
-`--timing adaptive` selects QEMU's automatic instruction clock. See [CPU consumption](frontend.md#cpu-consumption)
+See [CPU consumption](frontend.md#cpu-consumption)
 for the idle-loop findings and comparison harness. Panel TIM2 derives its period from the firmware's
 registers at 48 MHz; the current configuration gives 50 µs. Button holds and
 release gaps default to 50 ms of guest time. QMP pause freezes both chips and

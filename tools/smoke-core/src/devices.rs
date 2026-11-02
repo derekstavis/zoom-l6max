@@ -279,7 +279,6 @@ pub fn prepare(scenario: &Scenario, options: &mut Options) -> Result<(), String>
             );
         }
         options.start_paused = true;
-        options.timing = l6max_host::engine::Timing::Paced;
         options.usb_enabled = false;
         options.midi_enabled = false;
         options.gdb_socket =

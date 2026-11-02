@@ -64,7 +64,7 @@ pub struct Step {
     pub action: Action,
 }
 fn default_timing() -> String {
-    "paced".into()
+    "split".into()
 }
 fn default_backends() -> Vec<String> {
     vec!["headless".into(), "gui".into()]

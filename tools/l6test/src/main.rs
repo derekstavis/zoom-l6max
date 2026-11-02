@@ -336,7 +336,7 @@ fn case_fixture(
         card_spec: card.map(|name| spec("cards", name)),
         audio_device: scenario.and_then(|s| s.audio_device.clone()),
         gdb: scenario.is_some_and(|s| s.gdb),
-        timing: scenario.map_or_else(|| "paced".into(), |s| s.timing.clone()),
+        timing: scenario.map_or_else(|| "split".into(), |s| s.timing.clone()),
     })
 }
 
@@ -544,9 +544,6 @@ fn engine_args(options: &Options) -> Vec<String> {
         "--timing".into(),
         match options.timing {
             l6max_host::engine::Timing::Paced => "paced",
-            l6max_host::engine::Timing::Adaptive => "adaptive",
-            l6max_host::engine::Timing::HostClock => "host-clock",
-            l6max_host::engine::Timing::HostClockMulti => "host-clock-multi",
             l6max_host::engine::Timing::Split => "split",
         }
         .into(),

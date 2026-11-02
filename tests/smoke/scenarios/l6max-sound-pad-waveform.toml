@@ -2,7 +2,6 @@ version = 1
 name = "l6max-sound-pad-waveform"
 models = ["l6max"]
 state = "volume-meter-ready"
-timing = "split"
 audio_device = "driver=coreaudio,id=l6-audio,out.frequency=48000,out.channels=2,out.format=f32,out.buffer-count=12"
 card = "sound-pads"
 backends = ["headless"]

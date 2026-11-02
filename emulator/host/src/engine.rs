@@ -64,54 +64,17 @@ pub struct Options {
 pub enum Timing {
     /// 2 ns per instruction, with QEMU sleeping when ahead of wall time.
     Paced,
-    /// QEMU continuously adjusts the instruction/time ratio.
-    Adaptive,
-    /// Use QEMU's host virtual clock without instruction counting.
-    HostClock,
-    /// Use the host virtual clock and one TCG execution thread per vCPU.
-    HostClockMulti,
     /// Run MAIN and the panel in separate paced QEMU processes, each with its
     /// own instruction rate and host thread. Runs are not deterministic.
     Split,
 }
 
-impl Timing {
-    fn accelerator(self) -> &'static str {
-        match self {
-            Self::Paced | Self::Adaptive | Self::HostClock | Self::Split => "tcg,thread=single",
-            Self::HostClockMulti => "tcg,thread=multi",
-        }
-    }
-
-    fn icount(self) -> Option<&'static str> {
-        match self {
-            Self::Paced | Self::Split => Some("shift=1,align=on,sleep=on"),
-            Self::Adaptive => Some("shift=auto,sleep=on"),
-            Self::HostClock | Self::HostClockMulti => None,
-        }
-    }
-}
+const ACCELERATOR: &str = "tcg,thread=single";
+const MAIN_ICOUNT: &str = "shift=1,align=on,sleep=on";
 
 #[cfg(test)]
 mod timing_tests {
-    use super::{Options, Timing};
-
-    #[test]
-    fn host_clock_disables_icount_without_changing_tcg_threading() {
-        assert_eq!(Timing::HostClock.accelerator(), "tcg,thread=single");
-        assert_eq!(Timing::HostClockMulti.accelerator(), "tcg,thread=multi");
-        assert_eq!(Timing::HostClock.icount(), None);
-        assert_eq!(Timing::HostClockMulti.icount(), None);
-        assert_eq!(Timing::Paced.icount(), Some("shift=1,align=on,sleep=on"));
-        assert_eq!(Timing::Adaptive.icount(), Some("shift=auto,sleep=on"));
-        assert_eq!(Timing::Split.icount(), Some("shift=1,align=on,sleep=on"));
-    }
-
-    #[test]
-    fn host_clock_multi_is_selectable_for_diagnostics() {
-        let options = Options::parse_args(["--timing".into(), "host-clock-multi".into()]).unwrap();
-        assert!(matches!(options.timing, Timing::HostClockMulti));
-    }
+    use super::Options;
 
     #[test]
     fn usb_cable_can_be_present_without_starting_the_midi_bridge() {
@@ -209,19 +172,13 @@ impl Options {
                 "--timing" => {
                     options.timing = match args.next().as_deref().and_then(|value| value.to_str()) {
                         Some("paced") => Timing::Paced,
-                        Some("adaptive") => Timing::Adaptive,
-                        Some("host-clock") => Timing::HostClock,
-                        Some("host-clock-multi") => Timing::HostClockMulti,
                         Some("split") => Timing::Split,
-                        _ => return Err(
-                            "--timing requires paced, adaptive, host-clock, host-clock-multi, or split"
-                                .into(),
-                        ),
+                        _ => return Err("--timing requires paced or split".into()),
                     };
                 }
                 "--help" | "-h" => {
                     println!(
-                        "Engine options: [QEMU] [--qemu PATH] [--audio-device 'driver=...,id=...'] [--firmware-dir DIR | --firmware-package PACKAGE] [--update-package PACKAGE] [--no-auto-setup] [--logs DIR] [--state-dir DIR | --volatile] [--sd-image FILE | --no-sd] [--update-bootloader] [--usb] [--midi] [--trace-sd] [--timing paced|adaptive|host-clock|host-clock-multi|split] [--smoke-scenario FILE] [--gdb-socket PATH] [--control-socket PATH] [--start-paused]"
+                        "Engine options: [QEMU] [--qemu PATH] [--audio-device 'driver=...,id=...'] [--firmware-dir DIR | --firmware-package PACKAGE] [--update-package PACKAGE] [--no-auto-setup] [--logs DIR] [--state-dir DIR | --volatile] [--sd-image FILE | --no-sd] [--update-bootloader] [--usb] [--midi] [--trace-sd] [--timing paced|split] [--smoke-scenario FILE] [--gdb-socket PATH] [--control-socket PATH] [--start-paused]"
                     );
                     std::process::exit(0);
                 }
@@ -372,7 +329,7 @@ impl Engine {
         command
             .arg("-M")
             .arg(&machine)
-            .args(["-accel", options.timing.accelerator()]);
+            .args(["-accel", ACCELERATOR]);
         if let Some(plugin) = env::var_os("L6_QEMU_PLUGIN") {
             command.arg("-plugin").arg(plugin);
         }
@@ -380,8 +337,8 @@ impl Engine {
             // L6's full-rate audio fits 4 ns per instruction, and it cannot
             // hold real time during playback at 2 ns on one host thread.
             command.args(["-icount", "shift=2,align=on,sleep=on"]);
-        } else if let Some(icount) = options.timing.icount() {
-            command.args(["-icount", icount]);
+        } else {
+            command.args(["-icount", MAIN_ICOUNT]);
         }
         if !split {
             command.args(["-smp", "2"]);
@@ -515,7 +472,7 @@ impl Engine {
             ];
             let mut panel = Command::new(&qemu);
             panel
-                .args(["-M", "l6max-panel", "-accel", options.timing.accelerator()])
+                .args(["-M", "l6max-panel", "-accel", ACCELERATOR])
                 // The firmware times its LED PWM pulses in software, so ring
                 // brightness scales with this cost; 64 ns per instruction
                 // reaches the rings' measured full scale on both models.

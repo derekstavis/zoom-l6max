@@ -47,7 +47,7 @@ tables. Unknown header fields fail parsing.
 | `patches` | no | Firmware patches applied to the model's package. |
 | `update_patches` | no | Patches per model for the case's update package, built from the model's package. |
 | `gdb` | no | Enable the debugger socket. |
-| `timing` | no | `paced` (default), `adaptive`, `host-clock`, `host-clock-multi`, or `split`. |
+| `timing` | no | `split` (default) or `paced`. |
 | `audio_device` | no | QEMU audio-device syntax; `{logs}` expands to the case's log directory. |
 | `main_sha256` | no | Exact 64-character hexadecimal MAIN firmware hash for revision-specific operations. |
 | `main_sha256_any` | no | Additional explicitly allowed MAIN hashes for the same guarded operations. |

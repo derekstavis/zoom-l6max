@@ -24,7 +24,7 @@ The application owns QEMU's lifetime. Automatic setup builds the pinned QEMU
 when no executable is supplied. Use `--qemu PATH` or `L6_QEMU` to select an
 existing executable. Optional arguments are
 `--firmware-dir DIR`, `--logs DIR`, `--sd-image FILE`, and
-`--timing paced|adaptive|split` (the GUI defaults to `split`).
+`--timing paced|split` (the GUI defaults to `split`).
 Firmware is supplied locally and excluded from Git.
 
 The normal persistent visual UI creates a model-matched demo card on first
