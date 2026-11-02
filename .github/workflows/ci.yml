@@ -48,13 +48,10 @@ jobs:
           xcrun --sdk macosx metal --version
           brew install dtc glib ninja pixman pkg-config python@3.14
           rustup show active-toolchain
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: cargo-macos-arm64-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
-          restore-keys: cargo-macos-arm64-
+      # Published builds always start clean.
+      - id: rust-cache
+        if: ${{ !inputs.release }}
+        uses: ./.github/actions/rust-cache/restore
       - name: Fetch locked Rust dependencies
         run: cargo fetch --locked
       - name: Check Rust formatting
@@ -121,6 +118,10 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
+      # Only main saves, so that every pull request reuses one cache, and only for
+      # dependencies it has none for.
+      - if: ${{ !inputs.release && github.ref == 'refs/heads/main' && steps.rust-cache.outputs.hit != 'true' }}
+        uses: ./.github/actions/rust-cache/save
 
   linux:
     name: Linux checks and AppImage
@@ -154,13 +155,10 @@ jobs:
             libglib2.0-dev libpixman-1-dev libfdt-dev libasound2-dev libfontconfig-dev \
             libxkbcommon-dev jq
           rustup show active-toolchain
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: cargo-linux-x86_64-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
-          restore-keys: cargo-linux-x86_64-
+      # Published builds always start clean.
+      - id: rust-cache
+        if: ${{ !inputs.release }}
+        uses: ./.github/actions/rust-cache/restore
       - name: Fetch locked Rust dependencies
         run: cargo fetch --locked
       - name: Check Rust formatting
@@ -207,3 +205,7 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
+      # Only main saves, so that every pull request reuses one cache, and only for
+      # dependencies it has none for.
+      - if: ${{ !inputs.release && github.ref == 'refs/heads/main' && steps.rust-cache.outputs.hit != 'true' }}
+        uses: ./.github/actions/rust-cache/save
