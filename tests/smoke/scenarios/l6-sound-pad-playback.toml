@@ -1,7 +1,7 @@
 version = 1
 name = "l6-sound-pad-playback"
 models = ["l6"]
-fixture = "prepared"
+state = "setup-complete"
 card = "assigned-pads"
 backends = ["headless"]
 

@@ -8,65 +8,43 @@ This guide covers executable checks for the emulator and its tools.
 ```sh
 cargo run --offline --locked -p l6test -- list
 cp tests/smoke/fixtures.example.toml smoke.local.toml
-# Edit smoke.local.toml: pin QEMU by SHA-256 and supply local firmware/state/card paths.
+# Edit smoke.local.toml: set the paths to your stock L6 and L6max update packages.
 cargo run --offline --locked -p l6test -- check --config smoke.local.toml
 cargo run --offline --locked -p l6test -- run --suite quick --backend both
 ```
 
-`check` validates the QEMU hash and fixture identities, checks shared memory,
-and creates disposable fixture copies without launching firmware. `run` builds
-selected binaries once, freezes copies of those executables and the scenario
-files for the run, starts each case with fresh state/card copies, and
-supervises every process group. A supplied output directory must not exist.
-Paths in the fixture file are relative to that file. Both models are detected
-from firmware and checked against the fixture's declared model.
+`check` validates the configuration and checks shared memory without launching
+firmware. `run` builds selected binaries once, including QEMU unless `--no-build` is
+given, freezes copies of those executables and the scenario files for the run, starts
+each case with fresh state and card, and supervises every process group. A supplied
+output directory must not exist. Paths in the local file are relative to that file.
 
-To build a patched fixture, set `firmware_package` to a supported stock package
-and add, for example, `patches = ["midi-sync"]`. The runner applies the same
-guarded patch implementation used by the browser patcher and unpacks the
-result inside each case's artifact directory. See the commented `knob-patched`
-example in `fixtures.example.toml`. A saved MAIN NOR overrides the supplied
-firmware, so a `state_template` containing MAIN must already match the generated
-image; otherwise the runner rejects it. Inputs are never modified.
+Each scenario declares what it runs from, so the local file only supplies firmware:
 
-To assemble a saved state, set `state_recipe` to a TOML scenario containing
-semantic setup actions and assertions. The runner starts a separate headless
-guest with a fresh persistent state, runs the recipe, stops that guest and then
-starts the requested case with the resulting state and copied card. Recipe and
-included fragments are snapshotted in `state-setup/recipe`; setup logs and its
-scenario result are in `state-setup/`. A recipe must support the selected model
-and headless backend and cannot be combined with `state_template` or a volatile
-case. `check` validates and snapshots fixtures but does not execute recipes.
-The sample `state-l6max-setup.toml` describes first-boot date/settings setup;
-it does not prepare recorder media or pad assignments.
+| Scenario key | Purpose |
+| --- | --- |
+| `state` | Boot from [`tests/smoke/states`](../../tests/smoke/states)`/<model>-<state>.toml`, an [`l6nor` state spec](tools/l6nor.md#state-specs). Without it, the case starts from first boot. |
+| `card` | Build [`tests/smoke/cards`](../../tests/smoke/cards)`/<model>-<card>.toml` for each run. Without it, the case has no card. |
+| `patches` | Apply named guarded patches to the model's package, using the same implementation as the browser patcher. |
+| `update_patches` | Build the case's update package from the model's package, per model, for example `{ l6 = ["midi-sync"] }`. |
+| `gdb` | Enable the case's debugger socket. |
+| `timing` | `paced` (default), `adaptive`, `host-clock`, `host-clock-multi`, or `split`. |
+| `audio_device` | QEMU audio-device syntax, with `{logs}` as the case's log directory. |
 
-To start from a configured device without driving its UI, set `state_spec` to
-an [`l6nor` state spec](tools/l6nor.md#state-specs). The runner seeds missing
-MAIN NOR from the fixture firmware and commits the declared settings with the
-firmware's bank protocol. It also writes the declared panel RTC calendar and,
-for L6max, a pre-programmed panel, all into the case's disposable state. No
-extra guest runs. The spec hash and the applied report are recorded in
-`inputs.json`. [`l6max-setup-complete.toml`](../../tests/smoke/states/l6max-setup-complete.toml)
-reproduces the setup recipe's MAIN NOR byte for byte and boots directly to the
-recorder; the `state-spec` case checks this. A spec can edit a copied
-`state_template` and cannot be combined with `state_recipe`. Because a spec is
-rebuilt for every case, volatile cases keep it: they run on the fresh
-spec-built state instead of no state, and skip their setup input.
+A state spec seeds MAIN NOR from the case's firmware and commits the declared settings
+with the firmware's bank protocol. It also writes the declared panel RTC calendar and,
+for L6max, a pre-programmed panel. It boots without the startup prompts, so scenario
+steps marked `setup_input` are skipped. No extra guest runs, and the spec hash and the
+applied report are recorded in `inputs.json`.
 
-The driver bypasses GUI demo-media and installer defaults. Headless and GUI
-runs receive the same explicit firmware, timing, card, state and no-audio
-backend. Existing device state and fixture templates are never run in place.
-The config may contain proprietary local paths and stays ignored. Add `fresh`
-fixtures for both models to run the USB no-card probe; L6max persistence also
-uses `fresh`. These cases reproduce explicit first-boot sequences. Prepared
-mixer/card fixtures are used by the panel, SD and USB-storage cases. Use an
-empty prepared card: after reinsertion, a card holding a recorder project shows
-a new project named from the guest clock, which the L6max `storage` display
-check rejects.
-The factory-protocol scenario requires a `factory-protocol/l6max` firmware
-fixture, but creates its own disposable FAT jig card and state under the case
-artifact directory. The generated card and state hashes are recorded in
-`inputs.json`.
+Use saved pad assignments from a card spec unless the Editor or menu is what the case
+tests. Use an empty card for cases that compare the home screen across reinsertion: a
+card holding a recorder project shows a new project named from the guest clock.
+
+The driver bypasses GUI demo-media and installer defaults. Headless and GUI runs receive
+the same explicit firmware, timing, card, state and audio backend. Inputs are never
+modified. The factory-protocol scenario creates its own disposable jig card and state
+under the case artifact directory, and their hashes are recorded in `inputs.json`.
 
 ## Fixture and catalog TOML
 
@@ -76,41 +54,20 @@ It has these top-level blocks:
 
 | Block | Fields | Purpose |
 | --- | --- | --- |
-| top level | `version = 1`, `qemu`, `qemu_sha256` | Pin the exact QEMU executable. `qemu` is resolved relative to this TOML file; the SHA-256 must match before any run. |
-| `[[fixture]]` | `name`, `model`, exactly one of `firmware_dir` / `firmware_package`; optional `patches`, `update_package`, `state_template`, `state_recipe`, `state_spec`, `sd_image`, `card_spec`, `sound_pad`, `audio_device`, `gdb`, `timing`, `update_bootloader` | Define local firmware and starting state for a named model fixture. Names may repeat for different models, but `(name, model)` must be unique. |
-| `[legacy."CASE-ID"]` | optional `fixture`, `executable`, `executable_sha256`, `arguments`, `environment` | Configure a legacy executable required by a catalog case. An executable requires a matching hash. `arguments` and environment values support `{firmware_dir}`, `{logs}`, `{qemu}`, and `{package}` substitutions. |
+| top level | `version = 1`; optional `qemu`, `qemu_sha256` | Without these, the driver uses the repository's QEMU, building it unless `--no-build` is given, and pins the hash it finds for the run. Set both to test an external binary, whose SHA-256 must match before any run. |
+| `[firmware]` | `l6`, `l6max` | The stock update package for each model. Cases for a model without one are BLOCKED. |
+| `[legacy."CASE-ID"]` | optional `executable`, `executable_sha256`, `arguments`, `environment` | Configure a legacy executable required by a catalog case. An executable requires a matching hash. `arguments` and environment values support `{firmware_dir}`, `{logs}`, `{qemu}`, and `{package}` substitutions. |
 | `[[expected_failure]]` | `case`, `model`, `step`, `contains`, `reason` | Match a known failure only at the exact scenario step and when its error contains the specified text. A matching failure is XFAIL; an unexpected pass is XPASS. |
 
-Fixture details:
+Card spec details:
 
-- `model` is `l6` or `l6max`. `timing` is `paced` (default), `adaptive`,
-  `host-clock`, `host-clock-multi`, or `split`.
-- `patches` applies named guarded patches to a stock `firmware_package` before
-  the driver creates its fixture copy. It cannot be combined with
-  `firmware_dir`.
-- Choose at most one of `state_template` and `state_recipe`. A template is
-  copied into isolated case state. A recipe is a headless scenario that builds
-  state on a separate disposable guest; see the complete
-  [scenario/state-recipe schema](scenario-format.md). `state_spec` declares
-  NOR settings, RTC and panel state without a setup guest, alone or on top of
-  a template; it must name the fixture's model.
-- If `state_template` is omitted, the driver creates fresh isolated state.
-  `sd_image` is copied for each case, and `card_spec` builds a new card for each
-  case instead; choose one. `audio_device` accepts QEMU audio-device
-  syntax and `{logs}` expands to the per-case log directory. `gdb` enables the
-  fixture's debugger socket. `update_bootloader` enables that update path.
-- Prefer `state_spec` for `prepared` fixtures: a spec boots without the startup prompts,
-  so the scenario's `setup_input` steps are skipped. Use saved pad assignments from a
-  card spec unless the Editor or menu is what the case tests.
-- A scenario can name its own card with a top-level `card`. The driver builds
-  `tests/smoke/cards/<model>-<card>.toml` for each run, replacing the fixture's
-  `sd_image`, `card_spec`, and `sound_pad`, so these cases need no local card.
-- A `card_spec` is a TOML file declaring a card's contents, like the ones in
+- A card spec is a TOML file declaring a card's contents, like the ones in
   [`tests/smoke/cards`](../../tests/smoke/cards). It names `version = 1` and `model`,
-  which must match the fixture, with optional `directory` (a list of paths).
+  with optional `directory` (a list of paths).
   `system_file` defaults to `true`; `false` leaves the file out (see
-  [card layout](../emulator/usb.md#card-layout)). `[[sound_pad]]` blocks take the same
-  fields as `[[fixture.sound_pad]]` and name files on the card.
+  [card layout](../emulator/usb.md#card-layout)). `[[sound_pad]]` blocks take `pad` (1–4), `file` (a path on the card),
+  optional `mode` (`one-shot`, `loop`, or `hold`; default `one-shot`), and optional
+  `level` (0–59; default 49).
   Each `[[file]]` has a `path` from the card root, with parent directories created as
   needed, and one source: `tone` (`hz`, `seconds`, `amplitude`), `sweep` (`low_hz`,
   `high_hz`, `seconds`, `amplitude`), `levels` (`hz` and `steps`, each with `seconds`,
@@ -133,26 +90,6 @@ Fixture details:
   file = "SOUND_PAD/PAD4/SWEEP.WAV"
   level = 30
   ```
-- Add one or more `[[fixture.sound_pad]]` blocks to prepare assignments on the
-  disposable card. Each block takes `pad` (1–4), `file` (a path
-  relative to the card root), optional `mode` (`one-shot`, `loop`, or `hold`;
-  default `one-shot`), and optional `level` (0–59; default 49). The WAV must
-  already exist on the card. The driver creates or updates the model's saved
-  pad settings; it does not send USB commands or press controls to configure
-  the device. The resulting card hash is included in `inputs.json`.
-
-  ```toml
-  [[fixture.sound_pad]]
-  pad = 1
-  file = "SOUND_PAD/PAD1/TONE220.WAV"
-  mode = "one-shot"
-  level = 59
-  ```
-- `update_package` is supplied to firmware-update scenarios as the package to
-  install after booting the fixture firmware.
-- All fixture paths resolve relative to `smoke.local.toml`; they must exist,
-  match the declared model, and remain local. Firmware and device images are
-  not checked in.
 
 `tests/smoke/catalog.toml` is the checked-in registration of runnable cases.
 Its top-level `version` is `1`; every `[[case]]` has:
@@ -168,8 +105,7 @@ Its top-level `version` is `1`; every `[[case]]` has:
 | `needs_configuration` | optional, default `false` | Keep the case BLOCKED until its local executable/configuration prerequisite is supplied. |
 | `gui` | optional, default `false` | Mark a GUI-only catalog case. |
 | `volatile` | optional, default `false` | Discard persistent-state templates for this case and run without persistent state, unless the fixture has a `state_spec`, which is rebuilt for the case; incompatible with `state_recipe`. |
-| `no_sd` | optional, default `false` | Do not attach the fixture's SD image. |
-| `fixture` | optional | Use a fixture name other than the default `prepared`. |
+| `no_sd` | optional, default `false` | Do not attach the scenario's SD card. |
 | `blocked` | optional | Human-readable reason to report this case as BLOCKED. |
 | `wall_timeout_s` | optional, default `900` | Per-case host wall limit. |
 
@@ -215,9 +151,9 @@ a low-level diagnostic pass does not qualify GUI parity.
 `--no-build` explicitly reuses installed debug executables. Their hashes are
 still recorded. It is useful for repeated diagnostic runs and binary comparisons,
 but does not attest that an executable was built from the current sources.
-The driver currently pins QEMU by binary hash and explicitly records its build
-source as unattested. A source checkout hash alone never identifies that binary.
-It never auto-selects, rebuilds or falls back to a different QEMU.
+The driver pins QEMU by binary hash and records it for every run. A source checkout
+hash alone never identifies that binary. An external binary is never rebuilt or
+replaced.
 
 Boot readiness requires the model's six or eight rings to reach
 all-lit and settle for one guest second; L6 also needs a lit editing-mode
@@ -232,13 +168,9 @@ lit, verify its lamp, and wait for stable panel outputs before capturing
 per-control baselines. A static OLED
 frame is valid and must not be treated as a stopped guest clock.
 
-Prepared fixtures must match the scenario's explicit setup steps. With a
-saved-state template, the L6max sequences select Cancel with Down and then
-Confirm on the startup SD prompt, or Confirm the startup prompts twice; they
-are not general Date/Time or arbitrary-menu navigation. These steps are marked
-`setup_input`. A fixture with a `state_spec` boots straight to the recorder,
-so the driver skips them and records `execution_spec_state` in `inputs.json`.
-Keep fresh first-boot fixtures and prepared fixtures separately named.
+Steps marked `setup_input` confirm the L6max startup SD prompt or the startup prompts,
+for cases that boot without a state spec. A case with a `state` boots straight to the
+recorder, so the driver skips them and records `execution_spec_state` in `inputs.json`.
 
 ## Results and evidence
 

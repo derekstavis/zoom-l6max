@@ -1,7 +1,7 @@
 version = 1
 name = "editor-pad-assignments"
 models = ["l6", "l6max"]
-fixture = "prepared"
+state = "setup-complete"
 card = "pad-files"
 backends = ["headless"]
 

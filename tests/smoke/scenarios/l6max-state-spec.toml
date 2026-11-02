@@ -2,7 +2,7 @@ version = 1
 name = "l6max-state-spec"
 models = ["l6max"]
 backends = ["headless"]
-fixture = "spec-setup"
+state = "setup-complete"
 main_sha256 = "980d92272c1f84bed200b4d2f83575202f6a00082c928d99b9e8b53af8d44461"
 
 # The fixture's state spec replaces first-boot setup input. Boot must reach

@@ -2,7 +2,8 @@ version = 1
 name = "wasm-patch"
 models = ["l6", "l6max"]
 backends = ["headless"]
-fixture = "prepared"
+state = "setup-complete"
+card = "empty"
 
 [[step]]
 action = "wasm-patch"

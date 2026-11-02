@@ -1,7 +1,8 @@
 version = 1
 name = "l6-recorder-playback"
 models = ["l6"]
-fixture = "l6-recorder-playback"
+state = "setup-complete"
+gdb = true
 card = "recorder-project"
 backends = ["headless"]
 main_sha256 = "827c7c5cb2a43cc3a011d4556462b8cb9539242f817ebeed7727d66a36c03799"

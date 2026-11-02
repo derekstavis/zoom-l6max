@@ -1,7 +1,7 @@
 version = 1
 name = "l6max-ui-pad-assignments"
 models = ["l6max"]
-fixture = "prepared"
+state = "setup-complete"
 card = "pad-files"
 backends = ["headless"]
 

@@ -2,7 +2,7 @@ version = 1
 name = "storage"
 models = ["l6", "l6max"]
 backends = ["headless"]
-fixture = "prepared"
+state = "setup-complete"
 card = "empty"
 
 [[step]]

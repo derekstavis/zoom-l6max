@@ -6,6 +6,7 @@ publish.workspace = true
 license.workspace = true
 
 [dependencies]
+qemu-build = { path = "../qemu-build" }
 sd-image.workspace = true
 tracing.workspace = true
 smoke-core = { path = "../smoke-core" }

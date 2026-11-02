@@ -10,7 +10,6 @@ belong in Rust model mappings, not scenario files.
 version = 1
 name = "mute"
 models = ["l6", "l6max"]
-fixture = "prepared"
 
 [[step]]
 action = "wait"
@@ -43,8 +42,13 @@ tables. Unknown header fields fail parsing.
 | `version` | yes | Schema version; currently `1`. |
 | `name` | yes | Nonempty scenario name used in reports. |
 | `models` | yes | One or both of `"l6"` and `"l6max"`. |
-| `fixture` | yes | Named local fixture the scenario expects. |
-| `card` | no | Card to build for each run, from `tests/smoke/cards/<model>-<card>.toml`; replaces the fixture's card and pad assignments. |
+| `state` | no | Boot from `tests/smoke/states/<model>-<state>.toml`; first boot without it. |
+| `card` | no | Card to build for each run, from `tests/smoke/cards/<model>-<card>.toml`; no card without it. |
+| `patches` | no | Firmware patches applied to the model's package. |
+| `update_patches` | no | Patches per model for the case's update package, built from the model's package. |
+| `gdb` | no | Enable the debugger socket. |
+| `timing` | no | `paced` (default), `adaptive`, `host-clock`, `host-clock-multi`, or `split`. |
+| `audio_device` | no | QEMU audio-device syntax; `{logs}` expands to the case's log directory. |
 | `main_sha256` | no | Exact 64-character hexadecimal MAIN firmware hash for revision-specific operations. |
 | `main_sha256_any` | no | Additional explicitly allowed MAIN hashes for the same guarded operations. |
 | `backends` | no | `"headless"` and/or `"gui"`; defaults to both. Typed device/GDB operations require headless. |
@@ -61,8 +65,6 @@ Every `[[step]]` has a required `action` and may also set:
 
 Each action table adds its action-specific fields below. For composed scenarios,
 `include` takes a path to a TOML fragment containing only `[[step]]` tables.
-`state_recipe` in a fixture points to a normal scenario document; it does not
-introduce a second recipe syntax.
 
 Mark only input whose result a state spec reproduces with `setup_input`. Input
 that is the behavior under test, or that sets runtime-only state (for example
@@ -188,14 +190,11 @@ firmware-memory addressing in TOML.
 
 A catalog case has either a scenario path or a supervised GUI executable. A
 local `[legacy."case-id"]` entry may declare an external `executable` and its
-required `executable_sha256`, plus `arguments`, `environment`, and a named
-fixture. This lets the driver attest and supervise a packaged GUI binary while
-keeping native menu and picker interactions in the GUI adapter. A local entry
-can select another named fixture (for example, a generated patched-image
-directory) without changing the stock fixture used by other cases. The default
-fixture is `prepared`; persistence uses `fresh`. Configuration-required cases
-stay BLOCKED until their matching configuration section is present. Read the
-case prerequisites before enabling them.
+required `executable_sha256`, plus `arguments` and `environment`. This lets the driver
+attest and supervise a packaged GUI binary while keeping native menu and picker
+interactions in the GUI adapter. These cases boot from the `setup-complete` state and
+an `empty` card. Configuration-required cases stay BLOCKED until their matching
+configuration section is present. Read the case prerequisites before enabling them.
 
 Legacy arguments support `{firmware_dir}`, `{logs}`, `{qemu}` and `{package}`
 substitutions. Remaining braces are an error. Paths in these arguments must be

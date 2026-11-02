@@ -114,5 +114,5 @@ first boot. `setup_required = 0` together with a valid RTC calendar skips the
 first-boot Date/Time and Battery Type flow; a pre-programmed panel skips panel
 ROM programming.
 [`l6max-setup-complete.toml`](../../../tests/smoke/states/l6max-setup-complete.toml)
-reproduces the `state-l6max-setup.toml` recipe without input. The `state-spec`
-case checks the result.
+reproduces the first-boot setup flow without input. The `state-spec` case checks the
+result.

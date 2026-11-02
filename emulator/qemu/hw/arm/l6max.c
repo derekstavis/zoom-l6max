@@ -66,6 +66,8 @@
 #define L6_PANEL_PACE_MAX_LAG_NS 100000000
 #define L6_INPUT_QUEUE_LIMIT 64
 #define L6_INPUT_TX_LIMIT (64 * 1024)
+/* The dimmest ring segments stay below this; blinking pad LEDs peak far above it. */
+#define L6_INDICATOR_DIM_LEVEL 16
 #define L6_AUDIO_TRACE_WINDOW_FRAMES 64000
 /* 200 ms of output reserve, as a divisor of the sample rate. */
 #define L6_AUDIO_PRIME_DIVISOR 5
@@ -1246,7 +1248,7 @@ static void l6_indicator_tick(void *opaque)
                  * Bright windows do not count, so a blinking LED reaches zero. */
                 indicators->pulse_history[row][bit] =
                     indicators->pulse_history[row][bit] << 1 |
-                    (on != 0 && level <= 1);
+                    (on != 0 && level <= L6_INDICATOR_DIM_LEVEL);
                 if (level <= 1) {
                     level = ctpop8(indicators->pulse_history[row][bit]) >= 2;
                 }

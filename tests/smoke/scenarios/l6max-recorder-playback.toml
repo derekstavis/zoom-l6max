@@ -2,7 +2,8 @@ version = 1
 name = "l6max-recorder-playback"
 models = ["l6max"]
 backends = ["headless"]
-fixture = "l6max-recorder-playback"
+state = "setup-complete"
+gdb = true
 card = "recorder-project"
 main_sha256 = "980d92272c1f84bed200b4d2f83575202f6a00082c928d99b9e8b53af8d44461"
 

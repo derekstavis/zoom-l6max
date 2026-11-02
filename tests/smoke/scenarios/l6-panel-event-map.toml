@@ -1,7 +1,7 @@
 version = 1
 name = "l6-panel-event-map"
 models = ["l6"]
-fixture = "fresh"
+card = "empty"
 backends = ["headless"]
 
 [[step]]

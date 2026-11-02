@@ -2,7 +2,8 @@ version = 1
 name = "firmware-update"
 models = ["l6", "l6max"]
 backends = ["headless"]
-fixture = "prepared"
+state = "setup-complete"
+card = "empty"
 
 [[step]]
 action = "firmware-update"

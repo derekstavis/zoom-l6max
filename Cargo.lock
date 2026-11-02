@@ -3005,6 +3005,7 @@ dependencies = [
  "l6max-host",
  "l6nor",
  "libc",
+ "qemu-build",
  "sd-image",
  "serde",
  "serde_json",

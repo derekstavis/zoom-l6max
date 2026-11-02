@@ -83,7 +83,7 @@ The `input` probe accepts these environment variables:
 | `L6_SCREEN_SETTLE_MS`, `L6_BOOT_SETTLE_MS` | Adjust screen-capture and startup wait times. |
 
 For a repeatable playback assertion without Editor or USB setup, use the
-sound-pad scenario and `fixture.sound_pad` in [l6test](l6test.md).
+sound-pad scenario and a card spec's `[[sound_pad]]` in [l6test](l6test.md).
 
 `popup-trigger` collects a focused L6max popup/callback observation and writes
 `popup-trigger.json`. `uart-startup` traces L6 startup, panel/DIN input and

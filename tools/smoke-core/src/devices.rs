@@ -124,7 +124,7 @@ pub fn prepare(scenario: &Scenario, options: &mut Options) -> Result<(), String>
         options.gdb_socket =
             Some(std::env::temp_dir().join(format!("l6sp-{}.sock", std::process::id())));
     }
-    if scenario.fixture == "factory-protocol" {
+    if scenario.name == "factory-protocol" {
         prepare_factory_fixture(options)?;
     }
     if scenario.main_sha256.is_some() || !scenario.main_sha256_any.is_empty() {

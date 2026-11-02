@@ -2,7 +2,7 @@ version = 1
 name = "card-record"
 models = ["l6", "l6max"]
 backends = ["headless"]
-fixture = "prepared"
+state = "setup-complete"
 card = "empty"
 
 # A generated card must be one the firmware accepts for recording: it rejects

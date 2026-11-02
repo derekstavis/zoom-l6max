@@ -37,13 +37,11 @@ analog audio behavior, and physical jack routing remain unverified.
 ## Fixtures and execution
 
 The [scenario catalog](../../tests/smoke/catalog.toml) specifies each case's
-models, backends, and prerequisites. A `state_spec` creates disposable settings
-and panel state without running setup interactions. `fixture.sound_pad` writes
-pad assignments and playback settings to a disposable SD-card copy. Scenario
-steps marked `setup_input` are skipped when a state spec supplies that setup.
-
-Use a model-matched firmware package and state, pin the QEMU executable by
-SHA-256, and configure the media and backend needed by each case. See the
+models, backends, and prerequisites. Each scenario declares its state, card, patches, and timing, and the local
+configuration supplies the firmware packages. A state spec creates disposable settings
+and panel state without running setup interactions, and a card spec builds the case's
+SD card with its pad assignments. Scenario steps marked `setup_input` are skipped when
+a state spec supplies that setup. See the
 [testing workflow](testing.md) for fixtures, permissions, suites, and reports.
 The driver records the binary hash; an externally supplied binary's build
 source is not attested by that hash.

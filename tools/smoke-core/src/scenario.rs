@@ -20,10 +20,21 @@ pub struct Scenario {
     pub version: u32,
     pub name: String,
     pub models: Vec<String>,
-    pub fixture: String,
-    /// Build the case's card from `cards/<model>-<card>.toml` beside the catalog,
-    /// replacing any card the fixture names.
+    /// Boot from `states/<model>-<state>.toml` beside the catalog.
+    pub state: Option<String>,
+    /// Build the case's card from `cards/<model>-<card>.toml` beside the catalog.
     pub card: Option<String>,
+    /// Firmware patches applied to the configured package.
+    #[serde(default)]
+    pub patches: Vec<String>,
+    /// Patches for the update package, per model, applied to the configured package.
+    #[serde(default)]
+    pub update_patches: std::collections::BTreeMap<String, Vec<String>>,
+    #[serde(default)]
+    pub gdb: bool,
+    #[serde(default = "default_timing")]
+    pub timing: String,
+    pub audio_device: Option<String>,
     pub main_sha256: Option<String>,
     #[serde(default)]
     pub main_sha256_any: Vec<String>,
@@ -51,6 +62,9 @@ pub struct Step {
     pub wall_timeout_s: u64,
     #[serde(flatten)]
     pub action: Action,
+}
+fn default_timing() -> String {
+    "paced".into()
 }
 fn default_backends() -> Vec<String> {
     vec!["headless".into(), "gui".into()]
