@@ -13,6 +13,7 @@ tracing.workspace = true
 smoke-core = { path = "../../tools/smoke-core" }
 l6max-host.workspace = true
 l6fw.workspace = true
+firmware-patch-core.workspace = true
 sha2.workspace = true
 libc.workspace = true
 image.workspace = true

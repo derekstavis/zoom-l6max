@@ -139,6 +139,23 @@ fn find_unit(name: &str, model: FirmwareModel, base: u32) -> Result<Unit, String
     ))
 }
 
+/// The patches that apply to `package`, or why none do.
+pub fn available_patches(package: &[u8]) -> Result<Vec<&'static str>, String> {
+    let model = match l6fw::model_from_package(package)? {
+        l6fw::Model::L6 => FirmwareModel::L6,
+        l6fw::Model::L6max => FirmwareModel::L6max,
+    };
+    let (_, segments) = l6fw::unpack_bytes(package)?;
+    let firmware = segments
+        .get("main_firmware.bin")
+        .ok_or("package has no main_firmware.bin segment")?;
+    verify_firmware_for(model, firmware)?;
+    Ok(match model {
+        FirmwareModel::L6 => vec!["midi-sync"],
+        FirmwareModel::L6max => PATCHES.to_vec(),
+    })
+}
+
 /// Applies `selected` (a non-empty subset of `firmware_patch_core::PATCHES`,
 /// any order) to `package` — a full Zoom update package, byte for byte what
 /// `l6fw::unpack`/`repack` round-trip — and returns the patched package plus

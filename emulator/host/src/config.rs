@@ -28,6 +28,9 @@ pub struct Config {
 #[serde(deny_unknown_fields)]
 struct Emulator {
     sd_card: Option<PathBuf>,
+    /// Firmware patches to run, applied to the stock package.
+    #[serde(default)]
+    patches: Vec<String>,
     /// WAV files by input channel.
     #[serde(default)]
     input_patch: BTreeMap<String, PathBuf>,
@@ -48,6 +51,17 @@ pub fn parse_model(name: &str) -> Result<l6fw::Model, String> {
     }
 }
 
+pub fn check_patch(name: &str) -> Result<(), String> {
+    if firmware_patch_core::PATCHES.contains(&name) {
+        Ok(())
+    } else {
+        Err(format!(
+            "unknown patch {name}; patches are {}",
+            firmware_patch_core::PATCHES.join(", ")
+        ))
+    }
+}
+
 impl Config {
     pub fn parse(text: &str) -> Result<Self, String> {
         let config: Self = toml::from_str(text).map_err(|e| e.to_string())?;
@@ -59,6 +73,12 @@ impl Config {
         }
         for model in config.firmware.keys().chain(config.emulator.keys()) {
             parse_model(model)?;
+        }
+        for emulator in config.emulator.values() {
+            emulator
+                .patches
+                .iter()
+                .try_for_each(|name| check_patch(name))?;
         }
         Ok(config)
     }
@@ -93,6 +113,12 @@ impl Config {
 
     pub fn sd_card(&self, model: l6fw::Model) -> Option<&PathBuf> {
         self.emulator.get(model_name(model))?.sd_card.as_ref()
+    }
+
+    pub fn patches(&self, model: l6fw::Model) -> &[String] {
+        self.emulator
+            .get(model_name(model))
+            .map_or(&[], |emulator| &emulator.patches)
     }
 
     /// A model's files by one-based channel, without checking that they exist, so
@@ -207,6 +233,17 @@ pub fn save_sd_card(path: &Path, model: l6fw::Model, card: &Path) -> Result<(), 
     })
 }
 
+pub fn save_patches(path: &Path, model: l6fw::Model, patches: &[String]) -> Result<(), String> {
+    edit(path, |document| {
+        let emulator = emulator_table(document, model);
+        if patches.is_empty() {
+            emulator.remove("patches");
+        } else {
+            emulator["patches"] = toml_edit::value(patches.iter().collect::<toml_edit::Array>());
+        }
+    })
+}
+
 pub fn save_input_patch(
     path: &Path,
     model: l6fw::Model,
@@ -238,6 +275,7 @@ mod tests {
         assert!(Config::parse("version=1\n[firmware]\nl7='x'").is_err());
         assert!(Config::parse("version=1\n[emulator.l7]\nsd_card='x'").is_err());
         assert!(Config::parse("version=1\n[test]\nqemu='q'").is_err());
+        assert!(Config::parse("version=1\n[emulator.l6]\npatches=['nope']").is_err());
         let config = Config::parse(
             "version=1\n[emulator.l6.input_patch]\n1='/missing.wav'\n[emulator.l6max.input_patch]\n9='/x.wav'",
         )
@@ -313,6 +351,13 @@ mod tests {
             config.input_patch(l6fw::Model::L6).unwrap().unwrap()[&2],
             wav
         );
+        save_patches(&file, l6fw::Model::L6, &["midi-sync".to_owned()]).unwrap();
+        assert_eq!(
+            Config::load(&file).unwrap().patches(l6fw::Model::L6),
+            ["midi-sync"]
+        );
+        save_patches(&file, l6fw::Model::L6, &[]).unwrap();
+        assert!(!fs::read_to_string(&file).unwrap().contains("patches"));
         save_input_patch(&file, l6fw::Model::L6, &BTreeMap::new()).unwrap();
         assert!(
             Config::load(&file)
