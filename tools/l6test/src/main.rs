@@ -39,6 +39,7 @@ struct Fixture {
     model: String,
     firmware_package: Option<PathBuf>,
     patches: Vec<String>,
+    installed_patches: Vec<String>,
     update_package: Option<PathBuf>,
     state_spec: Option<PathBuf>,
     card_spec: Option<PathBuf>,
@@ -340,6 +341,7 @@ fn case_fixture(
         model: model.into(),
         firmware_package: Some(firmware.clone()),
         patches: scenario.map_or_else(Vec::new, |s| s.patches.clone()),
+        installed_patches: scenario.map_or_else(Vec::new, |s| s.installed_patches.clone()),
         update_package: None,
         state_spec: state.map(|name| spec("states", name)),
         card_spec: card.map(|name| spec("cards", name)),
@@ -518,6 +520,9 @@ fn fixture_options(
     if let Some(package) = &fixture.update_package {
         args.extend(["--update-package".into(), package.clone().into_os_string()]);
     }
+    for patch in &fixture.installed_patches {
+        args.extend(["--patch".into(), patch.into()]);
+    }
     let options = Options::parse_args(args)?;
     let manifest = json!({"fixture":fixture.name,"model":fixture.model,"firmware":files(&firmware)?,"package_sha256":selected_package.as_ref().map(|p|hash(p)).transpose()?,"patches":fixture.patches,"update_package_sha256":fixture.update_package.as_ref().map(|p|hash(p)).transpose()? ,"state_spec":state_spec,"sd_sha256":sd_hash,"audio_device":audio_device,"qemu_sha256":config.qemu_sha256});
     Ok((options, manifest))
@@ -552,6 +557,9 @@ fn engine_args(options: &Options) -> Vec<String> {
     }
     if let Some(package) = &options.update_package {
         result.extend(["--update-package".into(), package.display().to_string()]);
+    }
+    for patch in options.patches.iter().flatten() {
+        result.extend(["--patch".into(), patch.clone()]);
     }
     if options.update_bootloader {
         result.push("--update-bootloader".into());
@@ -1399,6 +1407,7 @@ mod tests {
             model: "l6".into(),
             firmware_package: None,
             patches: vec![],
+            installed_patches: vec![],
             update_package: None,
             state_spec: None,
             card_spec: None,

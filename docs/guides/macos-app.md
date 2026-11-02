@@ -23,6 +23,20 @@ the guest. Cancelling the picker or choosing an invalid package keeps the
 running guest. The app remembers a successfully started selection for the
 next launch; the original selected file can then be moved or deleted.
 
+## Apply firmware patches
+
+Choose **File → Firmware Patches…**, select the patches and click **Apply and
+Restart**. The window closes and the main window shows progress while the guest
+restarts running them, and your settings are kept. If the selection cannot apply,
+the guest keeps running and the window reopens to explain why. The app
+saves the selection per model and applies it at each launch. Clear every patch
+to return to the stock firmware.
+
+L6max offers `knob-dialog`, `midi-sync` and `din-mixer-control`; L6 offers
+`midi-sync`. Patches apply only to the stock 1.10 package, and the window says so
+when the selected firmware is another. The patches ship in the app and
+need no compiler. See the [patch catalog](../../patches/README.md).
+
 The supported package layout and revision scope are described in
 [firmware packages](firmware-packages.md). The application validates integrity,
 not manufacturer authenticity.
@@ -160,4 +174,6 @@ L6_MENU_SMOKE_FIRMWARE=/path/to/stock/L6max.bin \
 This dispatches the File menu actions through GPUI, checks the native file and
 directory pickers, and cancels them through AppKit. It checks Open Firmware
 before and after loading a guest, repeated invocation after cancellation, and
-that cancellation keeps the guest running. Use a fresh data directory.
+that cancellation keeps the guest running, and that applying and removing a
+firmware patch changes the application on the saved device. Use a fresh data
+directory.

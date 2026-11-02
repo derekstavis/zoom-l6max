@@ -2936,6 +2936,7 @@ version = "0.1.0"
 name = "l6max-gui"
 version = "0.1.0"
 dependencies = [
+ "firmware-patch-core",
  "gpui",
  "gpui_platform",
  "image",
@@ -2959,6 +2960,8 @@ version = "0.1.0"
 dependencies = [
  "alsa",
  "coremidi",
+ "firmware-patch-core",
+ "firmware-patch-wasm",
  "l6fw",
  "libc",
  "memmap2",

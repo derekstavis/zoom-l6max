@@ -32,6 +32,8 @@ pub struct Options {
     pub defer_input_patch: bool,
     /// Where the GUI saves its selections.
     pub config_path: Option<PathBuf>,
+    /// Patches chosen for this run in place of the configured ones.
+    pub patches: Option<Vec<String>>,
     /// Which configured firmware to run; L6max when both are configured.
     pub model: Option<l6fw::Model>,
     pub firmware_dir: PathBuf,
@@ -152,6 +154,15 @@ impl Options {
         Ok(())
     }
 
+    /// The patches a model runs with.
+    pub fn selected_patches(&self, model: l6fw::Model) -> Vec<String> {
+        self.patches.clone().unwrap_or_else(|| {
+            self.config
+                .as_ref()
+                .map_or_else(Vec::new, |config| config.patches(model).to_vec())
+        })
+    }
+
     /// Reread the configuration after saving a change to it.
     pub fn reload_config(&mut self) -> Result<(), String> {
         if let Some(file) = &self.config_path {
@@ -172,6 +183,7 @@ impl Options {
             config: None,
             defer_input_patch: false,
             config_path: None,
+            patches: None,
             model: None,
             firmware_dir: workspace.join("unpacked"),
             firmware_package: env::var_os("L6_FIRMWARE").map(PathBuf::from),
@@ -192,6 +204,7 @@ impl Options {
             start_paused: false,
         };
         let mut config_file = None;
+        let mut no_patches = false;
         let mut args = arguments.into_iter();
         while let Some(arg) = args.next() {
             match arg.to_string_lossy().as_ref() {
@@ -200,6 +213,13 @@ impl Options {
                     let name = args.next().ok_or("--model requires l6 or l6max")?;
                     options.model = Some(crate::config::parse_model(&name.to_string_lossy())?);
                 }
+                "--patch" => {
+                    let name = args.next().ok_or("--patch requires a patch name")?;
+                    let name = name.to_string_lossy().into_owned();
+                    crate::config::check_patch(&name)?;
+                    options.patches.get_or_insert_default().push(name);
+                }
+                "--no-patches" => no_patches = true,
                 "--ui-input-smoke" => {
                     return Err("the standalone UI smoke was migrated; run `cargo run -p l6test -- run --case panel --model MODEL --backend gui` instead".into());
                 }
@@ -239,7 +259,7 @@ impl Options {
                 "--volatile" => options.state_dir = None,
                 "--help" | "-h" => {
                     println!(
-                        "Engine options: [QEMU] [--qemu PATH] [--audio-device 'driver=...,id=...'] [--config FILE] [--model l6|l6max] [--firmware-dir DIR | --firmware-package PACKAGE] [--update-package PACKAGE] [--no-auto-setup] [--logs DIR] [--state-dir DIR | --volatile] [--sd-image FILE | --no-sd] [--update-bootloader] [--usb] [--midi] [--trace-sd] [--smoke-scenario FILE] [--gdb-socket PATH] [--control-socket PATH] [--start-paused]"
+                        "Engine options: [QEMU] [--qemu PATH] [--audio-device 'driver=...,id=...'] [--config FILE] [--model l6|l6max] [--patch NAME]... [--no-patches] [--firmware-dir DIR | --firmware-package PACKAGE] [--update-package PACKAGE] [--no-auto-setup] [--logs DIR] [--state-dir DIR | --volatile] [--sd-image FILE | --no-sd] [--update-bootloader] [--usb] [--midi] [--trace-sd] [--smoke-scenario FILE] [--gdb-socket PATH] [--control-socket PATH] [--start-paused]"
                     );
                     std::process::exit(0);
                 }
@@ -250,6 +270,12 @@ impl Options {
         }
         if options.no_sd && options.sd_image.is_some() {
             return Err("--no-sd conflicts with --sd-image".into());
+        }
+        if no_patches {
+            if options.patches.is_some() {
+                return Err("--no-patches conflicts with --patch".into());
+            }
+            options.patches = Some(Vec::new());
         }
         options.qemu = options.qemu.or_else(crate::setup::existing_qemu);
         options.apply_config(config_file, &workspace)?;
@@ -353,7 +379,13 @@ impl Engine {
                 .map_err(|e| format!("replacement update bootloader: {e}"))?;
             fs::write(logs.join("update-bootloader.log"), format!("{outcome:?}\n"))
                 .map_err(|e| e.to_string())?;
+            if outcome == crate::update_bootloader::Outcome::Installed {
+                crate::firmware_patches::forget_installed(state)?;
+            }
         }
+        let firmware = crate::firmware_patches::prepare(options, &firmware, model)?
+            .canonicalize()
+            .map_err(|e| e.to_string())?;
         engine.display_memory = Some(
             SharedRam::new(crate::display::DISPLAY_BYTES)
                 .map_err(|e| format!("create anonymous display memory: {e}"))?,

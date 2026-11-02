@@ -86,6 +86,46 @@ fn install_l6_package(package: &[u8], nor: &mut [u8]) -> io::Result<Vec<u8>> {
     resource_flash[..resource.len()].copy_from_slice(resource);
     Ok(resource_flash)
 }
+/// Replace only the application on an installed device, keeping its settings. A
+/// device with no NOR yet is seeded from the same images when it first boots.
+pub fn install_application(
+    state: &Path,
+    main: &[u8],
+    trailer: &[u8],
+    footer: &[u8],
+) -> io::Result<()> {
+    if main.len() > 0x1a2ff8 || trailer.len() != 8 || footer.len() != 0x40 {
+        return Err(invalid("application exceeds its installed flash region"));
+    }
+    let mut file = match OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(state.join("main-nor.bin"))
+    {
+        Ok(file) => file,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e),
+    };
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if file.metadata()?.len() == 0 {
+        return Ok(());
+    }
+    if file.metadata()?.len() != NOR_SIZE as u64 {
+        return Err(invalid("installed NOR must be exactly 2 MiB"));
+    }
+    let mut nor = Vec::new();
+    file.read_to_end(&mut nor)?;
+    nor[0x50000..0x1f2ff8].fill(0xff);
+    nor[0x50000..0x50000 + main.len()].copy_from_slice(main);
+    nor[0x1f2ff8..0x1f3000].copy_from_slice(trailer);
+    nor[0x1f7fc0..0x1f8000].copy_from_slice(footer);
+    file.seek(SeekFrom::Start(0))?;
+    file.write_all(&nor)?;
+    file.sync_all()
+}
+
 /// Existing NOR is exclusively locked; QEMU's storage lock prevents running
 /// this installer against a live guest. No update is attempted without a marker.
 pub fn install(state: &Path, card: Option<&Path>, model: l6fw::Model) -> io::Result<Outcome> {
@@ -167,6 +207,31 @@ pub fn install(state: &Path, card: Option<&Path>, model: l6fw::Model) -> io::Res
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn installing_an_application_keeps_everything_else_on_the_device() {
+        let directory =
+            std::env::temp_dir().join(format!("l6-install-application-{}", std::process::id()));
+        fs::create_dir_all(&directory).unwrap();
+        // Nothing to replace yet: the first boot seeds the device.
+        install_application(&directory, &[1; 16], &[2; 8], &[3; 0x40]).unwrap();
+        assert!(!directory.join("main-nor.bin").exists());
+
+        let before = vec![0x55; NOR_SIZE];
+        fs::write(directory.join("main-nor.bin"), &before).unwrap();
+        install_application(&directory, &[1; 16], &[2; 8], &[3; 0x40]).unwrap();
+        let nor = fs::read(directory.join("main-nor.bin")).unwrap();
+        assert_eq!(nor[..0x50000], before[..0x50000]);
+        assert_eq!(nor[0x50000..0x50010], [1; 16]);
+        assert!(nor[0x50010..0x1f2ff8].iter().all(|&byte| byte == 0xff));
+        assert_eq!(nor[0x1f2ff8..0x1f3000], [2; 8]);
+        // Panel image, then settings and the update marker.
+        assert_eq!(nor[0x1f3000..0x1f7fc0], before[0x1f3000..0x1f7fc0]);
+        assert_eq!(nor[0x1f7fc0..0x1f8000], [3; 0x40]);
+        assert_eq!(nor[0x1f8000..], before[0x1f8000..]);
+        assert!(install_application(&directory, &vec![0; 0x1a2ff9], &[2; 8], &[3; 0x40]).is_err());
+        fs::remove_dir_all(directory).unwrap();
+    }
 
     fn package() -> Vec<u8> {
         let mut p = vec![0; PACKAGE_SIZE];

@@ -12,11 +12,14 @@ model = "l6max"
 l6 = "/absolute/path/to/L6.BIN"
 l6max = "/absolute/path/to/L6max.bin"
 
-# Settings for each model's emulator: its SD card, and the audio its input channels
-# play, 1-8 on L6max and 1-6 on L6, from WAV files of any common rate and depth.
+# Settings for each model's emulator: its SD card, the firmware patches it runs, and
+# the audio its input channels play, 1-8 on L6max and 1-6 on L6, from WAV files of any
+# common rate and depth. Patches are knob-dialog, midi-sync and din-mixer-control on
+# L6max, and midi-sync on L6.
 #
 # [emulator.l6max]
 # sd_card = "/absolute/path/to/card.img"
+# patches = ["knob-dialog", "midi-sync"]
 #
 # [emulator.l6max.input_patch]
 # 1 = "/absolute/path/to/kick.wav"

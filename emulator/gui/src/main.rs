@@ -7,13 +7,14 @@ mod configuration;
 mod headless_screenshot;
 mod knob_input;
 mod menu_smoke;
+mod patches_window;
 mod scenario_smoke;
 
 use components::layout::Layout;
 use gpui::{
-    App, Bounds, Context, CursorStyle, ImageSource, KeyBinding, Menu, MenuItem, MouseButton,
-    PathPromptOptions, Render, RenderImage, SharedString, Window, WindowBounds, WindowOptions,
-    actions, div, img, prelude::*, px, rgb, rgba, size,
+    AnimationExt, App, Bounds, Context, CursorStyle, ImageSource, KeyBinding, Menu, MenuItem,
+    MouseButton, PathPromptOptions, Render, RenderImage, SharedString, Window, WindowBounds,
+    WindowOptions, actions, div, img, prelude::*, px, rgb, rgba, size,
 };
 use gpui_platform::application;
 use image::{Frame, ImageBuffer, Rgba};
@@ -115,6 +116,7 @@ actions!(
         ConnectMidi,
         DisconnectMidi,
         EjectSdCard,
+        OpenPatchesWindow,
         OpenAudioWindow,
         PlayAudioInputs,
         PauseAudioInputs,
@@ -128,6 +130,12 @@ struct NativePanel {
     window_model: l6fw::Model,
     window_settling_frames: u8,
     audio_window: Option<gpui::WindowHandle<audio_window::AudioWindow>>,
+    patches_window: Option<gpui::WindowHandle<patches_window::PatchesWindow>>,
+    /// Set while a restart for a new patch selection runs in the background.
+    applying_patches: bool,
+    patch_error: Option<String>,
+    /// The engine that restart is starting, locked for as long as it takes.
+    starting_engine: Arc<Mutex<Option<Engine>>>,
     /// Files assigned to input channels, by one-based channel.
     audio_patch: std::collections::BTreeMap<u32, std::path::PathBuf>,
     /// Set while files convert, with each channel's progress.
@@ -310,7 +318,11 @@ impl NativePanel {
     }
 
     fn choose_firmware(&mut self, cx: &mut Context<Self>) {
-        if self.bundle.is_none() || self.choosing_firmware || self.importing_sd {
+        if self.bundle.is_none()
+            || self.choosing_firmware
+            || self.importing_sd
+            || self.applying_patches
+        {
             return;
         }
         self.choosing_firmware = true;
@@ -344,7 +356,11 @@ impl NativePanel {
     }
 
     fn choose_sd_folder(&mut self, cx: &mut Context<Self>) {
-        if self.bundle.is_none() || self.choosing_firmware || self.importing_sd {
+        if self.bundle.is_none()
+            || self.choosing_firmware
+            || self.importing_sd
+            || self.applying_patches
+        {
             return;
         }
         if self.controls.is_none() {
@@ -406,6 +422,130 @@ impl NativePanel {
                     cx.notify();
                 });
             }
+        })
+        .detach();
+    }
+
+    /// Open the firmware patches window, or bring it forward if it is already open.
+    fn open_patches_window(&mut self, cx: &mut Context<Self>) {
+        if self.applying_patches {
+            return;
+        }
+        if self.patches_window.is_some_and(|window| {
+            window
+                .update(cx, |_, window, _| window.activate_window())
+                .is_ok()
+        }) {
+            return;
+        }
+        // Opening draws the window, which reads this panel: finish this update first.
+        let panel = cx.entity();
+        cx.defer(move |cx| {
+            let bounds = Bounds::centered(None, size(px(patches_window::WIDTH), px(300.0)), cx);
+            let view = panel.clone();
+            let window = cx.open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(bounds)),
+                    is_resizable: false,
+                    ..Default::default()
+                },
+                |window, cx| {
+                    window.set_window_title("Firmware Patches");
+                    cx.new(|cx| patches_window::PatchesWindow::new(view, cx))
+                },
+            );
+            panel.update(cx, |panel, cx| match window {
+                Ok(window) => panel.patches_window = Some(window),
+                Err(error) => {
+                    panel.status = format!("Could not open the patches window: {error}").into();
+                    cx.notify();
+                }
+            });
+        });
+    }
+
+    /// The patches the configuration lists for this model.
+    fn saved_patches(&self) -> Vec<String> {
+        self.options
+            .config
+            .as_ref()
+            .map_or_else(Vec::new, |config| config.patches(self.model).to_vec())
+    }
+
+    /// Restart the guest running `selected` without blocking the UI, and save the
+    /// choice once it has started. A selection that cannot apply keeps the guest running.
+    fn apply_patches(&mut self, selected: Vec<String>, cx: &mut Context<Self>) {
+        if self.applying_patches {
+            return;
+        }
+        self.applying_patches = true;
+        self.patch_error = None;
+        cx.notify();
+        let mut options = self.options.clone();
+        options.patches = Some(selected.clone());
+        let previous = self.options.patches.clone();
+        let model = self.model;
+        let starting = self.starting_engine.clone();
+        cx.spawn(async move |this, cx| {
+            let checked = {
+                let (options, selected) = (options.clone(), selected.clone());
+                cx.background_spawn(async move {
+                    l6max_host::firmware_patches::check(&options, model, &selected)
+                })
+                .await
+            };
+            let result = match checked {
+                Err(error) => Err(error),
+                Ok(()) => {
+                    let Ok((old, start, startup_keys)) = this.update(cx, |panel, cx| {
+                        panel.physical_analog = [512; 5];
+                        let old = panel.stop_guest(options);
+                        let (start, startup_keys) = panel.start_options();
+                        cx.notify();
+                        (old, start, startup_keys)
+                    }) else {
+                        return;
+                    };
+                    let started = cx
+                        .background_spawn(async move {
+                            // Quitting waits on this, so that no QEMU outlives the app.
+                            let mut engine = starting.lock().unwrap();
+                            drop(old);
+                            *engine = Some(Engine::start(&start)?);
+                            Ok::<_, String>(())
+                        })
+                        .await;
+                    let adopted = this.update(cx, |panel, _| {
+                        started.and_then(|()| {
+                            let engine = panel.starting_engine.lock().unwrap().take().unwrap();
+                            panel.adopt_engine(engine, &startup_keys)?;
+                            if let Some(path) = panel.options.config_path.clone() {
+                                l6max_host::config::save_patches(&path, panel.model, &selected)?;
+                                panel.options.reload_config()?;
+                                panel.options.patches = None;
+                            }
+                            Ok(())
+                        })
+                    });
+                    let Ok(adopted) = adopted else {
+                        return;
+                    };
+                    adopted
+                }
+            };
+            let _ = this.update(cx, |panel, cx| {
+                panel.applying_patches = false;
+                if let Err(error) = result {
+                    panel.options.patches = previous;
+                    // With no guest left, the main window has to say why.
+                    if panel.controls.is_none() {
+                        panel.firmware_error = Some(error.clone());
+                    }
+                    panel.patch_error = Some(error);
+                    panel.open_patches_window(cx);
+                }
+                cx.notify();
+            });
         })
         .detach();
     }
@@ -738,9 +878,15 @@ impl NativePanel {
     }
 
     fn restart_with_options(&mut self, options: Options) -> Result<(), String> {
+        drop(self.stop_guest(options));
+        self.power_on()
+    }
+
+    /// Stop using the running guest, and return it for the caller to shut down.
+    fn stop_guest(&mut self, options: Options) -> Option<Engine> {
         self.display.take();
         self.controls.take();
-        drop(self._qemu.take());
+        let engine = self._qemu.take();
         self.options = options;
         for button in &self.button_pressed {
             button.store(false, std::sync::atomic::Ordering::Relaxed);
@@ -752,17 +898,27 @@ impl NativePanel {
         self.last_frame = [0; 1024];
         self.power_on_requested
             .store(false, std::sync::atomic::Ordering::Relaxed);
-        self.power_on()
+        engine
     }
 
-    fn power_on(&mut self) -> Result<(), String> {
+    /// What the next engine starts with, and the startup keys to give it.
+    fn start_options(&self) -> (Options, Vec<u32>) {
         let startup_keys = startup_key_targets(self.model, &self.layout, &self.button_pressed);
         let mut options = self.options.clone();
         options.defer_input_patch = true;
         if !startup_keys.is_empty() {
             options.start_paused = true;
         }
+        (options, startup_keys)
+    }
+
+    fn power_on(&mut self) -> Result<(), String> {
+        let (options, startup_keys) = self.start_options();
         let engine = Engine::start(&options)?;
+        self.adopt_engine(engine, &startup_keys)
+    }
+
+    fn adopt_engine(&mut self, engine: Engine, startup_keys: &[u32]) -> Result<(), String> {
         if self.model != engine.model() {
             self.layout = Layout::for_model(engine.model());
         }
@@ -775,8 +931,8 @@ impl NativePanel {
             .restore_analog_positions(self.physical_analog)
             .map_err(|e| e.to_string())?;
         if !startup_keys.is_empty() {
-            queue_startup_keys(&engine, &controls, &startup_keys)?;
-            for target in &startup_keys {
+            queue_startup_keys(&engine, &controls, startup_keys)?;
+            for target in startup_keys {
                 self.button_pressed[*target as usize]
                     .store(false, std::sync::atomic::Ordering::Relaxed);
             }
@@ -885,6 +1041,7 @@ impl Render for NativePanel {
         let lcd_height = LCD_BUFFER_HEIGHT as f32 * lcd_scale;
         let interactions = self.panel_interactions(scale);
         let show_selection = self.bundle.is_some()
+            && !self.applying_patches
             && (self.controls.is_none() && !self.powered_off || self.firmware_error.is_some());
         let drag_move = interactions.encoder_drag_move.clone();
         let channels = components::layout::interactive_knob_indices(self.model);
@@ -941,6 +1098,23 @@ impl Render for NativePanel {
                         div()
                     })
             )
+            .when(self.applying_patches, |element| {
+                element.child(
+                    div()
+                        .absolute()
+                        .size_full()
+                        .occlude()
+                        .bg(rgba(0x080c18dd))
+                        .flex()
+                        .flex_col()
+                        .gap_3()
+                        .items_center()
+                        .justify_center()
+                        .text_color(rgb(0xe8eef8))
+                        .child("Applying firmware patches…")
+                        .child(progress("panel-applying", 240.0)),
+                )
+            })
             .when(show_selection, |element| element.child(
                 div().absolute().size_full().occlude().bg(rgba(0x080c18dd))
                     .flex().items_center().justify_center()
@@ -968,6 +1142,31 @@ impl Render for NativePanel {
                     )
             ))
     }
+}
+
+/// An indicator for work of unknown length.
+fn progress(id: &'static str, width: f32) -> gpui::Div {
+    let segment = width / 3.0;
+    div()
+        .relative()
+        .w(px(width))
+        .h(px(6.0))
+        .rounded_sm()
+        .overflow_hidden()
+        .bg(rgb(0x171d2c))
+        .child(
+            div()
+                .absolute()
+                .h_full()
+                .w(px(segment))
+                .rounded_sm()
+                .bg(rgb(0x5b8def))
+                .with_animation(
+                    id,
+                    gpui::Animation::new(Duration::from_millis(1200)).repeat(),
+                    move |bar, delta| bar.left(px(delta * (width + segment) - segment)),
+                ),
+        )
 }
 
 #[cfg(target_os = "macos")]
@@ -1218,6 +1417,10 @@ fn main() {
                         window_model: model,
                         window_settling_frames: 0,
                         audio_window: None,
+                        patches_window: None,
+                        applying_patches: false,
+                        patch_error: None,
+                        starting_engine: Arc::new(Mutex::new(None)),
                         audio_patch,
                         audio_conversion: None,
                         audio_sync_needed: true,
@@ -1272,6 +1475,16 @@ fn main() {
             });
         });
         cx.on_action(|_: &Quit, cx| cx.quit());
+        cx.on_action(move |_: &OpenPatchesWindow, cx| {
+            cx.defer(move |cx| {
+                if let Err(error) = view.update(cx, |panel, _, cx| {
+                    panel.patch_error = None;
+                    panel.open_patches_window(cx)
+                }) {
+                    tracing::error!(%error, "Patches window action failed");
+                }
+            });
+        });
         cx.on_action(move |_: &OpenAudioWindow, cx| {
             cx.defer(move |cx| {
                 if let Err(error) = view.update(cx, |panel, _, cx| panel.open_audio_window(cx)) {
@@ -1361,6 +1574,7 @@ fn main() {
             Menu::new("L6 Emulator").items([MenuItem::action("Quit L6 Emulator", Quit)]),
             Menu::new("File").items([
                 MenuItem::action("Open Firmware…", OpenFirmware).disabled(!bundled),
+                MenuItem::action("Firmware Patches…", OpenPatchesWindow),
                 MenuItem::action("Use SD Card Folder…", OpenSdFolder).disabled(!bundled),
                 MenuItem::action("Eject SD Card", EjectSdCard),
             ]),
@@ -1395,6 +1609,7 @@ fn main() {
                 // Platform termination does not necessarily unwind Rust.
                 // Stop and reap QEMU before permitting the app to exit.
                 drop(panel._qemu.take());
+                drop(panel.starting_engine.lock().unwrap().take());
                 std::future::ready(())
             })
             .detach();
