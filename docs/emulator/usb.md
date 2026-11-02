@@ -247,10 +247,10 @@ restarting the guest with the same card image.
 
 ```sh
 cargo test -p l6max-host --lib
-cargo run --offline --locked -p l6test -- run --case storage-empty --model l6 --config smoke.local.toml
-cargo run --offline --locked -p l6test -- run --case storage --model l6max --config smoke.local.toml
-cargo run --offline --locked -p l6test -- run --case usb --model l6max --config smoke.local.toml
-cargo run --offline --locked -p l6test -- run --case usb-storage --model l6max --config smoke.local.toml
+cargo run --offline --locked -p l6test -- run --case storage-empty --model l6 --config config.toml
+cargo run --offline --locked -p l6test -- run --case storage --model l6max --config config.toml
+cargo run --offline --locked -p l6test -- run --case usb --model l6max --config config.toml
+cargo run --offline --locked -p l6test -- run --case usb-storage --model l6max --config config.toml
 ```
 
 The `usb-storage` driver case writes back an unchanged sector and checks the

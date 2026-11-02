@@ -107,7 +107,7 @@ below hold the detailed traces and validation evidence.
 | Item | Scope and evidence | Change or removal criterion |
 | --- | --- | --- |
 | Power cutoff fallback | L6 only. QEMU cuts virtual power after a 500 ms press because the stock L6 shutdown GPIO edge/path is unconfirmed. The interval is synthetic. | Replace it when the L6 firmware power-switch input, shutdown callback and expected board power signal are established. See [power behavior](power.md). |
-| Codec and analog input | L6max codec addresses `0x4c`/`0x4d` accept observed writes through register-bank slaves; physical codec identity is not confirmed. ADC samples are host controlled, with conversion timing and analog sources approximated. SAI RX input is silent. | Expand or replace these models when component identity, register transactions, timing and physical signal routing are established. See [audio model](audio.md) and [manual audit](manual-audit.md). |
+| Codec and analog input | L6max codec addresses `0x4c`/`0x4d` accept observed writes through register-bank slaves; physical codec identity is not confirmed. ADC samples are host controlled, with conversion timing and analog sources approximated. SAI RX input comes only from assigned files. | Expand or replace these models when component identity, register transactions, timing and physical signal routing are established. See [audio model](audio.md) and [manual audit](manual-audit.md). |
 | Partial peripheral behavior | RT eDMA/SAI/LPI2C/LPSPI/LPUART/ADC and FlexSPI use firmware-focused implementations because the pinned QEMU tree has no compatible RT1041 drop-in blocks. Observed paths are modeled, while unobserved commands, timing, flags and features remain incomplete; UART and LPI2C timing are approximate. | Implement additional semantics when firmware traces exercise them or manual-based checks require them. Do not treat a passing firmware smoke as full peripheral conformance; use the [manual audit](manual-audit.md) to track coverage. |
 | Clock and oscillator assumptions | The SAI frame cadence uses the firmware's nominal 24.576 MHz source value; bootloader-inherited clock roots are unverified. Several PLL/oscillator transitions settle immediately on virtual time. | Replace assumptions with established bootloader clock state and documented transition timing. See [clock findings](manual-audit.md#findings). |
 
@@ -280,8 +280,8 @@ Some scanned panel coordinates remain unlabelled.
 Run the live integration check:
 
 ```sh
-cargo run --offline --locked -p l6test -- run --case l6-input-sweep --model l6 --config smoke.local.toml
-cargo run --offline --locked -p l6test -- run --case l6max-input-smoke --model l6max --config smoke.local.toml
+cargo run --offline --locked -p l6test -- run --case l6-input-sweep --model l6 --config config.toml
+cargo run --offline --locked -p l6test -- run --case l6max-input-smoke --model l6max --config config.toml
 ```
 
 On L6max it checks published display changes, exact press/release counts,
@@ -320,7 +320,7 @@ update paths needed by the supported firmware. Panel flash programming updates
 executable memory; reset and boot selection hold the panel CPU while it is
 programmed. Each chip's guest-requested reset is local.
 
-The audio clock feeds silent SAI RX frames and can send SAI1 TX frames to a
+The audio clock feeds SAI RX frames, silent unless [input](audio.md#input) is playing, and can send SAI1 TX frames to a
 configured QEMU audio backend. The board executes request-paced transfers for
 two full-duplex SAI paths on L6 and one on L6max. See [audio emulation](audio.md)
 and [current status](../development/current-status.md).

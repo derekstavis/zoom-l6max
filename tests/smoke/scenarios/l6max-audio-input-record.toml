@@ -1,0 +1,143 @@
+version = 1
+name = "l6max-audio-input-record"
+models = ["l6max"]
+state = "audio-input"
+card = "empty"
+backends = ["headless"]
+
+[[audio_input]]
+channel = 1
+loop-tone = { hz = 300.0, seconds = 1.0, amplitude = 0.004 }
+
+[[audio_input]]
+channel = 2
+loop-tone = { hz = 500.0, seconds = 1.0, amplitude = 0.05 }
+
+[[audio_input]]
+channel = 3
+loop-tone = { hz = 700.0, seconds = 1.0, amplitude = 0.004 }
+
+[[audio_input]]
+channel = 4
+loop-tone = { hz = 900.0, seconds = 1.0, amplitude = 0.004 }
+
+[[audio_input]]
+channel = 5
+loop-tone = { hz = 1100.0, seconds = 1.0, amplitude = 0.02 }
+
+[[audio_input]]
+channel = 6
+loop-tone = { hz = 1300.0, seconds = 1.0, amplitude = 0.02 }
+
+[[audio_input]]
+channel = 7
+loop-tone = { hz = 1700.0, seconds = 1.0, amplitude = 0.02 }
+
+[[audio_input]]
+channel = 8
+loop-tone = { hz = 1900.0, seconds = 1.0, amplitude = 0.02 }
+
+[[step]]
+action = "audio-input-transport"
+command = "play"
+
+[[step]]
+action = "wait"
+until = "mixer-ready"
+guest_timeout_ms = 60000
+wall_timeout_s = 900
+
+[[step]]
+action = "delay"
+guest_ms = 8000
+guest_timeout_ms = 20000
+wall_timeout_s = 300
+
+[[step]]
+action = "press"
+control = "rec-record"
+
+[[step]]
+action = "delay"
+guest_ms = 5000
+guest_timeout_ms = 20000
+wall_timeout_s = 300
+
+[[step]]
+action = "press"
+control = "rec-play-stop"
+
+[[step]]
+action = "delay"
+guest_ms = 5000
+guest_timeout_ms = 20000
+wall_timeout_s = 300
+
+# Tracks hold each channel before its fader, alone, on the matching track number.
+[[step]]
+action = "expect-recorded-tone"
+file = "TRACK01_01.wav"
+hz = 300.0
+left_db = -33.0
+right_db = -33.0
+
+[[step]]
+action = "expect-recorded-tone"
+file = "TRACK02_01.wav"
+hz = 500.0
+left_db = -11.0
+right_db = -11.0
+
+[[step]]
+action = "expect-recorded-tone"
+file = "TRACK03_01.wav"
+hz = 700.0
+left_db = -33.0
+right_db = -33.0
+
+[[step]]
+action = "expect-recorded-tone"
+file = "TRACK04_01.wav"
+hz = 900.0
+left_db = -33.0
+right_db = -33.0
+
+[[step]]
+action = "expect-recorded-tone"
+file = "TRACK05_ST_01.wav"
+hz = 1100.0
+left_db = -28.0
+right_db = -28.0
+
+[[step]]
+action = "expect-recorded-tone"
+file = "TRACK06_ST_01.wav"
+hz = 1300.0
+left_db = -28.0
+right_db = -28.0
+
+[[step]]
+action = "expect-recorded-tone"
+file = "TRACK07_ST_01.wav"
+hz = 1700.0
+left_db = -28.0
+right_db = -28.0
+
+[[step]]
+action = "expect-recorded-tone"
+file = "TRACK08_ST_01.wav"
+hz = 1900.0
+left_db = -28.0
+right_db = -28.0
+
+[[step]]
+action = "expect-recorded-tone"
+file = "MASTER_01.wav"
+hz = 500.0
+left_db = -47.9
+right_db = -47.9
+
+[[step]]
+action = "expect-recorded-tone"
+file = "TRACK01_01.wav"
+hz = 500.0

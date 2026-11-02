@@ -398,6 +398,7 @@ suites = ["full"]
 models = ["l6max"]
 gui = true
 needs_configuration = true
+environment = { L6_APP_DATA = "{logs}/app-data", L6_BUNDLE_SMOKE_FIRST = "{l6_package}", L6_BUNDLE_SMOKE_SECOND = "{package}", L6_BUNDLE_SMOKE_QEMU_SHA256 = "{app_qemu_sha256}" }
 
 [[case]]
 id = "gui-menu"
@@ -405,6 +406,7 @@ suites = ["full"]
 models = ["l6max"]
 gui = true
 needs_configuration = true
+environment = { L6_APP_DATA = "{logs}/app-data", L6_MENU_SMOKE_FIRMWARE = "{package}", L6_MENU_SMOKE_QEMU_SHA256 = "{app_qemu_sha256}" }
 
 [[case]]
 id = "gestures"
@@ -522,3 +524,41 @@ scenario = "scenarios/l6max-sound-pad-coreaudio.toml"
 needs_configuration = true
 environment = { L6_AUDIO_SAMPLE_TRACE = "1", L6_AUDIO_COREAUDIO_CAPTURE = "{logs}/coreaudio.f32" }
 wall_timeout_s = 1800
+
+[[case]]
+id = "l6max-audio-input"
+suites = ["full"]
+models = ["l6max"]
+scenario = "scenarios/l6max-audio-input.toml"
+environment = { L6_AUDIO_RAW_CAPTURE = "{logs}/sai-output.s32" }
+wall_timeout_s = 600
+
+[[case]]
+id = "l6-audio-input"
+suites = ["full"]
+models = ["l6"]
+scenario = "scenarios/l6-audio-input.toml"
+environment = { L6_AUDIO_RAW_CAPTURE = "{logs}/sai-output.s32" }
+wall_timeout_s = 600
+
+[[case]]
+id = "l6max-audio-input-record"
+suites = ["full"]
+models = ["l6max"]
+scenario = "scenarios/l6max-audio-input-record.toml"
+wall_timeout_s = 600
+
+[[case]]
+id = "l6-audio-input-record"
+suites = ["full"]
+models = ["l6"]
+scenario = "scenarios/l6-audio-input-record.toml"
+wall_timeout_s = 400
+
+[[case]]
+id = "l6max-audio-input-transport"
+suites = ["full"]
+models = ["l6max"]
+scenario = "scenarios/l6max-audio-input-transport.toml"
+environment = { L6_AUDIO_RAW_CAPTURE = "{logs}/sai-output.s32" }
+wall_timeout_s = 600

@@ -49,12 +49,12 @@ cargo run -p l6patch -- unpacked-l6 firmware-midi-sync-l6 --patch midi-sync
 python3 patches/midi-sync/tests/cpu_sim_l6.py firmware-midi-sync-l6/main_firmware.bin
 cargo run -p qemu-run -- --qemu /path/to/qemu-system-arm \
   --firmware-dir firmware-midi-sync-l6 --logs /tmp/l6-midi-sync --seconds 5
-cargo run -p l6test -- run --config smoke.local.toml --case l6-midi-sync --model l6
-cargo run -p l6test -- run --config smoke.local.toml \
+cargo run -p l6test -- run --config config.toml --case l6-midi-sync --model l6
+cargo run -p l6test -- run --config config.toml \
   --case patched-update --model l6
 ```
 
-Configure the `prepared` L6 fixture in `smoke.local.toml` with a stock package
+Configure the `prepared` L6 fixture in `config.toml` with a stock package
 and `patches = ["midi-sync"]`. The CPU check validates the request match, six-channel/nine-group traversal,
 value filtering, and fall-through behavior. The smoke validates the live hook,
 getters, CC mapping, and queue sender inside QEMU; it does not establish USB or

@@ -29,8 +29,8 @@ analog audio behavior, and physical jack routing remain unverified.
   using saved assignments. The waveform cases compare SAI output with the
   source WAV. Cards must meet the firmware's
   [layout requirements](../emulator/usb.md#card-layout). The Editor-assigned
-  pad scenarios need further qualification. Recorder playback requires prepared media and state;
-  recording to a file remains unresolved.
+  pad scenarios need further qualification. Recorder playback requires prepared media and state.
+  Input channels play assigned files into the mix and record to their tracks on both models; there is no live input.
 - L6max sound-pad key-bit assertions and DIN/Editor scenarios need live
   qualification. Physical control wiring is not established by emulator tests.
 

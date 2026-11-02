@@ -31,6 +31,10 @@ image = { version = "0.25.1", default-features = false, features = ["png"] }
 
 # Optimize GPUI and its cached icon renderer while retaining application
 # debug assertions and symbols.
+# Audio conversion is about 30 times slower unoptimized.
+[profile.dev.package.l6max-host]
+opt-level = 3
+
 [profile.dev.package.gpui]
 opt-level = 1
 [profile.dev.package.resvg]

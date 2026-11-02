@@ -2,8 +2,8 @@
 
 The emulator models the SAI and eDMA activity needed by L6 and L6max firmware.
 The [current status](../development/current-status.md) describes qualified
-scenarios and unresolved playback and recording behavior. Emulated samples do
-not establish physical jack routing, analog fidelity, or USB audio support.
+scenarios and unresolved playback behavior. Emulated samples do not establish
+physical jack routing, analog fidelity, or USB audio support.
 
 ## Observed firmware configuration
 
@@ -18,8 +18,8 @@ L6max configures SAI1.
 The modeled SAI FIFO and request-paced eDMA paths can deliver transmit samples
 to a configured QEMU audio backend. L6 and L6max use different DMA routes.
 The `audio-path` smoke case checks callbacks and SAI/eDMA traffic; it does not
-establish sample fidelity. Sound-pad and recorder playback require appropriately
-prepared fixtures. See [testing](../development/testing.md) and
+establish sample fidelity. Sound-pad and recorder playback require a prepared
+state and card. See [testing](../development/testing.md) and
 [current status](../development/current-status.md).
 
 ## Output fidelity
@@ -36,9 +36,53 @@ Two model properties are required for a faithful stream:
 
 - SAI service stops at the frame that raises an eDMA interrupt, so firmware can
   refill its TX ring before DMA advances further.
-- Both profiles use documented RX FIFO placement. Paced timing gives the
+- Both profiles use documented RX FIFO placement. Instruction timing gives the
   guest enough instructions to run the full-rate audio task and lower-priority
   tasks; see [board timing](board.md).
+
+## Input
+
+The firmware mixes and records SAI receive words, which are silent until audio files
+are assigned and playing. There is no live input: each channel plays a file, which is
+enough to exercise the mixer and recorder without the clock and latency issues of capture.
+
+The GUI's Audio Input window assigns a WAV file to each channel, or several in name order,
+and has Play, Pause, Stop, Rewind and a position bar to seek. It opens by itself when files
+need converting, with a progress bar on each converting channel. A scenario declares the same with
+[`audio_input`](../development/scenario-format.md) and `audio-input-transport` steps.
+The menu saves its assignments to `[emulator.MODEL.input_patch]` in the local
+[`config.toml`](../../config.example.toml), and the emulator applies that table each time it
+starts, converting only files that changed. Tests use each scenario's own audio instead.
+16, 24 and 32-bit PCM and 32 and 64-bit float WAVs at any sample rate are accepted. Extra
+channels in a file are ignored, and a stereo file on a mono channel is mixed down.
+
+The host converts each file ahead of time, so that MAIN's audio path only reads samples.
+Files convert in parallel on half of the host's cores, to 48 kHz stereo 32-bit float, in `audio-input` under the
+state directory, or the directory in `L6_AUDIO_INPUT_DIR`. MAIN maps that file, and maps
+every prepared channel at startup, so assignments survive restarts. Applying the assignments
+removes prepared audio that no channel uses. All channels share
+one position, driven by guest time, so tracks stay aligned with each other and with the
+firmware's clock whatever the host's speed. Playback loops after the longest file, and
+shorter files are silent past their end.
+
+Words count across the SAI's data lines, line by line.
+
+| Model | Mono channels | Stereo channels, left/right |
+| --- | --- | --- |
+| L6max (SAI1) | 1-4: words 0/1, 2/3, 12/13, 14/15 | 5-8: words 8/9, 10/11, 4/5, 6/7 |
+| L6 | 1-2: SAI3 words 0/1, 2/3 | 3-6: SAI1 words 0/1, 2/3, 4/5, 6/7 |
+
+The firmware treats each mono pair as dual gain, with the first word read 26.4 dB above
+the second. It uses the first word until that word reaches about -1 dB of full scale, and
+returns once it falls to about -6 dB. The second word alone never decides. The emulator
+writes the source to the second word and the source scaled by 26.4 dB, clipped, to the
+first, so a level continues smoothly across the switch. Source full scale is therefore
+the second word's full scale.
+
+Each channel records alone on its matching track, before its fader. Channel output also
+needs a raised level: `mixer.current.level` in an L6max state spec (indices 0-3 for mono
+and 4, 6, 8, 10 for stereo), or the channel encoder. These results describe the digital
+stream. Which physical jack or preamp setting produces these words is not established.
 
 ## Live output
 

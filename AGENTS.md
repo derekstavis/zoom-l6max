@@ -7,7 +7,7 @@ Read `docs/development/current-status.md`, then `docs/development/testing.md`.
 Use `cargo run --offline --locked -p l6test -- list` and the consolidated driver.
 For focused runtime observations outside qualification, use
 `docs/development/diagnostics.md` and the `l6dbg` tool documentation.
-Local firmware package paths belong in ignored `smoke.local.toml`; never commit
+Local firmware package and audio paths belong in ignored `config.toml`; never commit
 firmware, SD cards, saved flash, generated analysis artifacts or runtime logs.
 
 Before suites, use execution permissions that allow POSIX shared memory and

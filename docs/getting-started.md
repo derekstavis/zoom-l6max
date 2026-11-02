@@ -103,8 +103,8 @@ control effects remain under investigation.
 ## Device state and media
 
 The visual emulator creates a model-matched demo card on first persistent
-launch: `emulator/state/sd-card.img` for L6max and
-`emulator/state/sd-card-l6.img` for L6. It contains four generated sample WAVs,
+launch: `emulator/state/models/l6max/sd-card.img` for L6max and
+`emulator/state/models/l6/sd-card-l6.img` for L6. It contains four generated sample WAVs,
 an additional snare sample under Pad 1, and the locally supplied update
 package. Existing cards are reused without overwriting their contents. The
 macOS GUI routes SAI1 playback to CoreAudio by default. Headless runs can set
@@ -112,7 +112,9 @@ macOS GUI routes SAI1 playback to CoreAudio by default. Headless runs can set
 the host backend using their SAI1 TDM stereo slots; see
 [audio emulation](emulator/audio.md).
 
-Flash and RTC settings also persist in `emulator/state/`. For an independent
+Flash and RTC settings also persist there, per model. To choose the model and its
+files, copy [`config.example.toml`](../config.example.toml) to `config.toml` in the working
+directory and pass `--model`. The GUI saves its selections to that file. For an independent
 device, select another state directory:
 
 ```sh

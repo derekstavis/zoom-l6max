@@ -9,15 +9,15 @@ Use [diagnostic tools](l6dbg.md) for observation without pass/fail assertions.
 
 ```sh
 cargo run --offline --locked -p l6test -- list
-cargo run --offline --locked -p l6test -- check --config smoke.local.toml
-cargo run --offline --locked -p l6test -- run --config smoke.local.toml --suite quick
-cargo run --offline --locked -p l6test -- run --config smoke.local.toml --case boot --model l6
-cargo run --offline --locked -p l6test -- run --config smoke.local.toml --suite quick --backend both
+cargo run --offline --locked -p l6test -- check --config config.toml
+cargo run --offline --locked -p l6test -- run --config config.toml --suite quick
+cargo run --offline --locked -p l6test -- run --config config.toml --case boot --model l6
+cargo run --offline --locked -p l6test -- run --config config.toml --suite quick --backend both
 ```
 
 - `list` prints catalog cases, model scope, suites, and cases needing explicit
   local configuration.
-- `check` validates `smoke.local.toml` without starting a guest.
+- `check` validates `config.toml` without starting a guest.
 - `run` selects one `--case ID` or a `--suite NAME`, optionally filtered by
   `--model l6|l6max|all` and `--backend headless|gui|both`.
 - `--output NEW_DIRECTORY` chooses an artifact directory. It must not already
@@ -29,8 +29,8 @@ cargo run --offline --locked -p l6test -- run --config smoke.local.toml --suite 
   host MIDI ports and external executables run alone. Shareable cases run
   first. `--jobs 1` restores strictly sequential execution.
 
-Copy the [example file](../../../tests/smoke/fixtures.example.toml) to
-`smoke.local.toml` and set your stock L6 and L6max package paths. Firmware, device
+Copy the [example file](../../../config.example.toml) to
+`config.toml` and set your stock L6 and L6max package paths. Firmware, device
 state, and generated reports stay
 local. See the
 [testing workflow](../testing.md).
@@ -95,8 +95,7 @@ the sampled indicator levels and masks, analog positions and LCD framebuffer.
 
 There are three related TOML inputs:
 
-1. `smoke.local.toml` supplies the firmware packages, and optionally an external QEMU,
-   supervised legacy executables, and expected failures. See
+1. `config.toml` supplies the firmware packages; `--qemu` and `--app` choose an external QEMU or packaged application. See
    [local configuration and catalog](../testing.md#local-configuration-and-catalog-toml).
 2. `tests/smoke/catalog.toml` registers each case, model/suite membership,
    scenario or GUI package, prerequisites, and timeout.
@@ -126,7 +125,7 @@ playback and decay. The default `sound-pad-playback` window is six seconds;
 
 ```sh
 cargo run --offline --locked -p l6test -- run \
-  --config smoke.local.toml --case l6max-volume-meter-sweep \
+  --config config.toml --case l6max-volume-meter-sweep \
   --backend headless
 ```
 
@@ -160,7 +159,7 @@ It needs L6 1.10 firmware. Run it with:
 
 ```sh
 cargo run --offline --locked -p l6test -- run \
-  --config smoke.local.toml --case l6-level-meter-pwm \
+  --config config.toml --case l6-level-meter-pwm \
   --backend headless
 ```
 

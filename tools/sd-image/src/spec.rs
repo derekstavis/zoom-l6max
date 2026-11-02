@@ -72,6 +72,13 @@ pub enum Content {
         seconds: f64,
         amplitude: f64,
     },
+    /// A stereo tone with no fade, for audio that loops: each loop must hold
+    /// a whole number of cycles.
+    LoopTone {
+        hz: f64,
+        seconds: f64,
+        amplitude: f64,
+    },
     /// A stereo sweep rising on the left and falling on the right, so the
     /// channels stay distinct and no two windows of the signal repeat.
     Sweep {
@@ -144,7 +151,7 @@ fn sweep_phase(start: f64, end: f64, time: f64, seconds: f64) -> f64 {
 }
 
 impl Content {
-    fn bytes(&self, base: &Path) -> io::Result<Vec<u8>> {
+    pub fn bytes(&self, base: &Path) -> io::Result<Vec<u8>> {
         Ok(match *self {
             Content::Tone {
                 hz,
@@ -158,6 +165,21 @@ impl Content {
                     (value, value)
                 }),
             ),
+            Content::LoopTone {
+                hz,
+                seconds,
+                amplitude,
+            } => {
+                let frames = (seconds * f64::from(SAMPLE_RATE)) as usize;
+                let samples: Vec<f32> = (0..frames)
+                    .flat_map(|frame| {
+                        let time = frame as f64 / f64::from(SAMPLE_RATE);
+                        let value = (amplitude * (TAU * hz * time).sin()) as f32;
+                        [value, value]
+                    })
+                    .collect();
+                wav_file(2, 0, &samples)
+            }
             Content::Sweep {
                 low_hz,
                 high_hz,

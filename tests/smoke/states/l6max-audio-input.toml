@@ -1,0 +1,27 @@
+# L6max setup state with every input channel's level raised.
+version = 1
+model = "l6max"
+
+[settings]
+base = "defaults"
+
+[settings.values]
+"mixer.current.level[0]" = 30
+"mixer.current.level[1]" = 30
+"mixer.current.level[2]" = 30
+"mixer.current.level[3]" = 30
+"mixer.current.level[4]" = 30
+"mixer.current.level[6]" = 30
+"mixer.current.level[8]" = 30
+"mixer.current.level[10]" = 30
+setup_required = 0
+last_date_year = 2026
+last_date_month = 2
+last_date_day = 2
+last_date_hour = 1
+last_date_minute = 1
+[rtc]
+datetime = "2026-02-02T01:01:00"
+
+[panel]
+programmed = true

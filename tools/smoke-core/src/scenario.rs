@@ -33,6 +33,9 @@ pub struct Scenario {
     #[serde(default)]
     pub gdb: bool,
     pub audio_device: Option<String>,
+    /// Audio fed to input channels for the whole run.
+    #[serde(default)]
+    pub audio_input: Vec<AudioInput>,
     pub main_sha256: Option<String>,
     #[serde(default)]
     pub main_sha256_any: Vec<String>,
@@ -45,6 +48,14 @@ pub struct Scenario {
     /// and boot readiness does not wait out first-boot setup screens.
     #[serde(skip)]
     pub spec_state: bool,
+}
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AudioInput {
+    /// One-based input channel. See the audio model for each model's channels.
+    pub channel: u8,
+    #[serde(flatten)]
+    pub content: sd_image::spec::Content,
 }
 #[derive(Clone, Debug, Deserialize)]
 pub struct Step {
@@ -77,6 +88,9 @@ fn default_playback_window_ms() -> u32 {
     6000
 }
 
+fn default_tone_tolerance_db() -> f64 {
+    1.0
+}
 fn default_max_residual_db() -> f64 {
     -60.
 }
@@ -293,6 +307,42 @@ pub enum Action {
     /// Wait until an entry appears on the card, written by the firmware.
     ExpectCardEntry {
         path: String,
+    },
+    /// Control input playback: `play`, `pause`, `stop` or `seek` to `position_ms`.
+    AudioInputTransport {
+        command: String,
+        #[serde(default)]
+        position_ms: i32,
+    },
+    /// Map a channel's prepared audio again, or drop it.
+    AudioInputLoad {
+        channel: u32,
+        loaded: bool,
+    },
+    /// Check the reported input playback state.
+    ExpectAudioInput {
+        playing: bool,
+        min_ms: u32,
+        max_ms: u32,
+    },
+    /// Measure a tone in the last second of captured output. A side without
+    /// a level must be below -70 dB.
+    ExpectOutputTone {
+        hz: f64,
+        left_db: Option<f64>,
+        right_db: Option<f64>,
+        #[serde(default = "default_tone_tolerance_db")]
+        tolerance_db: f64,
+    },
+    /// Measure a tone in a file of the newest recorder project, skipping its
+    /// first second. A side without a level must be below -70 dB.
+    ExpectRecordedTone {
+        file: String,
+        hz: f64,
+        left_db: Option<f64>,
+        right_db: Option<f64>,
+        #[serde(default = "default_tone_tolerance_db")]
+        tolerance_db: f64,
     },
     L6UsbStartup,
     L6DinEventDispatch {
@@ -798,6 +848,11 @@ impl Scenario {
                 | Action::L6MainGpioEvent { .. }
                 | Action::L6maxTapHandler
                 | Action::ExpectCardEntry { .. }
+                | Action::AudioInputTransport { .. }
+                | Action::AudioInputLoad { .. }
+                | Action::ExpectAudioInput { .. }
+                | Action::ExpectOutputTone { .. }
+                | Action::ExpectRecordedTone { .. }
                 | Action::L6UsbStartup
                 | Action::L6DinEventDispatch { .. }
                 | Action::L6InputSweep
