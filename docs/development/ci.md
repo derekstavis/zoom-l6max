@@ -36,7 +36,7 @@ AppImage's C library requirement low). It installs the packages from the
 format, check and test steps as macOS, builds QEMU from the submodule, and
 runs `linux-package` to produce `L6max-Emulator-x86_64.AppImage`. The packager
 verifies that the bundled QEMU starts with only bundled and host libraries and
-provides `l6max-dual`, before and after AppImage assembly. `appimagetool` 1.9.1
+provides `l6max-main`, before and after AppImage assembly. `appimagetool` 1.9.1
 and the type 2 runtime 20251108 are downloaded by URL and verified against
 pinned SHA-256 values; the runtime is passed explicitly so the build never
 fetches a moving "continuous" build. Swift tests stay macOS-only.

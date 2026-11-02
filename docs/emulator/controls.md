@@ -44,7 +44,7 @@ models' power behavior.
 
 Sound-pad playback requires an assigned WAV on the SD card. `l6test` can
 prepare the assignment, mode, and level in a disposable fixture card; see
-[fixture configuration](../development/testing.md#fixture-and-catalog-toml).
+[local configuration](../development/testing.md#local-configuration-and-catalog-toml).
 Imported and demo cards mark WAV entries with the FAT Archive attribute, which
 the L6 file browser requires.
 

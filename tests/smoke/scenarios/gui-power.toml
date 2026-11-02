@@ -2,7 +2,8 @@ version = 1
 name = "gui-power"
 models = ["l6", "l6max"]
 backends = ["gui"]
-fixture = "prepared"
+state = "setup-complete"
+card = "empty"
 
 [[step]]
 action = "delay"

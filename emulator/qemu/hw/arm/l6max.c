@@ -66,6 +66,8 @@
 #define L6_PANEL_PACE_MAX_LAG_NS 100000000
 #define L6_INPUT_QUEUE_LIMIT 64
 #define L6_INPUT_TX_LIMIT (64 * 1024)
+/* The dimmest ring segments stay below this; blinking pad LEDs peak far above it. */
+#define L6_INDICATOR_DIM_LEVEL 16
 #define L6_AUDIO_TRACE_WINDOW_FRAMES 64000
 /* 200 ms of output reserve, as a divisor of the sample rate. */
 #define L6_AUDIO_PRIME_DIVISOR 5
@@ -394,12 +396,8 @@ typedef struct L6ChipState {
     L6Display display;
     bool display_dc;
     bool panel;
-    struct L6ChipState *peer;
-    struct L6UartLink *uart_link;
     bool cpu_held;
     bool panel_reset_asserted;
-    unsigned panel_tx_count;
-    unsigned panel_rx_count;
     unsigned main_rx_count;
     unsigned main_ctrl_log_count;
     unsigned main_tx_count;
@@ -431,13 +429,10 @@ typedef struct L6ChipState {
     unsigned indicator_log_count;
     QEMUTimer *rom_uart_timer;
     QEMUTimer *main_audio_service_timer;
-    /* Panel USART1 is the real stm32l4x5-usart device (register-compatible
-     * by inspection: our own CR1/ISR bit usage already matched RM0351
-     * bit-for-bit before this). Its chardev is an in-process socket pair;
-     * panel_usart_fd is our end, bridging its bytes to/from the profile's
-     * panel UART on the main chip (LPUART7 on L6, LPUART1 on L6max). */
+    /* Panel USART1 is the real stm32l4x5-usart device, register-compatible for the
+     * CR1/ISR bits in use. Its chardev links to the MAIN process, where it reaches the
+     * profile's panel UART (LPUART7 on L6, LPUART1 on L6max). */
     DeviceState *panel_usart1;
-    int panel_usart_fd;
     CharFrontend main_uart;
     bool main_rx_pending;
     uint8_t main_rx_byte;
@@ -541,33 +536,11 @@ typedef struct L6MachineState {
     L6ChipState chip;
 } L6MachineState;
 
-typedef struct L6UartLink {
-    L6ChipState *source;
-    L6ChipState *destination;
-    GByteArray *queue;
-    QEMUTimer *timer;
-} L6UartLink;
-
-typedef struct L6DualMachineState {
-    MachineState parent;
-    L6ChipState main;
-    L6ChipState panel;
-    MemoryRegion main_memory;
-    MemoryRegion panel_memory;
-    MemoryRegion debug_alias;
-    L6UartLink main_to_panel;
-    L6UartLink panel_to_main;
-} L6DualMachineState;
-
 #define TYPE_L6_MACHINE MACHINE_TYPE_NAME("l6max-base")
 OBJECT_DECLARE_SIMPLE_TYPE(L6MachineState, L6_MACHINE)
-#define TYPE_L6_DUAL_MACHINE MACHINE_TYPE_NAME("l6max-dual")
-OBJECT_DECLARE_SIMPLE_TYPE(L6DualMachineState, L6_DUAL_MACHINE)
 
 /* Bring-up framing delay: 100 us per byte matches the existing ROM endpoint.
  * It is not yet calculated from the UART divisor registers. */
-#define L6_UART_BYTE_NS 100000
-#define L6_UART_QUEUE_LIMIT (64 * 1024)
 #define L6_USDHC_VEND_SPEC2_RESET 0x00019006u
 #define L6_USDHC_VEND_SPEC2_RW_MASK ((1u << 12) | (0x0fu << 3))
 #define L6_USDHC_SYS_CTRL_RESET 0x0080800fu
@@ -1246,7 +1219,7 @@ static void l6_indicator_tick(void *opaque)
                  * Bright windows do not count, so a blinking LED reaches zero. */
                 indicators->pulse_history[row][bit] =
                     indicators->pulse_history[row][bit] << 1 |
-                    (on != 0 && level <= 1);
+                    (on != 0 && level <= L6_INDICATOR_DIM_LEVEL);
                 if (level <= 1) {
                     level = ctpop8(indicators->pulse_history[row][bit]) >= 2;
                 }
@@ -1455,14 +1428,12 @@ static unsigned l6_panel_uart_number(const L6ChipState *s)
 static void l6_main_uart_receive(void *opaque, const uint8_t *buf, int size)
 {
     L6ChipState *s = opaque;
-    if (!s->peer) {
-        /* Tools grep this exact line, as for the in-process link. */
-        for (int i = 0; i < size; i++) {
-            qemu_log_mask(LOG_UNIMP, "l6 panel USART1 TX %02x\n", buf[i]);
-            if (buf[i] == 0xb0) {
-                qemu_log_mask(LOG_UNIMP, "l6 panel RTC response start at %" PRId64 " ms\n",
-                              qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL));
-            }
+    /* Tools grep this exact line. */
+    for (int i = 0; i < size; i++) {
+        qemu_log_mask(LOG_UNIMP, "l6 panel USART1 TX %02x\n", buf[i]);
+        if (buf[i] == 0xb0) {
+            qemu_log_mask(LOG_UNIMP, "l6 panel RTC response start at %" PRId64 " ms\n",
+                          qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL));
         }
     }
     if (size <= 0 || s->main_rx_pending) {
@@ -1545,95 +1516,12 @@ static void l6_main_midi_read_host(void *opaque)
     }
 }
 
-static void l6_uart_link_tick(void *opaque)
-{
-    L6UartLink *link = opaque;
-    L6ChipState *destination = link->destination;
-    if (!link->queue->len || destination->cpu_held) {
-        return;
-    }
-    /* The panel's real USART device has no "can receive" gate of ours to
-     * check; its own chardev handlers apply CR1.RE/overrun on arrival. */
-    if (!destination->panel && !l6_main_uart_can_receive(destination)) {
-        return;
-    }
-    uint8_t byte = link->queue->data[0];
-    g_byte_array_remove_range(link->queue, 0, 1);
-    if (destination->panel) {
-        /* Tools grep this exact line (see tools/qemu-run) the same way
-         * as the old hand-rolled receive path did. */
-        qemu_log_mask(LOG_UNIMP, "l6 panel USART1 RX %02x\n", byte);
-        destination->panel_rx_count++;
-        if (destination->panel_usart_fd >= 0) {
-            ssize_t n;
-            do {
-                n = write(destination->panel_usart_fd, &byte, 1);
-            } while (n < 0 && errno == EINTR);
-        }
-    } else {
-        l6_main_uart_receive(destination, &byte, 1);
-    }
-    if (link->queue->len) {
-        timer_mod(link->timer,
-                  qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + L6_UART_BYTE_NS);
-    }
-}
-
-static void l6_uart_link_send(L6ChipState *source, uint8_t byte)
-{
-    L6UartLink *link = source->uart_link;
-    if (link->queue->len >= L6_UART_QUEUE_LIMIT) {
-        error_setg(&error_fatal, "L6 internal UART queue overflow");
-    }
-    g_byte_array_append(link->queue, &byte, 1);
-    if (!timer_pending(link->timer)) {
-        timer_mod(link->timer,
-                  qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + L6_UART_BYTE_NS);
-    }
-}
-
-/* Bytes sent by panel USART1 arrive here on our end of the in-process socket
- * pair and are forwarded to the model-selected main-chip panel UART. */
-static void l6_panel_usart_bridge_read(void *opaque)
-{
-    L6ChipState *s = opaque;
-    uint8_t buf[256];
-    ssize_t n = read(s->panel_usart_fd, buf, sizeof(buf));
-    if (n <= 0) {
-        if (n == 0 || (errno != EAGAIN && errno != EWOULDBLOCK)) {
-            qemu_set_fd_handler(s->panel_usart_fd, NULL, NULL, NULL);
-            close(s->panel_usart_fd);
-            s->panel_usart_fd = -1;
-        }
-        return;
-    }
-    s->panel_tx_count += n;
-    for (ssize_t i = 0; i < n; i++) {
-        /* Tools grep this exact line (see tools, "-smoke" binaries) to
-         * verify panel output without their own USART client. */
-        qemu_log_mask(LOG_UNIMP, "l6 panel USART1 TX %02x\n", buf[i]);
-        if (buf[i] == 0xb0) {
-            qemu_log_mask(LOG_UNIMP, "l6 panel RTC response start at %" PRId64 " ms\n",
-                          qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL));
-        }
-        l6_uart_link_send(s, buf[i]);
-    }
-}
-
 static void l6_uart_accept_input(L6ChipState *destination)
 {
     /* The panel's real USART device drives its own qemu_chr_fe_accept_input
      * internally; this path serves the model-selected main-chip panel UART. */
-    if (destination->peer) {
-        L6UartLink *incoming = destination->peer->uart_link;
-        if (incoming->queue->len && !timer_pending(incoming->timer)) {
-            timer_mod(incoming->timer,
-                      qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + L6_UART_BYTE_NS);
-        }
-    } else {
-        /* Both call sites below are guarded by `!s->panel`. */
-        qemu_chr_fe_accept_input(&destination->main_uart);
-    }
+    /* Both call sites below are guarded by `!s->panel`. */
+    qemu_chr_fe_accept_input(&destination->main_uart);
 }
 
 static void l6_storage_flush(void *bytes, size_t size)
@@ -1666,9 +1554,6 @@ static void l6_main_map_panel_flash(L6ChipState *main)
 
 static uint8_t *l6_rom_flash(L6ChipState *main)
 {
-    if (main->peer) {
-        return memory_region_get_ram_ptr(&main->peer->flash);
-    }
     l6_main_map_panel_flash(main);
     return main->rom_shared_flash ? main->rom_shared_flash : main->rom_flash;
 }
@@ -1676,17 +1561,7 @@ static uint8_t *l6_rom_flash(L6ChipState *main)
 static void l6_rom_write_flash(L6ChipState *main, unsigned offset,
                               const uint8_t *bytes, unsigned count)
 {
-    if (main->peer) {
-        address_space_write_rom(CPU(main->peer->armv7m.cpu)->as,
-                                0x08000000 + offset, MEMTXATTRS_UNSPECIFIED,
-                                bytes, count);
-        if (main->peer->persistent_panel) {
-            memcpy(main->peer->persistent_panel + offset, bytes, count);
-            l6_storage_flush(main->peer->persistent_panel, 0x10000);
-        }
-    } else {
-        memcpy(l6_rom_flash(main) + offset, bytes, count);
-    }
+    memcpy(l6_rom_flash(main) + offset, bytes, count);
 }
 
 static void l6_rom_erase_flash(L6ChipState *main, unsigned offset,
@@ -1713,38 +1588,6 @@ static void l6_chip_cpu_reset(CPUState *cpu, run_on_cpu_data data)
                   chip->cpu_held ? "held in reset/ROM" : "booted application");
 }
 
-static void l6_local_reset_request(void *opaque, int n, int level)
-{
-    L6ChipState *chip = opaque;
-    if (!level) {
-        return;
-    }
-    if (chip->panel) {
-        timer_del(chip->panel_tim2);
-        timer_del(chip->panel_tim3);
-        timer_del(chip->panel_tim14);
-        timer_del(chip->panel_spi_dma);
-        timer_del(chip->indicator_timer);
-        l6_panel_timer_reset(chip);
-        memset(&chip->indicators, 0, sizeof(chip->indicators));
-        memset(chip->indicators.published, 0xff,
-               sizeof(chip->indicators.published));
-        l6_panel_store(chip, 0x400, 0);
-        l6_panel_store(chip, 0x2000, 0);
-        l6_panel_store(chip, 0x20008, 0);
-        l6_panel_store(chip, 0x10000014, 0);
-        l6_panel_store(chip, 0x10000414, 0);
-        g_hash_table_insert(chip->registers, GUINT_TO_POINTER(1), NULL);
-    } else {
-        timer_del(chip->rom_uart_timer);
-        chip->rom_phase = 0;
-        chip->rom_reply_read = chip->rom_reply_visible = chip->rom_reply_write = 0;
-        chip->main_rx_pending = false;
-    }
-    async_run_on_cpu(CPU(chip->armv7m.cpu), l6_chip_cpu_reset,
-                     RUN_ON_CPU_HOST_PTR(chip));
-}
-
 static void l6_panel_set_held(L6ChipState *panel, bool held)
 {
     if (panel->cpu_held == held) {
@@ -1765,13 +1608,8 @@ static void l6_panel_set_held(L6ChipState *panel, bool held)
            sizeof(panel->indicators.published));
     l6_panel_store(panel, 0x10000014, 0);
     l6_panel_store(panel, 0x10000414, 0);
-    if (panel->peer) {
-        timer_del(panel->peer->uart_link->timer);
-        timer_del(panel->uart_link->timer);
-        g_byte_array_set_size(panel->peer->uart_link->queue, 0);
-        g_byte_array_set_size(panel->uart_link->queue, 0);
-    } else if (!held && panel->persistent_panel) {
-        /* MAIN programs this file directly in a split-process run. */
+    if (!held && panel->persistent_panel) {
+        /* MAIN programs this file directly. */
         address_space_write_rom(CPU(panel->armv7m.cpu)->as, 0x08000000,
                                 MEMTXATTRS_UNSPECIFIED,
                                 panel->persistent_panel, 0x10000);
@@ -1819,9 +1657,7 @@ static void l6_update_panel_boot(L6ChipState *main)
 {
     bool held = main->panel_reset_asserted || main->main_rom_mode;
 
-    if (main->peer) {
-        l6_panel_set_held(main->peer, held);
-    } else if (main->panel_control_fd >= 0) {
+    if (main->panel_control_fd >= 0) {
         l6_panel_control_send(main, held);
     }
 }
@@ -3787,10 +3623,8 @@ static void l6_mmio_write(void *opaque, hwaddr offset,
         }
         if (s->main_rom_mode) {
             l6_rom_write_byte(s, byte);
-        } else if (s->uart_link) {
-            l6_uart_link_send(s, byte);
         } else {
-            /* Tools grep this exact line, as for the in-process link. */
+            /* Tools grep this exact line. */
             qemu_log_mask(LOG_UNIMP, "l6 panel USART1 RX %02x\n", byte);
             qemu_chr_fe_write(&s->main_uart, &byte, 1);
         }
@@ -4456,7 +4290,6 @@ static void l6_load_resource_flash(L6ChipState *s, const char *directory)
 static void l6_chip_init(MachineState *machine, L6ChipState *s, bool panel,
                          MemoryRegion *system_memory, const char *kernel_filename,
                          const char *cpu_type, const char *prefix,
-                         const char *input_variable, bool external_serial,
                          const L6BoardProfile *profile)
 {
     hwaddr flash_base = panel ? 0x08000000 : profile->main_flash_base;
@@ -4627,10 +4460,9 @@ static void l6_chip_init(MachineState *machine, L6ChipState *s, bool panel,
     s->main_gpio_output_trace = g_getenv("L6_MAIN_GPIO_OUTPUT_TRACE") != NULL;
     s->main_gpio_pad_led_trace = g_getenv("L6_MAIN_GPIO_PAD_LED_TRACE") != NULL;
     s->input_fd = -1;
-    s->panel_usart_fd = -1;
     s->panel_control_fd = -1;
     const char *control_fd = g_getenv("L6_PANEL_CONTROL_FD");
-    if (control_fd && !object_dynamic_cast(OBJECT(machine), TYPE_L6_DUAL_MACHINE)) {
+    if (control_fd) {
         char *end;
         long fd = strtol(control_fd, &end, 10);
         if (!*control_fd || *end || fd < 0 || fd > INT_MAX ||
@@ -4662,7 +4494,7 @@ static void l6_chip_init(MachineState *machine, L6ChipState *s, bool panel,
     }
     for (unsigned i = 0; i < 5; i++) { s->analog_inputs[i] = 512; }
     memset(s->encoder_phase, 3, sizeof(s->encoder_phase));
-    const char *input_fd = g_getenv(input_variable);
+    const char *input_fd = g_getenv("L6_INPUT_FD");
     if (input_fd) {
         char *end;
         long fd = strtol(input_fd, &end, 10);
@@ -4807,13 +4639,13 @@ static void l6_chip_init(MachineState *machine, L6ChipState *s, bool panel,
     }
     memset(s->rom_flash, 0xff, sizeof(s->rom_flash));
     {
-        /* Without a state file, a split-process MAIN still has to see the
-         * panel image that its own panel process booted from. */
+        /* Without a state file, MAIN still has to see the panel image that
+         * the panel process booted from. */
         const char *image = panel ? NULL : g_getenv("L6_PANEL_FIRMWARE");
         g_autofree char *contents = NULL;
         gsize size = 0;
 
-        if (image && *image && !object_dynamic_cast(OBJECT(machine), TYPE_L6_DUAL_MACHINE) &&
+        if (image && *image &&
             g_file_get_contents(image, &contents, &size, NULL) &&
             size <= sizeof(s->rom_flash)) {
             if (profile == &L6_PROFILE) {
@@ -4837,7 +4669,7 @@ static void l6_chip_init(MachineState *machine, L6ChipState *s, bool panel,
                                                    l6_main_audio_service_tick, s);
         timer_mod(s->main_audio_service_timer,
                   qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + 1000000);
-        Chardev *serial = external_serial ? serial_hd(0) : NULL;
+        Chardev *serial = serial_hd(0);
         if (serial) {
             qemu_chr_fe_init(&s->main_uart, serial, &error_fatal);
             qemu_chr_fe_set_handlers(&s->main_uart,
@@ -4953,39 +4785,10 @@ static void l6_chip_init(MachineState *machine, L6ChipState *s, bool panel,
         l6_main_gpio_setup(s, system_memory);
     }
     if (panel) {
-        /* The dual-chip machine routes the real panel USART through an
-         * in-process socket pair to the main UART bridge. The standalone
-         * panel machine instead uses its -serial backend to connect to the
-         * independently launched main QEMU process. */
-        Chardev *usart_chr;
-        if (external_serial) {
-            usart_chr = serial_hd(0);
-            if (!usart_chr) {
-                error_setg(&error_fatal, "panel USART1 requires a serial backend");
-            }
-        } else {
-            int usart_fds[2];
-            if (socketpair(AF_UNIX, SOCK_STREAM, 0, usart_fds) < 0) {
-                error_setg(&error_fatal, "cannot create panel USART1 socket pair: %s",
-                           strerror(errno));
-            }
-            if (fcntl(usart_fds[1], F_SETFL, O_NONBLOCK) < 0) {
-                error_setg(&error_fatal, "cannot set panel USART1 bridge non-blocking");
-            }
-            g_autofree char *usart_chr_opts = g_strdup_printf(
-                "socket,id=l6-panel-usart1-link,fd=%d,server=off", usart_fds[0]);
-            QemuOpts *usart_chr_opts_parsed = qemu_opts_parse_noisily(
-                qemu_find_opts("chardev"), usart_chr_opts, true);
-            if (!usart_chr_opts_parsed) {
-                error_setg(&error_fatal, "cannot parse panel USART1 chardev options");
-            }
-            usart_chr = qemu_chr_new_from_opts(usart_chr_opts_parsed, NULL, &error_fatal);
-            if (!usart_chr) {
-                error_setg(&error_fatal, "cannot create panel USART1 chardev");
-            }
-            s->panel_usart_fd = usart_fds[1];
-            qemu_set_fd_handler(s->panel_usart_fd,
-                                l6_panel_usart_bridge_read, NULL, s);
+        /* The panel's -serial backend connects to the MAIN process. */
+        Chardev *usart_chr = serial_hd(0);
+        if (!usart_chr) {
+            error_setg(&error_fatal, "panel USART1 requires a serial backend");
         }
         s->panel_usart1 = qdev_new(TYPE_STM32L4X5_USART);
         qdev_prop_set_chr(s->panel_usart1, "chardev", usart_chr);
@@ -5122,7 +4925,7 @@ static void l6_main_init(MachineState *machine)
         l6_main_board_profile(machine->kernel_filename);
     l6_chip_init(machine, s, false, get_system_memory(),
                  machine->kernel_filename, machine->cpu_type, "main",
-                 "L6_INPUT_FD", true, profile);
+                 profile);
 }
 
 static void l6_panel_init(MachineState *machine)
@@ -5133,74 +4936,7 @@ static void l6_panel_init(MachineState *machine)
         g_strcmp0(g_getenv("L6_MODEL"), "l6") == 0 ? &L6_PROFILE : &L6MAX_PROFILE;
     l6_chip_init(machine, s, true, get_system_memory(),
                  machine->kernel_filename, machine->cpu_type, "panel",
-                 "L6_INPUT_FD", true, profile);
-}
-
-static void l6_dual_init(MachineState *machine)
-{
-    L6DualMachineState *s = L6_DUAL_MACHINE(machine);
-    const char *panel_firmware = g_getenv("L6_PANEL_FIRMWARE");
-    if (!panel_firmware || !*panel_firmware || !machine->kernel_filename) {
-        error_setg(&error_fatal,
-                   "l6max-dual requires -kernel MAIN image and L6_PANEL_FIRMWARE");
-    }
-    /* MAIN is the authority for the complete board, including the panel
-     * wiring profile. Frontends do not need to duplicate model selection. */
-    const L6BoardProfile *profile =
-        l6_main_board_profile(machine->kernel_filename);
-    /* These MCUs overlap SRAM, peripheral and boot-vector addresses. Keep
-     * separate address spaces while sharing QEMU_CLOCK_VIRTUAL and its loop. */
-    memory_region_init(&s->main_memory, OBJECT(machine),
-                       "l6-main-address-space", UINT64_MAX);
-    memory_region_init(&s->panel_memory, OBJECT(machine),
-                       "l6-panel-address-space", UINT64_MAX);
-    l6_chip_init(machine, &s->main, false, &s->main_memory,
-                 machine->kernel_filename, ARM_CPU_TYPE_NAME("cortex-m7"),
-                 "main", "L6_MAIN_INPUT_FD", false, profile);
-    l6_chip_init(machine, &s->panel, true, &s->panel_memory,
-                 panel_firmware, ARM_CPU_TYPE_NAME("cortex-m0"),
-                 "panel", "L6_PANEL_INPUT_FD", false, profile);
-    s->main.peer = &s->panel;
-    s->panel.peer = &s->main;
-    qdev_connect_gpio_out_named(DEVICE(&s->main.armv7m), "SYSRESETREQ", 0,
-        qemu_allocate_irq(l6_local_reset_request, &s->main, 0));
-    qdev_connect_gpio_out_named(DEVICE(&s->panel.armv7m), "SYSRESETREQ", 0,
-        qemu_allocate_irq(l6_local_reset_request, &s->panel, 0));
-    s->main_to_panel = (L6UartLink) {
-        .source = &s->main,
-        .destination = &s->panel,
-        .queue = g_byte_array_new(),
-    };
-    s->panel_to_main = (L6UartLink) {
-        .source = &s->panel,
-        .destination = &s->main,
-        .queue = g_byte_array_new(),
-    };
-    s->main_to_panel.timer = timer_new_ns(QEMU_CLOCK_VIRTUAL,
-                                          l6_uart_link_tick, &s->main_to_panel);
-    s->panel_to_main.timer = timer_new_ns(QEMU_CLOCK_VIRTUAL,
-                                          l6_uart_link_tick, &s->panel_to_main);
-    s->main.uart_link = &s->main_to_panel;
-    s->panel.uart_link = &s->panel_to_main;
-    /* HMP/GDB physical memory commands inspect the main address space; CPUs
-     * remain attached to their own roots. The alias does not share MCU SRAM. */
-    memory_region_init_alias(&s->debug_alias, OBJECT(machine),
-                             "l6-main-debug-view", &s->main_memory,
-                             0, UINT64_MAX);
-    memory_region_add_subregion(get_system_memory(), 0, &s->debug_alias);
-}
-
-static void l6_dual_class_init(ObjectClass *oc, const void *data)
-{
-    MachineClass *mc = MACHINE_CLASS(oc);
-    mc->desc = "ZOOM L6/L6max dual-MCU board (model detected from MAIN firmware)";
-    mc->init = l6_dual_init;
-    mc->default_cpu_type = ARM_CPU_TYPE_NAME("cortex-m7");
-    mc->default_ram_size = 0x200000;
-    mc->min_cpus = 2;
-    mc->default_cpus = 2;
-    mc->max_cpus = 2;
-    machine_add_audiodev_property(mc);
+                 profile);
 }
 
 static void l6_main_class_init(ObjectClass *oc, const void *data)
@@ -5247,20 +4983,11 @@ static const TypeInfo l6_panel_info = {
     .interfaces = arm_machine_interfaces,
 };
 
-static const TypeInfo l6_dual_info = {
-    .name = TYPE_L6_DUAL_MACHINE,
-    .parent = TYPE_MACHINE,
-    .instance_size = sizeof(L6DualMachineState),
-    .class_init = l6_dual_class_init,
-    .interfaces = arm_machine_interfaces,
-};
-
 static void l6_register_types(void)
 {
     type_register_static(&l6_base_info);
     type_register_static(&l6_main_info);
     type_register_static(&l6_panel_info);
-    type_register_static(&l6_dual_info);
 }
 
 type_init(l6_register_types)

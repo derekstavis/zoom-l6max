@@ -88,7 +88,7 @@ cargo run -p l6max-host -- --volatile --seconds 10
 | Start here | What it covers |
 | --- | --- |
 | [Agent and developer workflow](docs/README.md#repository-workflow) | Repository instructions, current status, testing, and diagnostics |
-| [Testing workflow](docs/development/testing.md) | Configure fixtures, list cases, run suites, and interpret artifacts |
+| [Testing workflow](docs/development/testing.md) | Configure firmware paths, list cases, run suites, and interpret artifacts |
 | [Diagnostics](docs/development/diagnostics.md) | Run TOML observation recipes and focused diagnostic commands |
 | [Tool index](docs/development/tools.md) | Per-command usage for emulator, firmware, and packaging tools |
 | [macOS app](docs/guides/macos-app.md) | Firmware selection and app packaging |

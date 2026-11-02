@@ -1,7 +1,6 @@
 //! Reproducible suite driver. All guest runners are supervised child processes.
 mod gui_capture;
 mod gui_probe;
-mod pad_state;
 mod screen_gif;
 
 use l6max_host::engine::Options;
@@ -12,7 +11,7 @@ use smoke_core::{CaseResult, Scenario, model_name};
 use std::{
     collections::{BTreeMap, BTreeSet},
     env, fs,
-    io::{Read, Write},
+    io::{Read, Seek, Write},
     os::unix::process::CommandExt,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
@@ -24,37 +23,32 @@ use std::{
 #[serde(deny_unknown_fields)]
 struct Config {
     version: u32,
+    /// The stock update package of each model.
+    #[serde(default)]
+    firmware: BTreeMap<String, PathBuf>,
+    /// An external QEMU and its hash. Without them, the driver uses the repository's
+    /// own build and pins the hash it finds there for the run.
+    #[serde(default)]
     qemu: PathBuf,
+    #[serde(default)]
     qemu_sha256: String,
-    fixture: Vec<Fixture>,
     #[serde(default)]
     legacy: BTreeMap<String, Legacy>,
     #[serde(default)]
     expected_failure: Vec<ExpectedFailure>,
 }
-#[derive(Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
+/// What one case runs from: the configured firmware and its scenario's declarations.
+#[derive(Clone)]
 struct Fixture {
     name: String,
     model: String,
-    firmware_dir: Option<PathBuf>,
     firmware_package: Option<PathBuf>,
-    #[serde(default)]
     patches: Vec<String>,
     update_package: Option<PathBuf>,
-    state_template: Option<PathBuf>,
-    state_recipe: Option<PathBuf>,
     state_spec: Option<PathBuf>,
-    sd_image: Option<PathBuf>,
-    #[serde(default)]
-    sound_pad: Vec<pad_state::SoundPad>,
+    card_spec: Option<PathBuf>,
     audio_device: Option<String>,
-    #[serde(default)]
     gdb: bool,
-    #[serde(default = "paced")]
-    timing: String,
-    #[serde(default)]
-    update_bootloader: bool,
 }
 static CANCELLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 extern "C" fn interrupt(_: libc::c_int) {
@@ -62,9 +56,6 @@ extern "C" fn interrupt(_: libc::c_int) {
 }
 fn cancelled() -> bool {
     CANCELLED.load(std::sync::atomic::Ordering::Relaxed)
-}
-fn paced() -> String {
-    "paced".into()
 }
 fn audio_device_spec(fixture: &Fixture, logs: &Path) -> String {
     fixture
@@ -82,7 +73,6 @@ fn gdb_socket_path() -> PathBuf {
 #[derive(Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Legacy {
-    fixture: Option<String>,
     executable: Option<PathBuf>,
     executable_sha256: Option<String>,
     #[serde(default)]
@@ -125,7 +115,6 @@ struct Case {
     volatile: bool,
     #[serde(default)]
     no_sd: bool,
-    fixture: Option<String>,
     blocked: Option<String>,
     #[serde(default = "case_timeout")]
     wall_timeout_s: u64,
@@ -145,7 +134,7 @@ struct Args {
     jobs: usize,
 }
 /// Each guest runs one single-threaded TCG engine plus its scenario process.
-/// Leave headroom so concurrent guests keep their paced clocks.
+/// Leave headroom so concurrent guests keep up with real time.
 fn default_jobs() -> usize {
     thread::available_parallelism().map_or(1, |cores| (cores.get() / 4).clamp(1, 4))
 }
@@ -210,6 +199,49 @@ fn hash(path: &Path) -> Result<String, String> {
     }
     Ok(format!("{:x}", sha.finalize()))
 }
+/// Hash a sparse card image by its allocated extents and total length, so a
+/// large image costs only what it stores. Compare only hashes from this function.
+fn hash_sparse(path: &Path) -> Result<String, String> {
+    use std::os::fd::AsRawFd;
+    let mut file = fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let length = file.metadata().map_err(|e| e.to_string())?.len();
+    let fd = file.as_raw_fd();
+    let mut sha = Sha256::new();
+    sha.update(length.to_le_bytes());
+    let mut buffer = vec![0; 1024 * 1024];
+    let mut position = 0;
+    while position < length {
+        let data = unsafe { libc::lseek(fd, position as libc::off_t, libc::SEEK_DATA) };
+        if data < 0 {
+            let error = std::io::Error::last_os_error();
+            if error.raw_os_error() == Some(libc::ENXIO) {
+                break;
+            }
+            return Err(format!("{}: {error}", path.display()));
+        }
+        let hole = unsafe { libc::lseek(fd, data, libc::SEEK_HOLE) };
+        if hole < 0 {
+            return Err(format!(
+                "{}: {}",
+                path.display(),
+                std::io::Error::last_os_error()
+            ));
+        }
+        file.seek(std::io::SeekFrom::Start(data as u64))
+            .map_err(|e| e.to_string())?;
+        sha.update((data as u64).to_le_bytes());
+        let mut remaining = (hole - data) as u64;
+        while remaining > 0 {
+            let count = remaining.min(buffer.len() as u64) as usize;
+            file.read_exact(&mut buffer[..count])
+                .map_err(|e| e.to_string())?;
+            sha.update(&buffer[..count]);
+            remaining -= count as u64;
+        }
+        position = hole as u64;
+    }
+    Ok(format!("{:x}", sha.finalize()))
+}
 fn files(root: &Path) -> Result<BTreeMap<String, String>, String> {
     fn visit(
         root: &Path,
@@ -271,85 +303,99 @@ fn resolve(base: &Path, path: &mut PathBuf) {
         *path = base.join(&*path);
     }
 }
-fn load_config(path: &Path) -> Result<Config, String> {
+/// The fixture for a case, from the configured firmware and the case's scenario.
+/// Cases without a scenario boot from the completed-setup state and an empty card.
+fn case_fixture(
+    config: &Config,
+    catalog_dir: &Path,
+    model: &str,
+    case_id: &str,
+    scenario: Option<&Scenario>,
+) -> Result<Fixture, String> {
+    let firmware = config
+        .firmware
+        .get(model)
+        .ok_or_else(|| format!("no firmware package configured for {model}"))?;
+    let (state, card) = match scenario {
+        Some(scenario) => (scenario.state.as_deref(), scenario.card.as_deref()),
+        None => (Some("setup-complete"), Some("empty")),
+    };
+    let spec = |directory: &str, name: &str| {
+        catalog_dir
+            .join(directory)
+            .join(format!("{model}-{name}.toml"))
+    };
+    Ok(Fixture {
+        name: case_id.into(),
+        model: model.into(),
+        firmware_package: Some(firmware.clone()),
+        patches: scenario.map_or_else(Vec::new, |s| s.patches.clone()),
+        update_package: None,
+        state_spec: state.map(|name| spec("states", name)),
+        card_spec: card.map(|name| spec("cards", name)),
+        audio_device: scenario.and_then(|s| s.audio_device.clone()),
+        gdb: scenario.is_some_and(|s| s.gdb),
+    })
+}
+
+/// Use the configured QEMU, or the repository's own, building it if `build` is set
+/// and it is missing or older than its sources.
+fn resolve_qemu(config: &mut Config, root: &Path, base: &Path, build: bool) -> Result<(), String> {
+    match (
+        config.qemu.as_os_str().is_empty(),
+        config.qemu_sha256.is_empty(),
+    ) {
+        (true, true) => {
+            let binary = qemu_build::default_binary(root);
+            if build && qemu_build::is_stale(root, &binary) {
+                qemu_build::build_locked(&qemu_build::Request {
+                    repository: root.to_owned(),
+                    source: None,
+                    minimal: false,
+                })?;
+            }
+            if !binary.is_file() {
+                return Err(format!(
+                    "{} is missing; run without --no-build or set qemu and qemu_sha256",
+                    binary.display()
+                ));
+            }
+            config.qemu_sha256 = hash(&binary)?;
+            config.qemu = binary;
+            Ok(())
+        }
+        (false, false) if config.qemu_sha256.len() == 64 => {
+            resolve(base, &mut config.qemu);
+            if hash(&config.qemu)? != config.qemu_sha256 {
+                return Err("QEMU binary does not match the configured SHA-256".into());
+            }
+            Ok(())
+        }
+        _ => Err("an external qemu needs a pinned 64-character qemu_sha256".into()),
+    }
+}
+
+fn load_config(path: &Path, root: &Path, build: bool) -> Result<Config, String> {
     let path = fs::canonicalize(path).map_err(|e| e.to_string())?;
     let mut config: Config = toml::from_str(&fs::read_to_string(&path).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
-    if config.version != 1 || config.qemu_sha256.len() != 64 {
-        return Err(
-            "configuration requires version=1 and a pinned 64-character qemu_sha256".into(),
-        );
+    if config.version != 1 {
+        return Err("configuration requires version=1".into());
     }
     let base = path.parent().unwrap();
-    resolve(base, &mut config.qemu);
-    if hash(&config.qemu)? != config.qemu_sha256 {
-        return Err("QEMU binary does not match the configured SHA-256".into());
+    resolve_qemu(&mut config, root, base, build)?;
+    for firmware in config.firmware.values_mut() {
+        resolve(base, firmware);
     }
-    let mut keys = BTreeSet::new();
-    for fixture in &mut config.fixture {
-        if !["l6", "l6max"].contains(&fixture.model.as_str())
-            || ![
-                "paced",
-                "adaptive",
-                "host-clock",
-                "host-clock-multi",
-                "split",
-            ]
-            .contains(&fixture.timing.as_str())
-            || !keys.insert((fixture.name.clone(), fixture.model.clone()))
-        {
-            return Err("invalid or duplicate fixture/model/timing".into());
+    for (model, firmware) in &config.firmware {
+        if !["l6", "l6max"].contains(&model.as_str()) {
+            return Err(format!("unknown firmware model {model}"));
         }
-        if fixture.firmware_dir.is_some() == fixture.firmware_package.is_some() {
-            return Err("each fixture needs exactly one firmware_dir or firmware_package".into());
-        }
-        if !fixture.patches.is_empty() && fixture.firmware_package.is_none() {
-            return Err("patches require a stock firmware_package".into());
-        }
-        pad_state::validate(&fixture.sound_pad)?;
-        if !fixture.sound_pad.is_empty() && fixture.sd_image.is_none() {
-            return Err("sound_pad requires an sd_image fixture".into());
-        }
-        if fixture.state_template.is_some() && fixture.state_recipe.is_some() {
-            return Err("choose state_template or state_recipe, not both".into());
-        }
-        if fixture.state_recipe.is_some() && fixture.state_spec.is_some() {
-            return Err("choose state_recipe or state_spec, not both".into());
-        }
-        for path in [
-            &mut fixture.firmware_dir,
-            &mut fixture.firmware_package,
-            &mut fixture.update_package,
-            &mut fixture.state_template,
-            &mut fixture.state_recipe,
-            &mut fixture.state_spec,
-            &mut fixture.sd_image,
-        ]
-        .into_iter()
-        .flatten()
-        {
-            resolve(base, path);
-        }
-        if let Some(path) = &fixture.state_spec {
-            let spec = l6nor::StateSpec::load(path)?;
-            if spec.model != fixture.model {
-                return Err(format!(
-                    "state spec {} is for {}, not the {} fixture",
-                    path.display(),
-                    spec.model,
-                    fixture.model
-                ));
-            }
-        }
-        if let Some(path) = &fixture.state_recipe {
-            let recipe = Scenario::load(path)?;
-            if !recipe.models.contains(&fixture.model)
-                || !recipe.backends.iter().any(|b| b == "headless")
-            {
-                return Err(
-                    "state recipe must support the fixture model and headless backend".into(),
-                );
-            }
+        if !firmware.is_file() {
+            return Err(format!(
+                "firmware for {model} must be an update package: {}",
+                firmware.display()
+            ));
         }
     }
     for legacy in config.legacy.values_mut() {
@@ -408,8 +454,6 @@ fn fixture_options(
         .map_err(|e| e.to_string())?;
         selected_package = Some(patched_package);
         output
-    } else if let Some(path) = &fixture.firmware_dir {
-        path.clone()
     } else {
         l6max_host::setup::unpack_cached(
             fixture.firmware_package.as_ref().unwrap(),
@@ -428,28 +472,7 @@ fn fixture_options(
         }
     }
     let state = dir.join("state");
-    let state_hashes = if let Some(template) = &fixture.state_template {
-        let hashes = files(template)?;
-        if template.join("main-nor.bin").exists() {
-            let nor = fs::read(template.join("main-nor.bin")).map_err(|e| e.to_string())?;
-            if l6fw::model_from_main_nor(&nor)? != model {
-                return Err("saved state belongs to a different model".into());
-            }
-            if !fixture.patches.is_empty()
-                && nor.get(0x50000..0x50000 + main.len()) != Some(main.as_slice())
-            {
-                return Err("saved state MAIN differs from generated patched firmware; use a matching state or a state recipe".into());
-            }
-        }
-        copy_tree(template, &state)?;
-        if files(&state)? != hashes {
-            return Err("state template changed while copying".into());
-        }
-        hashes
-    } else {
-        fs::create_dir_all(&state).map_err(|e| e.to_string())?;
-        BTreeMap::new()
-    };
+    fs::create_dir_all(&state).map_err(|e| e.to_string())?;
     // A spec edits the disposable copy: seed missing NOR from the selected
     // firmware, commit settings with the firmware's bank protocol, and write
     // the panel RTC/flash it declares.
@@ -475,20 +498,17 @@ fn fixture_options(
         dir.as_os_str().to_owned(),
         "--audio-device".into(),
         audio_device.clone().into(),
-        "--timing".into(),
-        fixture.timing.clone().into(),
     ];
     if fixture.gdb {
         args.extend(["--gdb-socket".into(), gdb_socket_path().into_os_string()]);
     }
-    let sd_hash = if let Some(card) = &fixture.sd_image {
+    let sd_hash = if let Some(spec) = &fixture.card_spec {
         let target = dir.join("card.img");
-        fs::copy(card, &target).map_err(|e| e.to_string())?;
-        if !fixture.sound_pad.is_empty() {
-            pad_state::apply(&target, &fixture.model, &fixture.sound_pad)?;
-        }
+        sd_image::spec::CardSpec::load(spec)?
+            .build(&target, spec.parent().unwrap_or(Path::new(".")))
+            .map_err(|e| e.to_string())?;
         args.extend(["--sd-image".into(), target.clone().into_os_string()]);
-        Some(hash(&target)?)
+        Some(hash_sparse(&target)?)
     } else {
         args.push("--no-sd".into());
         None
@@ -502,11 +522,8 @@ fn fixture_options(
     if let Some(package) = &fixture.update_package {
         args.extend(["--update-package".into(), package.clone().into_os_string()]);
     }
-    if fixture.update_bootloader {
-        args.push("--update-bootloader".into());
-    }
     let options = Options::parse_args(args)?;
-    let manifest = json!({"fixture":fixture.name,"model":fixture.model,"firmware":files(&firmware)?,"package_sha256":selected_package.as_ref().map(|p|hash(p)).transpose()?,"patches":fixture.patches,"state_recipe":fixture.state_recipe.as_ref().map(|p|hash(p)).transpose()?,"update_package_sha256":fixture.update_package.as_ref().map(|p|hash(p)).transpose()? ,"state_template":state_hashes,"state_spec":state_spec,"sd_sha256":sd_hash,"sound_pad":if fixture.sd_image.is_some() { json!(fixture.sound_pad) } else { json!([]) },"audio_device":audio_device,"timing":fixture.timing,"update_bootloader":fixture.update_bootloader,"qemu_sha256":config.qemu_sha256});
+    let manifest = json!({"fixture":fixture.name,"model":fixture.model,"firmware":files(&firmware)?,"package_sha256":selected_package.as_ref().map(|p|hash(p)).transpose()?,"patches":fixture.patches,"update_package_sha256":fixture.update_package.as_ref().map(|p|hash(p)).transpose()? ,"state_spec":state_spec,"sd_sha256":sd_hash,"audio_device":audio_device,"qemu_sha256":config.qemu_sha256});
     Ok((options, manifest))
 }
 fn engine_args(options: &Options) -> Vec<String> {
@@ -520,15 +537,6 @@ fn engine_args(options: &Options) -> Vec<String> {
         options.logs.display().to_string(),
         "--audio-device".into(),
         options.audio_device.clone().unwrap(),
-        "--timing".into(),
-        match options.timing {
-            l6max_host::engine::Timing::Paced => "paced",
-            l6max_host::engine::Timing::Adaptive => "adaptive",
-            l6max_host::engine::Timing::HostClock => "host-clock",
-            l6max_host::engine::Timing::HostClockMulti => "host-clock-multi",
-            l6max_host::engine::Timing::Split => "split",
-        }
-        .into(),
     ];
     if let Some(socket) = &options.gdb_socket {
         result.extend(["--gdb-socket".into(), socket.display().to_string()]);
@@ -624,98 +632,6 @@ fn child_scenario() -> Result<(), String> {
     smoke_core::run(Scenario::load_for_case(&path)?, options)
 }
 /// Build persistent state by running a semantic headless scenario on an isolated device.
-fn copy_recipe(source: &Path, destination: &Path) -> Result<PathBuf, String> {
-    fn visit(
-        root: &Path,
-        path: &Path,
-        destination: &Path,
-        seen: &mut BTreeSet<PathBuf>,
-    ) -> Result<(), String> {
-        let source = fs::canonicalize(path).map_err(|e| e.to_string())?;
-        if !source.starts_with(root) || !seen.insert(source.clone()) {
-            return Err("state recipe include escapes its directory or repeats a file".into());
-        }
-        let text = fs::read_to_string(&source).map_err(|e| e.to_string())?;
-        let value: toml::Value = toml::from_str(&text).map_err(|e| e.to_string())?;
-        let target = destination.join(source.strip_prefix(root).map_err(|e| e.to_string())?);
-        fs::create_dir_all(target.parent().ok_or("invalid recipe path")?)
-            .map_err(|e| e.to_string())?;
-        fs::write(&target, &text).map_err(|e| e.to_string())?;
-        if let Some(steps) = value.get("step").and_then(toml::Value::as_array) {
-            for step in steps {
-                if step.get("action").and_then(toml::Value::as_str) == Some("include") {
-                    let include = step
-                        .get("path")
-                        .and_then(toml::Value::as_str)
-                        .ok_or("recipe include needs a path")?;
-                    let child = source
-                        .parent()
-                        .ok_or("invalid recipe parent")?
-                        .join(include);
-                    let canonical = fs::canonicalize(&child).map_err(|e| e.to_string())?;
-                    if !canonical.starts_with(root) {
-                        return Err("state recipe include escapes its directory".into());
-                    }
-                    if !seen.contains(&canonical) {
-                        visit(root, &canonical, destination, seen)?;
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
-    let source = fs::canonicalize(source).map_err(|e| e.to_string())?;
-    let root = source.parent().ok_or("invalid state recipe path")?;
-    visit(root, &source, destination, &mut BTreeSet::new())?;
-    Ok(destination.join(source.file_name().ok_or("invalid state recipe name")?))
-}
-fn prepare_saved_state(
-    root: &Path,
-    recipe: &Path,
-    options: &Options,
-    dir: &Path,
-    timeout: u64,
-) -> Result<(), String> {
-    if options.state_dir.is_none() {
-        return Err("state recipe requires persistent state; the selected case is volatile".into());
-    }
-    let recipe_dir = dir.join("state-setup");
-    fs::create_dir_all(&recipe_dir).map_err(|e| e.to_string())?;
-    let recipe = copy_recipe(recipe, &recipe_dir.join("recipe"))?;
-    let scenario = Scenario::load(&recipe)?;
-    let mut setup = options.clone();
-    setup.logs = recipe_dir.clone();
-    smoke_core::devices::prepare(&scenario, &mut setup)?;
-    let binary = dir
-        .parent()
-        .ok_or("missing run directory")?
-        .join("bin/l6test");
-    let mut command = Command::new(&binary);
-    command
-        .current_dir(root)
-        .arg("__scenario")
-        .arg(&recipe)
-        .args(engine_args(&setup));
-    for (key, _) in env::vars_os() {
-        if key.to_string_lossy().starts_with("L6_") || key.to_string_lossy().starts_with("L6MAX_") {
-            command.env_remove(key);
-        }
-    }
-    command
-        .env("SMOKE_CASE", "state-setup")
-        .env("SMOKE_BACKEND", "headless");
-    if !supervise(command, &recipe_dir, timeout)? {
-        return Err("state recipe failed; inspect state-setup logs".into());
-    }
-    let report: Value = serde_json::from_slice(
-        &fs::read(recipe_dir.join("scenario.json")).map_err(|e| e.to_string())?,
-    )
-    .map_err(|e| e.to_string())?;
-    if report["outcome"] != "PASS" || files(setup.state_dir.as_ref().unwrap())?.is_empty() {
-        return Err("state recipe did not produce a passing persistent state".into());
-    }
-    Ok(())
-}
 fn expand(value: &str, options: &Options) -> String {
     let mut text = value
         .replace(
@@ -788,16 +704,27 @@ fn run_case(
             return Err("QEMU changed since preflight".into());
         }
         let mut selected_fixture = fixture.clone();
-        if case.volatile {
-            if selected_fixture.state_recipe.is_some() {
-                return Err("volatile cases cannot use a state recipe".into());
+        if let Some(path) = &case.scenario {
+            let patches = Scenario::load(&catalog_dir.join(path))?
+                .update_patches
+                .remove(&fixture.model)
+                .unwrap_or_default();
+            if !patches.is_empty() {
+                let package = fixture
+                    .firmware_package
+                    .as_ref()
+                    .ok_or("update_patches require firmware_package")?;
+                let bytes = fs::read(package).map_err(|e| e.to_string())?;
+                let names: Vec<&str> = patches.iter().map(String::as_str).collect();
+                let (patched, _) = firmware_patch_wasm::apply_patches(&bytes, &names)?;
+                fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+                let update = dir.join("patched-update.bin");
+                fs::write(&update, patched).map_err(|e| e.to_string())?;
+                selected_fixture.update_package = Some(update);
             }
-            // A spec is rebuilt for every case, so it carries no state between
-            // cases; volatile cases keep it and run on that disposable state.
-            selected_fixture.state_template = None;
         }
         if case.no_sd {
-            selected_fixture.sd_image = None;
+            selected_fixture.card_spec = None;
         }
         let (mut options, mut manifest) = fixture_options(config, &selected_fixture, dir)?;
         if case.volatile && selected_fixture.state_spec.is_none() {
@@ -806,13 +733,6 @@ fn run_case(
         if case.no_sd {
             options.sd_image = None;
             options.no_sd = true;
-        }
-        if let Some(recipe) = &selected_fixture.state_recipe {
-            prepare_saved_state(root, recipe, &options, dir, case.wall_timeout_s)?;
-            manifest["state_recipe_files"] = json!(files(&dir.join("state-setup/recipe"))?);
-            if hash(&config.qemu)? != config.qemu_sha256 {
-                return Err("QEMU changed during state preparation".into());
-            }
         }
         // Setup-input steps are skipped when the spec already built their result.
         let spec_state = selected_fixture.state_spec.is_some();
@@ -829,7 +749,7 @@ fn run_case(
         manifest["execution_sd_sha256"] = options
             .sd_image
             .as_ref()
-            .map(|path| hash(path))
+            .map(|path| hash_sparse(path))
             .transpose()?
             .map_or(Value::Null, |value| json!(value));
         manifest["execution_state_sha256"] = options
@@ -1061,7 +981,7 @@ fn execute() -> Result<i32, String> {
     copy_tree(&catalog_dir, &output.join("spec"))?;
     let catalog_dir = output.join("spec");
     let preflight = || -> Result<(Config, Value), String> {
-        let config = load_config(&args.config)?;
+        let config = load_config(&args.config, root, args.build)?;
         let _shared = l6max_host::shared_memory::SharedRam::new(2048).map_err(|e| {
             format!("shared memory unavailable: {e}; rerun with the required sandbox permissions")
         })?;
@@ -1105,26 +1025,13 @@ fn execute() -> Result<i32, String> {
         return Err("no cases selected".into());
     }
     if args.command == "check" {
-        for fixture in config
-            .fixture
-            .iter()
-            .filter(|f| args.model == "all" || f.model == args.model)
-        {
-            fixture_options(
-                &config,
-                fixture,
-                &output.join(format!("check-{}-{}", fixture.name, fixture.model)),
-            )?;
-        }
         fs::write(
             output.join("report.json"),
             serde_json::to_vec_pretty(&json!({"schema":1,"outcome":"PASS","preflight_only":true}))
                 .unwrap(),
         )
         .map_err(|e| e.to_string())?;
-        println!(
-            "Preflight passed. QEMU is pinned by binary hash; source provenance is explicitly unattested."
-        );
+        println!("Preflight passed. QEMU is pinned by binary hash for this run.");
         return Ok(0);
     }
     let backends: Vec<&str> = if args.backend == "both" {
@@ -1220,17 +1127,6 @@ fn execute() -> Result<i32, String> {
                 .as_ref()
                 .map(|p| Scenario::load(&catalog_dir.join(p)))
                 .transpose()?;
-            let fixture_name = scenario.as_ref().map_or_else(
-                || {
-                    config
-                        .legacy
-                        .get(&case.id)
-                        .and_then(|local| local.fixture.clone())
-                        .or_else(|| case.fixture.clone())
-                        .unwrap_or_else(|| "prepared".into())
-                },
-                |s| s.fixture.clone(),
-            );
             let selected: Vec<&str> = match &scenario {
                 Some(_) if case.gui => vec!["gui"],
                 Some(scenario) => backends
@@ -1249,7 +1145,6 @@ fn execute() -> Result<i32, String> {
                     case,
                     model: model.clone(),
                     backend,
-                    fixture_name: fixture_name.clone(),
                     exclusive,
                     dir: output.join(format!("{}-{model}-{backend}", case.id.replace('/', "-"))),
                 });
@@ -1260,29 +1155,39 @@ fn execute() -> Result<i32, String> {
         let case_span = tracing::info_span!("smoke_case",case=%job.case.id,model=%job.model,backend=job.backend,artifacts=%job.dir.display());
         let _entered = case_span.enter();
         tracing::info!(event = "case_started", "case started");
-        let result = if let Some(fixture) = config
-            .fixture
-            .iter()
-            .find(|f| f.model == job.model && f.name == job.fixture_name)
-        {
-            run_case(
+        let scenario = job
+            .case
+            .scenario
+            .as_ref()
+            .map(|path| Scenario::load(&catalog_dir.join(path)))
+            .transpose();
+        let fixture = scenario.and_then(|scenario| {
+            case_fixture(
+                &config,
+                &catalog_dir,
+                &job.model,
+                &job.case.id,
+                scenario.as_ref(),
+            )
+        });
+        let result = match fixture {
+            Ok(fixture) => run_case(
                 root,
                 &catalog_dir,
                 &config,
-                fixture,
+                &fixture,
                 job.case,
                 job.backend,
                 &job.dir,
-            )
-        } else {
-            CaseResult {
+            ),
+            Err(detail) => CaseResult {
                 case: job.case.id.clone(),
                 model: job.model.clone(),
                 backend: job.backend.into(),
                 outcome: "BLOCKED".into(),
-                detail: format!("missing fixture {}/{}", job.fixture_name, job.model),
+                detail,
                 artifacts: job.dir.clone(),
-            }
+            },
         };
         match result.outcome.as_str() {
             "PASS" => {
@@ -1363,7 +1268,6 @@ struct Job<'a> {
     case: &'a Case,
     model: String,
     backend: &'a str,
-    fixture_name: String,
     exclusive: bool,
     dir: PathBuf,
 }
@@ -1505,19 +1409,13 @@ mod tests {
         let fixture = Fixture {
             name: "l6-recorder-playback".into(),
             model: "l6".into(),
-            firmware_dir: None,
             firmware_package: None,
             patches: vec![],
             update_package: None,
-            state_template: None,
-            state_recipe: None,
             state_spec: None,
-            sd_image: None,
-            sound_pad: vec![],
+            card_spec: None,
             audio_device: Some("driver=wav,id=l6-audio,path={logs}/audio.wav".into()),
             gdb: true,
-            timing: "paced".into(),
-            update_bootloader: false,
         };
         assert_eq!(
             audio_device_spec(&fixture, Path::new("/tmp/case-logs")),
@@ -1551,70 +1449,135 @@ mod tests {
         fs::remove_dir_all(dir).unwrap();
     }
     #[test]
-    fn state_recipe_snapshot_preserves_includes_and_rejects_escape() {
+    fn an_external_qemu_needs_both_its_path_and_hash() {
+        let root = l6max_host::paths::repository_root();
         let dir = temp();
-        let source = dir.join("source");
-        fs::create_dir_all(source.join("fragments")).unwrap();
-        let recipe = source.join("recipe.toml");
-        fs::write(&recipe, "version=1\nname='setup'\nmodels=['l6']\nfixture='fresh'\n[[step]]\naction='include'\npath='fragments/wait.toml'\n").unwrap();
+        let config = dir.join("fixtures.toml");
+        fs::write(&config, "version=1\nqemu='qemu'\n").unwrap();
+        assert!(
+            load_config(&config, &root, false)
+                .err()
+                .unwrap()
+                .contains("qemu_sha256")
+        );
         fs::write(
-            source.join("fragments/wait.toml"),
-            "[[step]]\naction='delay'\nguest_ms=50\n",
-        )
-        .unwrap();
-        let copy = copy_recipe(&recipe, &dir.join("copy")).unwrap();
-        fs::write(source.join("fragments/wait.toml"), "invalid").unwrap();
-        assert!(Scenario::load(&copy).is_ok());
-        fs::write(
-            dir.join("outside.toml"),
-            "[[step]]\naction='delay'\nguest_ms=50\n",
-        )
-        .unwrap();
-        fs::write(
-            &recipe,
-            "[[step]]\naction='include'\npath='../outside.toml'\n",
+            &config,
+            format!("version=1\nqemu_sha256='{}'\n", "0".repeat(64)),
         )
         .unwrap();
         assert!(
-            copy_recipe(&recipe, &dir.join("unsafe-copy"))
-                .unwrap_err()
-                .contains("escapes")
+            load_config(&config, &root, false)
+                .err()
+                .unwrap()
+                .contains("qemu_sha256")
         );
         fs::remove_dir_all(dir).unwrap();
     }
+
     #[test]
-    fn fixture_rejects_conflicting_state_and_patch_inputs() {
+    fn firmware_must_be_a_package_and_fixtures_are_not_local() {
+        let root = l6max_host::paths::repository_root();
         let dir = temp();
         fs::write(dir.join("qemu"), b"qemu").unwrap();
-        let qemu_hash = format!("{:x}", Sha256::digest(b"qemu"));
-        let config = dir.join("fixtures.toml");
-        let header = format!("version=1\nqemu='qemu'\nqemu_sha256='{qemu_hash}'\n");
-        fs::write(&config, format!("{header}[[fixture]]\nname='prepared'\nmodel='l6'\nfirmware_dir='firmware'\npatches=['midi-sync']\n")).unwrap();
+        fs::write(dir.join("L6max.bin"), b"").unwrap();
+        fs::create_dir(dir.join("unpacked")).unwrap();
+        let hash = format!("{:x}", Sha256::digest(b"qemu"));
+        let header = format!("version=1\nqemu='qemu'\nqemu_sha256='{hash}'\n");
+        let config = dir.join("local.toml");
+        let write = |body: &str| fs::write(&config, format!("{header}{body}")).unwrap();
+        write("[firmware]\nl6max='L6max.bin'\n");
+        assert!(load_config(&config, &root, false).is_ok());
+        write("[firmware]\nl6max='unpacked'\n");
         assert!(
-            load_config(&config)
+            load_config(&config, &root, false)
                 .err()
                 .unwrap()
-                .contains("firmware_package")
+                .contains("update package")
         );
-        fs::write(&config, format!("{header}[[fixture]]\nname='prepared'\nmodel='l6'\nfirmware_package='firmware.bin'\nstate_template='state'\nstate_recipe='recipe.toml'\n")).unwrap();
+        write("[firmware]\nother='L6max.bin'\n");
         assert!(
-            load_config(&config)
+            load_config(&config, &root, false)
                 .err()
                 .unwrap()
-                .contains("state_template or state_recipe")
+                .contains("unknown firmware")
         );
-        fs::write(&config, format!("{header}[[fixture]]\nname='prepared'\nmodel='l6'\nfirmware_package='firmware.bin'\nstate_spec='spec.toml'\nstate_recipe='recipe.toml'\n")).unwrap();
-        assert!(
-            load_config(&config)
-                .err()
-                .unwrap()
-                .contains("state_recipe or state_spec")
-        );
-        fs::write(dir.join("spec.toml"), "version=1\nmodel='l6max'\n").unwrap();
-        fs::write(&config, format!("{header}[[fixture]]\nname='prepared'\nmodel='l6'\nfirmware_package='firmware.bin'\nstate_spec='spec.toml'\n")).unwrap();
-        assert!(load_config(&config).err().unwrap().contains("is for l6max"));
+        write("[[fixture]]\nname='prepared'\nmodel='l6max'\n");
+        assert!(load_config(&config, &root, false).is_err());
         fs::remove_dir_all(dir).unwrap();
     }
+
+    #[test]
+    fn a_case_fixture_comes_from_its_scenario() {
+        let root = l6max_host::paths::repository_root();
+        let catalog = root.join("tests/smoke");
+        let config = Config {
+            version: 1,
+            firmware: BTreeMap::from([("l6max".to_string(), PathBuf::from("L6max.bin"))]),
+            qemu: PathBuf::new(),
+            qemu_sha256: String::new(),
+            legacy: BTreeMap::new(),
+            expected_failure: vec![],
+        };
+        let scenario = Scenario::load(&catalog.join("scenarios/host-midi-sync.toml")).unwrap();
+        let fixture = case_fixture(
+            &config,
+            &catalog,
+            "l6max",
+            "host-midi-sync",
+            Some(&scenario),
+        )
+        .unwrap();
+        assert_eq!(fixture.patches, ["midi-sync"]);
+        assert!(fixture.state_spec.unwrap().is_file());
+        assert!(
+            case_fixture(&config, &catalog, "l6", "host-midi-sync", Some(&scenario))
+                .err()
+                .unwrap()
+                .contains("no firmware package")
+        );
+    }
+
+    #[test]
+    fn every_scenario_card_has_a_valid_spec_for_each_model() {
+        let catalog_dir = l6max_host::paths::repository_root().join("tests/smoke");
+        let mut cards = 0;
+        for entry in fs::read_dir(catalog_dir.join("scenarios")).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_none_or(|extension| extension != "toml") {
+                continue;
+            }
+            let scenario = Scenario::load(&path).unwrap();
+            for model in &scenario.models {
+                let fixture = Config {
+                    version: 1,
+                    firmware: BTreeMap::from([(model.clone(), PathBuf::from("firmware.bin"))]),
+                    qemu: PathBuf::new(),
+                    qemu_sha256: String::new(),
+                    legacy: BTreeMap::new(),
+                    expected_failure: vec![],
+                };
+                let fixture = case_fixture(
+                    &fixture,
+                    &catalog_dir,
+                    model,
+                    &scenario.name,
+                    Some(&scenario),
+                )
+                .unwrap();
+                if let Some(spec_path) = &fixture.card_spec {
+                    let spec = sd_image::spec::CardSpec::load(spec_path).unwrap();
+                    assert_eq!(&spec.model, model, "{}", spec_path.display());
+                    cards += 1;
+                }
+                if let Some(spec_path) = &fixture.state_spec {
+                    let spec = l6nor::StateSpec::load(spec_path).unwrap();
+                    assert_eq!(&spec.model, model, "{}", spec_path.display());
+                }
+            }
+        }
+        assert!(cards > 0);
+    }
+
     #[test]
     fn package_placeholder_uses_the_selected_generated_package() {
         let dir = temp();
@@ -1639,14 +1602,11 @@ mod tests {
         fs::write(dir.join("qemu"), b"wrong binary").unwrap();
         fs::write(
             dir.join("fixtures.toml"),
-            format!(
-                "version=1\nqemu='qemu'\nqemu_sha256='{}'\nfixture=[]\n",
-                "0".repeat(64)
-            ),
+            format!("version=1\nqemu='qemu'\nqemu_sha256='{}'\n", "0".repeat(64)),
         )
         .unwrap();
         assert!(
-            load_config(&dir.join("fixtures.toml"))
+            load_config(&dir.join("fixtures.toml"), &dir, false)
                 .err()
                 .unwrap()
                 .contains("SHA-256")
@@ -1662,13 +1622,13 @@ mod tests {
         fs::write(
             dir.join("fixtures.toml"),
             format!(
-                "version=1\nqemu='qemu'\nqemu_sha256='{}'\nfixture=[]\n[legacy.\"gui-menu\"]\nexecutable='bundle-gui'\nexecutable_sha256='{}'\n",
+                "version=1\nqemu='qemu'\nqemu_sha256='{}'\n[legacy.\"gui-menu\"]\nexecutable='bundle-gui'\nexecutable_sha256='{}'\n",
                 format!("{:x}", Sha256::digest(b"qemu")),
                 executable_hash
             ),
         )
         .unwrap();
-        let config = load_config(&dir.join("fixtures.toml")).unwrap();
+        let config = load_config(&dir.join("fixtures.toml"), &dir, false).unwrap();
         let legacy = &config.legacy["gui-menu"];
         assert_eq!(
             legacy.executable.as_deref(),
@@ -1682,18 +1642,18 @@ mod tests {
         fs::write(
             dir.join("fixtures.toml"),
             format!(
-                "version=1\nqemu='qemu'\nqemu_sha256='{}'\nfixture=[]\n[legacy.\"gui-menu\"]\nexecutable='bundle-gui'\nexecutable_sha256='{}'\n",
+                "version=1\nqemu='qemu'\nqemu_sha256='{}'\n[legacy.\"gui-menu\"]\nexecutable='bundle-gui'\nexecutable_sha256='{}'\n",
                 format!("{:x}", Sha256::digest(b"qemu")),
                 "0".repeat(64)
             ),
         )
         .unwrap();
-        assert!(load_config(&dir.join("fixtures.toml")).is_err());
+        assert!(load_config(&dir.join("fixtures.toml"), &dir, false).is_err());
         fs::remove_dir_all(dir).unwrap();
     }
     #[test]
     fn expected_failures_match_the_exact_step_and_error_and_expose_unexpected_passes() {
-        let config:Config=toml::from_str("version=1\nqemu='unused'\nqemu_sha256='unused'\nfixture=[]\n[[expected_failure]]\ncase='controls'\nmodel='l6'\nstep=10\ncontains='ExpectRing'\nreason='tracked issue'\n").unwrap();
+        let config:Config=toml::from_str("version=1\nqemu='unused'\nqemu_sha256='unused'\n[[expected_failure]]\ncase='controls'\nmodel='l6'\nstep=10\ncontains='ExpectRing'\nreason='tracked issue'\n").unwrap();
         for (step, detail, initial, expected) in [
             (10, "ExpectRing timed out", "FAIL", "XFAIL"),
             (9, "ExpectRing timed out", "FAIL", "FAIL"),
@@ -1711,47 +1671,6 @@ mod tests {
             apply_expected(&mut result, &json!({"failed_step":step}), &config);
             assert_eq!(result.outcome, expected);
         }
-    }
-    #[test]
-    fn a_saved_state_for_the_other_model_is_rejected_before_copying() {
-        let dir = temp();
-        let firmware = dir.join("firmware");
-        let template = dir.join("template");
-        fs::create_dir_all(&firmware).unwrap();
-        fs::create_dir_all(&template).unwrap();
-        let mut main = Vec::new();
-        main.extend(0x20010000u32.to_le_bytes());
-        main.extend(0x80001415u32.to_le_bytes());
-        fs::write(firmware.join("main_firmware.bin"), &main).unwrap();
-        let mut nor = vec![0xff; 0x50008];
-        nor[0x50000..0x50004].copy_from_slice(&0x20010000u32.to_le_bytes());
-        nor[0x50004..].copy_from_slice(&0x80000415u32.to_le_bytes());
-        fs::write(template.join("main-nor.bin"), nor).unwrap();
-        let config: Config =
-            toml::from_str("version=1\nqemu='unused'\nqemu_sha256='unused'\nfixture=[]\n").unwrap();
-        let fixture = Fixture {
-            name: "prepared".into(),
-            model: "l6".into(),
-            firmware_dir: Some(firmware),
-            firmware_package: None,
-            patches: vec![],
-            update_package: None,
-            state_template: Some(template),
-            state_recipe: None,
-            state_spec: None,
-            sd_image: None,
-            sound_pad: vec![],
-            audio_device: None,
-            gdb: false,
-            timing: "paced".into(),
-            update_bootloader: false,
-        };
-        let error = fixture_options(&config, &fixture, &dir.join("run"))
-            .err()
-            .unwrap();
-        assert!(error.contains("different model"));
-        assert!(!dir.join("run/state/main-nor.bin").exists());
-        fs::remove_dir_all(dir).unwrap();
     }
     #[test]
     fn scheduler_bounds_concurrency_and_isolates_exclusive_jobs() {

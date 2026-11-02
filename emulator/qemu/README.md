@@ -1,10 +1,9 @@
 # QEMU model
 
 Custom board and peripheral sources for the L6 and L6max simulator machines.
-The `l6max-dual` machine name is retained for compatibility; it supports both
-models and detects the board profile from the MAIN firmware reset vector. The
-standalone `l6max-main` machine uses the same auto-detection. The standalone
-`l6max-panel` machine has no MAIN image, so select its profile with
+The `l6max-main` machine supports both models and detects the board profile from the
+MAIN firmware reset vector. The `l6max-panel` machine has no MAIN image, so select its
+profile with
 `L6_MODEL=l6` or `L6_MODEL=l6max`. Build against QEMU 11.1.2.
 
 Initialize the pinned upstream source with

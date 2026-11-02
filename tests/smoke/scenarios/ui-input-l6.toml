@@ -1,7 +1,8 @@
 version = 1
 name = "ui-input-l6"
 models = ["l6"]
-fixture = "prepared"
+state = "setup-complete"
+card = "empty"
 backends = ["headless", "gui"]
 
 [[step]]

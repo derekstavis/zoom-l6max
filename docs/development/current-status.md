@@ -22,30 +22,26 @@ analog audio behavior, and physical jack routing remain unverified.
 
 - The full L6 panel scenario and exact encoder reversal need further
   qualification on both headless and GPUI backends.
-- L6 DIN input, DIN-to-USB forwarding, and the event-dispatch scenario need
-  further qualification. L6 USB startup and L6max direct USB cable-isolation
-  scenarios also need live qualification.
+- L6 DIN-to-USB forwarding and USB startup scenarios need further qualification.
 - L6 scene-save GUI coverage, startup-key parity, and the packaged-app menu
   and bundle cases require further validation.
 - Sound-pad playback and MASTER meter response are exercised for both models
   using saved assignments. The waveform cases compare SAI output with the
   source WAV. Cards must meet the firmware's
-  [layout requirements](../emulator/usb.md#card-layout). The L6 Editor-assigned
-  pad scenario needs further qualification. Recorder playback requires prepared media and state;
+  [layout requirements](../emulator/usb.md#card-layout). The Editor-assigned
+  pad scenarios need further qualification. Recorder playback requires prepared media and state;
   recording to a file remains unresolved.
 - L6max sound-pad key-bit assertions and DIN/Editor scenarios need live
   qualification. Physical control wiring is not established by emulator tests.
 
-## Fixtures and execution
+## Test setup and execution
 
 The [scenario catalog](../../tests/smoke/catalog.toml) specifies each case's
-models, backends, and prerequisites. A `state_spec` creates disposable settings
-and panel state without running setup interactions. `fixture.sound_pad` writes
-pad assignments and playback settings to a disposable SD-card copy. Scenario
-steps marked `setup_input` are skipped when a state spec supplies that setup.
-
-Use a model-matched firmware package and state, pin the QEMU executable by
-SHA-256, and configure the media and backend needed by each case. See the
-[testing workflow](testing.md) for fixtures, permissions, suites, and reports.
+models, backends, and prerequisites. Each scenario declares its state, card, and patches, and the local
+configuration supplies the firmware packages. A state spec creates disposable settings
+and panel state without running setup interactions, and a card spec builds the case's
+SD card with its pad assignments. Scenario steps marked `setup_input` are skipped when
+a state spec supplies that setup. See the
+[testing workflow](testing.md) for configuration, permissions, suites, and reports.
 The driver records the binary hash; an externally supplied binary's build
 source is not attested by that hash.

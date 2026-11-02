@@ -12,7 +12,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         Some("usb") => usb::run(args),
         Some("help" | "--help" | "-h") | None => {
             println!(
-                "Usage:\n  l6fs card create PATH [--size-mib MIB]\n  l6fs card demo PATH --firmware-package PACKAGE\n  l6fs card import PATH --directory FOLDER\n  l6fs usb --sd-image CARD.img [engine options] -- list [DIR] | get SD_PATH HOST_PATH | put HOST_PATH SD_PATH\n\nCard commands create FAT32 media or populate a demo card. USB commands access a card through the emulator's USB mass-storage path."
+                "Usage:\n  l6fs card create PATH --model l6|l6max [options]; see `l6fs card --help`\n  l6fs card demo PATH --firmware-package PACKAGE\n  l6fs card import PATH --directory FOLDER --model l6|l6max\n  l6fs usb --sd-image CARD.img [engine options] -- list [DIR] | get SD_PATH HOST_PATH | put HOST_PATH SD_PATH\n\nCard commands create FAT32 media or populate a demo card. USB commands access a card through the emulator's USB mass-storage path."
             );
             Ok(())
         }

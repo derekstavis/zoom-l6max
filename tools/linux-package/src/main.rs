@@ -371,8 +371,8 @@ fn verify(app: &Path) -> Result<(), String> {
         .env("LD_LIBRARY_PATH", &libraries)
         .output()
         .map_err(|e| e.to_string())?;
-    if !String::from_utf8_lossy(&machines.stdout).contains("l6max-dual") {
-        return Err("bundled QEMU does not provide the l6max-dual machine".into());
+    if !String::from_utf8_lossy(&machines.stdout).contains("l6max-main") {
+        return Err("bundled QEMU does not provide the l6max-main machine".into());
     }
     Ok(())
 }

@@ -6,6 +6,7 @@ publish.workspace = true
 license.workspace = true
 
 [dependencies]
+sd-image.workspace = true
 tracing.workspace = true
 l6max-host.workspace = true
 l6fw.workspace = true
@@ -19,7 +20,6 @@ l6max-diagnostics.workspace = true
 libc.workspace = true
 sha2.workspace = true
 aho-corasick = "1.1.5"
-fatfs.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 coremidi = "0.9"
