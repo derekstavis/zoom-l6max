@@ -22,6 +22,49 @@ pub fn existing_qemu() -> Option<PathBuf> {
     .find(|path| path.is_file())
 }
 
+fn model_state_path(state: &Path, model: l6fw::Model) -> PathBuf {
+    state.join("models").join(crate::config::model_name(model))
+}
+
+/// The state directory for one model, so its NOR, panel flash, RTC and SD selection
+/// cannot cross over. A device already installed directly in `state` stays there.
+pub fn separate_model_state(state: &Path, model: l6fw::Model) -> std::io::Result<PathBuf> {
+    if state
+        .file_name()
+        .is_some_and(|name| name == crate::config::model_name(model))
+    {
+        return Ok(state.to_path_buf());
+    }
+    let model_state = model_state_path(state, model);
+    if model_state.is_dir() {
+        let main_nor = model_state.join("main-nor.bin");
+        if main_nor.is_file() {
+            let installed = l6fw::model_from_main_nor(&fs::read(main_nor)?)
+                .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+            if installed != model {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "model-specific state contains firmware for a different device",
+                ));
+            }
+        }
+        return Ok(model_state);
+    }
+    let main_nor = state.join("main-nor.bin");
+    match fs::read(&main_nor) {
+        Ok(bytes) => {
+            let installed = l6fw::model_from_main_nor(&bytes)
+                .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+            if installed == model {
+                return Ok(state.to_path_buf());
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    Ok(model_state)
+}
+
 /// Packages looked for when none is given, preferring the original L6max
 /// default for backward compatibility while accepting either model.
 pub fn package_candidates(root: &Path) -> [PathBuf; 4] {
@@ -66,7 +109,7 @@ pub fn unpack_cached(package: &Path, cache: &Path) -> Result<PathBuf, String> {
     Ok(directory)
 }
 
-const MISSING_FIRMWARE: &str = "no firmware found. Supply your own L6 or L6max update package \
+pub const MISSING_FIRMWARE: &str = "no firmware found. Supply your own L6 or L6max update package \
 (not distributed with this project; obtain it from ZOOM) by any of: \
 placing L6.bin or L6max.bin in the repository root, `--firmware-package /path/to/package.bin`, the \
 L6_FIRMWARE environment variable, or `--firmware-dir` with an unpacked package";
@@ -77,7 +120,23 @@ impl Options {
     pub fn prepare(&mut self) -> Result<(), String> {
         let root = repository_root();
         self.prepare_qemu(root)?;
-        self.prepare_firmware(root)
+        self.prepare_firmware(root)?;
+        let main =
+            fs::read(self.firmware_dir.join("main_firmware.bin")).map_err(|e| e.to_string())?;
+        let model = l6fw::model_from_main(&main)?;
+        if self.state_dir.as_deref() == Some(root.join("emulator/state").as_path()) {
+            let state = self.state_dir.take().unwrap();
+            self.state_dir = Some(separate_model_state(&state, model).map_err(|e| e.to_string())?);
+        }
+        if self.sd_image.is_none() && !self.no_sd {
+            self.sd_image = self
+                .config
+                .as_ref()
+                .and_then(|config| config.sd_card(model))
+                .filter(|card| card.is_file())
+                .cloned();
+        }
+        Ok(())
     }
 
     fn prepare_qemu(&mut self, root: &Path) -> Result<(), String> {
@@ -116,6 +175,13 @@ impl Options {
     }
 
     fn prepare_firmware(&mut self, root: &Path) -> Result<(), String> {
+        // A requested model needs its own package, not whatever else is around.
+        if self.model.is_some()
+            && self.firmware_package.is_none()
+            && self.firmware_dir == root.join("unpacked")
+        {
+            return Err(MISSING_FIRMWARE.into());
+        }
         if self.firmware_package.is_none() {
             self.firmware_package = package_candidates(root).into_iter().find(|p| p.is_file());
         }

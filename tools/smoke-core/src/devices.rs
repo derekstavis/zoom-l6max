@@ -100,6 +100,25 @@ pub enum Operation {
         value: u8,
     },
     L6maxTapHandler,
+    AudioInputTransport {
+        command: String,
+        position_ms: i32,
+    },
+    AudioInputLoad {
+        channel: u32,
+        loaded: bool,
+    },
+    ExpectAudioInput {
+        playing: bool,
+        min_ms: u32,
+        max_ms: u32,
+    },
+    ExpectTone {
+        file: Option<String>,
+        hz: f64,
+        levels: [Option<f64>; 2],
+        tolerance_db: f64,
+    },
     ExpectCardEntry {
         path: String,
     },
@@ -3550,6 +3569,114 @@ impl State {
                     thread::sleep(Duration::from_millis(5));
                 }
                 Ok(json!({"target":target,"column":column,"row":row,"event":event,"report":bytes}))
+            }
+            Operation::AudioInputTransport {
+                command,
+                position_ms,
+            } => {
+                use l6max_host::protocol;
+                let target = match command.as_str() {
+                    "stop" => protocol::AUDIO_INPUT_STOP,
+                    "play" => protocol::AUDIO_INPUT_PLAY,
+                    "pause" => protocol::AUDIO_INPUT_PAUSE,
+                    "seek" => protocol::AUDIO_INPUT_SEEK,
+                    other => return Err(format!("unknown audio input command {other}").into()),
+                };
+                let main = &session.engine.inputs.as_ref().unwrap().main;
+                let sequence = main.audio_input_transport(target, position_ms)?;
+                Ok(json!({"command": command, "position_ms": position_ms, "sequence": sequence}))
+            }
+            Operation::AudioInputLoad { channel, loaded } => {
+                let main = &session.engine.inputs.as_ref().unwrap().main;
+                let before = main.snapshot().rejected;
+                let sequence = main.audio_input_load(channel - 1, loaded)?;
+                let deadline =
+                    std::time::Instant::now() + std::time::Duration::from_secs(wall_timeout_s);
+                while main
+                    .snapshot()
+                    .last_ack
+                    .is_none_or(|ack| ack.sequence != sequence)
+                {
+                    if std::time::Instant::now() >= deadline {
+                        return Err("audio input load was not acknowledged".into());
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                if main.snapshot().rejected != before {
+                    return Err(format!("channel {channel} has no prepared audio").into());
+                }
+                Ok(json!({"channel": channel, "loaded": loaded}))
+            }
+            Operation::ExpectAudioInput {
+                playing,
+                min_ms,
+                max_ms,
+            } => {
+                let status = session.engine.inputs.as_ref().unwrap().main.snapshot();
+                let evidence = json!({
+                    "playing": status.audio_input_playing,
+                    "position_ms": status.audio_input_position_ms,
+                });
+                if status.audio_input_playing != playing
+                    || !(min_ms..=max_ms).contains(&status.audio_input_position_ms)
+                {
+                    return Err(format!(
+                        "audio input state {evidence} is not playing={playing}, {min_ms}..={max_ms} ms"
+                    )
+                    .into());
+                }
+                Ok(evidence)
+            }
+            Operation::ExpectTone {
+                file,
+                hz,
+                levels,
+                tolerance_db,
+            } => {
+                const RATE: usize = 48000;
+                let frames = match &file {
+                    None => {
+                        let path = std::env::var_os("L6_AUDIO_RAW_CAPTURE")
+                            .ok_or("expect-output-tone requires L6_AUDIO_RAW_CAPTURE")?;
+                        let frames = waveform::decode_capture(&fs::read(path)?);
+                        frames[frames.len().saturating_sub(RATE)..].to_vec()
+                    }
+                    Some(file) => {
+                        let card = options
+                            .sd_image
+                            .as_ref()
+                            .ok_or("expect-recorded-tone requires an SD card")?;
+                        let mut volume = sd_image::open(card)?;
+                        let project = volume
+                            .entries("RECORDER")?
+                            .into_iter()
+                            .filter(|entry| entry.directory && !entry.name.starts_with('.'))
+                            .map(|entry| entry.name)
+                            .max()
+                            .ok_or("the card has no recorder project")?;
+                        let bytes = volume.read(&format!("RECORDER/{project}/{file}"))?;
+                        let frames = waveform::decode_wav(&bytes)?;
+                        frames[RATE.min(frames.len())..].to_vec()
+                    }
+                };
+                if frames.len() < RATE {
+                    return Err(format!("only {} frames to measure", frames.len()).into());
+                }
+                let measured = waveform::tone_levels_db(&frames[..RATE], hz, RATE as f64);
+                let evidence =
+                    json!({"file": file, "hz": hz, "measured_db": measured, "expected_db": levels});
+                for (side, (measured, expected)) in
+                    ["left", "right"].iter().zip(measured.iter().zip(levels))
+                {
+                    let matches = match expected {
+                        Some(expected) => (measured - expected).abs() <= tolerance_db,
+                        None => *measured < -70.,
+                    };
+                    if !matches {
+                        return Err(format!("{side} tone mismatch: {evidence}").into());
+                    }
+                }
+                Ok(evidence)
             }
             Operation::ExpectCardEntry { path } => {
                 let card = options

@@ -13,6 +13,9 @@ qemu-build.workspace = true
 sha2.workspace = true
 sd-image.workspace = true
 libc.workspace = true
+serde = { version = "1", features = ["derive"] }
+toml = "0.8.23"
+toml_edit = "0.22.27"
 memmap2.workspace = true
 serde_json.workspace = true
 qapi.workspace = true

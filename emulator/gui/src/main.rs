@@ -1,3 +1,4 @@
+mod audio_window;
 mod bundle;
 mod bundle_smoke;
 mod components;
@@ -113,11 +114,28 @@ actions!(
         DisconnectUsb,
         ConnectMidi,
         DisconnectMidi,
-        EjectSdCard
+        EjectSdCard,
+        OpenAudioWindow,
+        PlayAudioInputs,
+        PauseAudioInputs,
+        StopAudioInputs,
+        RewindAudioInputs
     ]
 );
 
 struct NativePanel {
+    /// The model the window is sized for.
+    window_model: l6fw::Model,
+    window_settling_frames: u8,
+    audio_window: Option<gpui::WindowHandle<audio_window::AudioWindow>>,
+    /// Files assigned to input channels, by one-based channel.
+    audio_patch: std::collections::BTreeMap<u32, std::path::PathBuf>,
+    /// Set while files convert, with each channel's progress.
+    audio_conversion: Option<Arc<Mutex<std::collections::BTreeMap<u32, f32>>>>,
+    /// The guest restarted, so its channels need the patch applied.
+    audio_sync_needed: bool,
+    audio_length_ms: u32,
+    audio_error: Option<String>,
     layout: Layout,
     model: l6fw::Model,
     bundle: Option<bundle::Bundle>,
@@ -392,6 +410,240 @@ impl NativePanel {
         .detach();
     }
 
+    /// Open the audio input window, or bring it forward if it is already open.
+    fn open_audio_window(&mut self, cx: &mut Context<Self>) {
+        if self.audio_window.is_some_and(|window| {
+            window
+                .update(cx, |_, window, _| window.activate_window())
+                .is_ok()
+        }) {
+            return;
+        }
+        // Opening draws the window, which reads this panel: finish this update first.
+        let panel = cx.entity();
+        cx.defer(move |cx| {
+            let bounds = Bounds::centered(None, size(px(audio_window::WIDTH), px(520.0)), cx);
+            let view = panel.clone();
+            let window = cx.open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(bounds)),
+                    is_resizable: false,
+                    ..Default::default()
+                },
+                |window, cx| {
+                    window.set_window_title("Audio Input");
+                    cx.new(|cx| audio_window::AudioWindow::new(view, cx))
+                },
+            );
+            panel.update(cx, |panel, cx| match window {
+                Ok(window) => panel.audio_window = Some(window),
+                Err(error) => {
+                    panel.status = format!("Could not open the audio window: {error}").into();
+                    cx.notify();
+                }
+            });
+        });
+    }
+
+    /// The assigned files as the configuration lists them.
+    fn saved_audio_patch(&self) -> std::collections::BTreeMap<u32, std::path::PathBuf> {
+        self.options
+            .config
+            .as_ref()
+            .and_then(|config| config.input_patch_paths(self.model))
+            .unwrap_or_default()
+    }
+
+    /// Each converting or converted channel's progress in this conversion.
+    fn audio_progress(&self) -> std::collections::BTreeMap<u32, f32> {
+        self.audio_conversion
+            .as_ref()
+            .map_or_else(Default::default, |progress| {
+                progress.lock().unwrap().clone()
+            })
+    }
+
+    fn audio_position(&self) -> (u32, bool) {
+        self.controls.as_ref().map_or((0, false), |controls| {
+            let status = controls.main.snapshot();
+            (status.audio_input_position_ms, status.audio_input_playing)
+        })
+    }
+
+    /// Assign the chosen files to the input channels in name order, from channel 1.
+    fn assign_audio_inputs(&mut self, cx: &mut Context<Self>) {
+        let channels = l6max_host::controls::audio_input_channels(self.model);
+        let prompt = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: true,
+            prompt: Some(format!("Assign up to {channels} WAV files to channels").into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(mut paths))) = prompt.await else {
+                return;
+            };
+            paths.sort();
+            let _ = this.update(cx, |panel, cx| {
+                if paths.len() > channels as usize {
+                    panel.audio_error =
+                        Some(format!("Choose at most {channels} files for this model."));
+                    cx.notify();
+                    return;
+                }
+                panel.assign_audio_patch((1..).zip(paths).collect(), cx);
+            });
+        })
+        .detach();
+    }
+
+    fn choose_audio_file(&mut self, channel: u32, cx: &mut Context<Self>) {
+        let prompt = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some(format!("Choose a WAV file for channel {channel}").into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(paths))) = prompt.await else {
+                return;
+            };
+            if let Some(path) = paths.into_iter().next() {
+                let _ = this.update(cx, |panel, cx| {
+                    panel.set_audio_file(channel, Some(path), cx)
+                });
+            }
+        })
+        .detach();
+    }
+
+    fn set_audio_file(
+        &mut self,
+        channel: u32,
+        file: Option<std::path::PathBuf>,
+        cx: &mut Context<Self>,
+    ) {
+        let mut patch = self.audio_patch.clone();
+        match file {
+            Some(file) => patch.insert(channel, file),
+            None => patch.remove(&channel),
+        };
+        self.assign_audio_patch(patch, cx);
+    }
+
+    fn clear_audio_inputs(&mut self, cx: &mut Context<Self>) {
+        self.assign_audio_patch(Default::default(), cx);
+    }
+
+    /// Save a patch and bring the channels in line with it.
+    fn assign_audio_patch(
+        &mut self,
+        patch: std::collections::BTreeMap<u32, std::path::PathBuf>,
+        cx: &mut Context<Self>,
+    ) {
+        let saved = self.options.config_path.clone().map_or(Ok(()), |path| {
+            l6max_host::config::save_input_patch(&path, self.model, &patch)
+                .and_then(|()| self.options.reload_config())
+        });
+        self.audio_patch = patch;
+        match saved {
+            Ok(()) => self.sync_audio_inputs(cx),
+            Err(error) => self.audio_error = Some(error),
+        }
+        cx.notify();
+    }
+
+    /// Convert changed files in the background, then have the running guest map them.
+    fn sync_audio_inputs(&mut self, cx: &mut Context<Self>) {
+        if self.audio_conversion.is_some() {
+            return;
+        }
+        self.audio_error = None;
+        let patch = self.audio_patch.clone();
+        let directory = self.options.audio_input_directory();
+        let channels = l6max_host::controls::audio_input_channels(self.model);
+        // A conversion shows its progress, so bring the window up for it.
+        match l6max_host::audio_input::stale_channels(&directory, &patch) {
+            Ok(stale) if !stale.is_empty() => self.open_audio_window(cx),
+            Ok(_) => {}
+            Err(error) => {
+                self.open_audio_window(cx);
+                self.audio_error = Some(error);
+                return;
+            }
+        }
+        let progress: Arc<Mutex<std::collections::BTreeMap<u32, f32>>> = Default::default();
+        self.audio_conversion = Some(progress.clone());
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    let result = l6max_host::audio_input::apply_patch_with_progress(
+                        &directory,
+                        channels,
+                        &patch,
+                        &|channel, fraction| {
+                            progress.lock().unwrap().insert(channel, fraction);
+                        },
+                    );
+                    (
+                        result,
+                        l6max_host::audio_input::length_ms(&directory, channels),
+                    )
+                })
+                .await;
+            let _ = this.update(cx, |panel, cx| {
+                panel.audio_conversion = None;
+                panel.audio_length_ms = result.1;
+                if let Err(error) = result.0.and_then(|()| panel.load_audio_inputs()) {
+                    panel.audio_error = Some(error);
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Map the assigned channels and drop the rest.
+    fn load_audio_inputs(&self) -> Result<(), String> {
+        let Some(controls) = &self.controls else {
+            return Ok(());
+        };
+        for channel in 1..=l6max_host::controls::audio_input_channels(self.model) {
+            controls
+                .main
+                .audio_input_load(channel - 1, self.audio_patch.contains_key(&channel))
+                .map_err(|error| error.to_string())?;
+        }
+        Ok(())
+    }
+
+    fn audio_input_seek(&mut self, position_ms: i32, cx: &mut Context<Self>) {
+        if let Some(controls) = &self.controls {
+            if let Err(error) = controls
+                .main
+                .audio_input_transport(l6max_host::protocol::AUDIO_INPUT_SEEK, position_ms)
+            {
+                self.audio_error = Some(format!("Audio playback failed: {error}"));
+                cx.notify();
+            }
+        }
+    }
+
+    fn audio_input_transport(&mut self, command: u32, cx: &mut Context<Self>) {
+        let Some(inputs) = self
+            ._qemu
+            .as_ref()
+            .and_then(|engine| engine.inputs.as_ref())
+        else {
+            return;
+        };
+        if let Err(error) = inputs.main.audio_input_transport(command, 0) {
+            self.status = format!("Audio playback failed: {error}").into();
+            cx.notify();
+        }
+    }
+
     /// Like plugging in the USB cable: neither needs the engine to restart,
     /// mirroring how the real hardware's USB and MIDI jacks can be connected
     /// or disconnected at any time.
@@ -459,16 +711,10 @@ impl NativePanel {
         engine.insert_sd(&image)?;
         self.options.sd_image = Some(image.clone());
         self.options.no_sd = false;
-        let state = self
-            .options
-            .state_dir
-            .as_ref()
-            .ok_or("SD selection requires persistent state")?;
-        let temporary = state.join("sd-card-selection.tmp");
-        std::fs::write(&temporary, image.to_str().ok_or("Invalid SD card path")?)
-            .map_err(|e| e.to_string())?;
-        std::fs::rename(temporary, state.join("sd-card-selection.txt"))
-            .map_err(|e| e.to_string())?;
+        if let Some(path) = self.options.config_path.clone() {
+            l6max_host::config::save_sd_card(&path, self.model, &image)?;
+            self.options.reload_config()?;
+        }
         self.firmware_error = None;
         Ok(())
     }
@@ -485,7 +731,8 @@ impl NativePanel {
             .map_err(|e| e.to_string())?;
         self.physical_analog = [512; 5];
         self.restart_with_options(options)?;
-        self.bundle.as_ref().unwrap().remember(&self.options)?;
+        let bundle = self.bundle.as_ref().unwrap();
+        bundle.remember(&mut self.options)?;
         self.firmware_error = None;
         Ok(())
     }
@@ -511,11 +758,17 @@ impl NativePanel {
     fn power_on(&mut self) -> Result<(), String> {
         let startup_keys = startup_key_targets(self.model, &self.layout, &self.button_pressed);
         let mut options = self.options.clone();
+        options.defer_input_patch = true;
         if !startup_keys.is_empty() {
             options.start_paused = true;
         }
         let engine = Engine::start(&options)?;
+        if self.model != engine.model() {
+            self.layout = Layout::for_model(engine.model());
+        }
         self.model = engine.model();
+        self.audio_patch = self.saved_audio_patch();
+        self.audio_sync_needed = true;
         let controls = engine.inputs.clone().ok_or("QEMU unavailable")?;
         let display = PanelFeed::new(&engine)?;
         controls
@@ -718,6 +971,25 @@ impl Render for NativePanel {
 }
 
 #[cfg(target_os = "macos")]
+fn lock_window_shape(window: &mut Window, device_width: f32, device_height: f32) {
+    use objc2_app_kit::NSView;
+    use objc2_foundation::NSSize;
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    let handle = HasWindowHandle::window_handle(window).expect("native window handle");
+    if let RawWindowHandle::AppKit(handle) = handle.as_raw() {
+        // SAFETY: GPUI supplies a live NSView handle, and this callback runs on
+        // the AppKit main thread. The borrow does not outlive the window.
+        let view = unsafe { &*handle.ns_view.as_ptr().cast::<NSView>() };
+        if let Some(window) = view.window() {
+            window.setContentAspectRatio(NSSize::new(device_width as f64, device_height as f64));
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn lock_window_shape(_window: &mut Window, _device_width: f32, _device_height: f32) {}
+
+#[cfg(target_os = "macos")]
 fn configure_window(window: &mut Window, device_width: f32, device_height: f32) {
     use objc2_app_kit::NSView;
     use objc2_foundation::NSSize;
@@ -735,7 +1007,9 @@ fn configure_window(window: &mut Window, device_width: f32, device_height: f32) 
 }
 
 #[cfg(not(target_os = "macos"))]
-fn configure_window(_window: &mut Window, _device_width: f32, _device_height: f32) {}
+fn configure_window(window: &mut Window, device_width: f32, device_height: f32) {
+    window.resize(size(px(device_width), px(device_height)));
+}
 
 /// Linux builds use GPUI's Wayland backend only. Without a session the window
 /// system connection never completes, so fail early with the reason.
@@ -798,7 +1072,7 @@ fn main() {
                 .into(),
         );
     }
-    let bundle = bundle::Bundle::detect().unwrap_or_else(|error| {
+    let mut bundle = bundle::Bundle::detect().unwrap_or_else(|error| {
         tracing::error!(%error, "Could not open app data");
         std::process::exit(1);
     });
@@ -806,7 +1080,6 @@ fn main() {
     if bundle.is_some() {
         options.auto_setup = false;
     }
-    let bundled = bundle.is_some();
     let bundle_testing = std::env::var_os("L6_BUNDLE_SMOKE_FIRST").is_some();
     let menu_testing = std::env::var_os("L6_MENU_SMOKE_FIRMWARE").is_some();
     let mut firmware_error = None;
@@ -834,18 +1107,48 @@ fn main() {
     } else {
         // Build QEMU and unpack firmware on first run, so one `cargo run` works.
         if options.auto_setup {
-            options.prepare().unwrap_or_else(|error| {
-                tracing::error!(%error, "Could not start QEMU");
-                std::process::exit(1);
-            });
+            if let Some(path) = options
+                .config_path
+                .as_ref()
+                .filter(|_| options.smoke_scenario.is_none())
+            {
+                l6max_host::config::ensure_file(path).unwrap_or_else(|error| {
+                    tracing::error!(%error, "Could not create the configuration");
+                    std::process::exit(1);
+                });
+            }
+            match options.prepare() {
+                Err(error)
+                    if error == l6max_host::setup::MISSING_FIRMWARE
+                        && options.smoke_scenario.is_none()
+                        && options.qemu.is_some() =>
+                {
+                    // Nothing to run yet: ask for firmware, as a packaged app does.
+                    let state = l6max_host::paths::repository_root().join("emulator/state");
+                    bundle = Some(bundle::Bundle::development(
+                        options.qemu.take().unwrap(),
+                        &state,
+                    ));
+                    options.auto_setup = false;
+                    options.reload_config().unwrap_or_else(|error| {
+                        tracing::error!(%error, "Could not read the configuration");
+                        std::process::exit(1);
+                    });
+                }
+                result => result.unwrap_or_else(|error| {
+                    tracing::error!(%error, "Could not start QEMU");
+                    std::process::exit(1);
+                }),
+            }
         }
-        if options.smoke_scenario.is_none() {
+        if options.smoke_scenario.is_none() && bundle.is_none() {
             configuration::configure(&mut options).unwrap_or_else(|error| {
                 tracing::error!(%error, "Could not prepare demo SD card");
                 std::process::exit(1);
             });
         }
     }
+    let bundled = bundle.is_some();
     let selected_scenario = options
         .smoke_scenario
         .as_ref()
@@ -862,6 +1165,7 @@ fn main() {
             tracing::error!(%error, "Invalid smoke scenario");
             std::process::exit(2);
         });
+    options.defer_input_patch = options.smoke_scenario.is_none();
     let qemu_processes = Engine::start(&options).unwrap_or_else(|error| {
         if bundle.is_some() {
             firmware_error = Some(error);
@@ -873,6 +1177,11 @@ fn main() {
         }
     });
     let model = qemu_processes.model();
+    let audio_patch = options
+        .config
+        .as_ref()
+        .and_then(|config| config.input_patch_paths(model))
+        .unwrap_or_default();
     let controls = qemu_processes.inputs.clone();
     let display = qemu_processes
         .inputs
@@ -881,9 +1190,7 @@ fn main() {
     let run_tick = display.is_some() || bundle.is_some();
     let testing = options.smoke_scenario.is_some();
     let scenario_smoke = selected_scenario
-        .map(|scenario| {
-            smoke_core::Runner::new(scenario, model, options.logs.clone()).map(|mut runner| runner)
-        })
+        .map(|scenario| smoke_core::Runner::new(scenario, model, options.logs.clone()))
         .transpose()
         .unwrap_or_else(|error| {
             tracing::error!(%error, "Invalid smoke scenario");
@@ -908,6 +1215,14 @@ fn main() {
                     configure_window(window, device_width, device_height);
                     window.set_window_title(&format!("{} Emulator", model_name(model)));
                     cx.new(|_| NativePanel {
+                        window_model: model,
+                        window_settling_frames: 0,
+                        audio_window: None,
+                        audio_patch,
+                        audio_conversion: None,
+                        audio_sync_needed: true,
+                        audio_length_ms: 0,
+                        audio_error: None,
                         layout,
                         model,
                         bundle,
@@ -957,6 +1272,51 @@ fn main() {
             });
         });
         cx.on_action(|_: &Quit, cx| cx.quit());
+        cx.on_action(move |_: &OpenAudioWindow, cx| {
+            cx.defer(move |cx| {
+                if let Err(error) = view.update(cx, |panel, _, cx| panel.open_audio_window(cx)) {
+                    tracing::error!(%error, "Audio window action failed");
+                }
+            });
+        });
+        cx.on_action(move |_: &PlayAudioInputs, cx| {
+            cx.defer(move |cx| {
+                let result = view.update(cx, |panel, _, cx| {
+                    panel.audio_input_transport(l6max_host::protocol::AUDIO_INPUT_PLAY, cx)
+                });
+                if let Err(error) = result {
+                    tracing::error!(%error, "Play audio action failed");
+                }
+            });
+        });
+        cx.on_action(move |_: &PauseAudioInputs, cx| {
+            cx.defer(move |cx| {
+                let result = view.update(cx, |panel, _, cx| {
+                    panel.audio_input_transport(l6max_host::protocol::AUDIO_INPUT_PAUSE, cx)
+                });
+                if let Err(error) = result {
+                    tracing::error!(%error, "Pause audio action failed");
+                }
+            });
+        });
+        cx.on_action(move |_: &StopAudioInputs, cx| {
+            cx.defer(move |cx| {
+                let result = view.update(cx, |panel, _, cx| {
+                    panel.audio_input_transport(l6max_host::protocol::AUDIO_INPUT_STOP, cx)
+                });
+                if let Err(error) = result {
+                    tracing::error!(%error, "Stop audio action failed");
+                }
+            });
+        });
+        cx.on_action(move |_: &RewindAudioInputs, cx| {
+            cx.defer(move |cx| {
+                let result = view.update(cx, |panel, _, cx| panel.audio_input_seek(0, cx));
+                if let Err(error) = result {
+                    tracing::error!(%error, "Rewind audio action failed");
+                }
+            });
+        });
         cx.on_action(move |_: &ConnectUsb, cx| {
             cx.defer(move |cx| {
                 if let Err(error) = view.update(cx, |panel, _, cx| panel.connect_usb(cx)) {
@@ -1004,6 +1364,14 @@ fn main() {
                 MenuItem::action("Use SD Card Folder…", OpenSdFolder).disabled(!bundled),
                 MenuItem::action("Eject SD Card", EjectSdCard),
             ]),
+            Menu::new("Audio Input").items([
+                MenuItem::action("Channels and Playback…", OpenAudioWindow),
+                MenuItem::separator(),
+                MenuItem::action("Play", PlayAudioInputs),
+                MenuItem::action("Pause", PauseAudioInputs),
+                MenuItem::action("Stop", StopAudioInputs),
+                MenuItem::action("Rewind", RewindAudioInputs),
+            ]),
             Menu::new("Connections").items([
                 MenuItem::action("Connect USB", ConnectUsb),
                 MenuItem::action("Disconnect USB", DisconnectUsb),
@@ -1012,8 +1380,12 @@ fn main() {
             ]),
         ]);
         // macOS normally keeps apps alive after their last window closes.
-        cx.on_window_closed(|cx, _| {
-            if cx.windows().is_empty() {
+        cx.on_window_closed(move |cx, _| {
+            let panel_open = cx
+                .windows()
+                .iter()
+                .any(|window| window.window_id() == view.window_id());
+            if !panel_open {
                 cx.quit();
             }
         })
@@ -1037,6 +1409,29 @@ fn main() {
                         .await;
                     if view
                         .update(cx, |panel, window, cx| {
+                            if panel.window_model != panel.model {
+                                panel.window_model = panel.model;
+                                let width = components::layout::window_width(panel.model);
+                                let height = width * panel.layout.height / panel.layout.width;
+                                // Change the shape lock first, then resize through GPUI so
+                                // that it lays out for the new size straight away.
+                                lock_window_shape(window, width, height);
+                                window.resize(size(px(width), px(height)));
+                                panel.window_settling_frames = 30;
+                                window.set_window_title(&format!(
+                                    "{} Emulator",
+                                    model_name(panel.model)
+                                ));
+                            }
+                            // A resize lands asynchronously and does not redraw by itself.
+                            if panel.window_settling_frames > 0 {
+                                panel.window_settling_frames -= 1;
+                                window.refresh();
+                            }
+                            if panel.audio_sync_needed && panel.options.smoke_scenario.is_none() {
+                                panel.audio_sync_needed = false;
+                                panel.sync_audio_inputs(cx);
+                            }
                             let previous = panel.status.clone();
                             let previous_powered_off = panel.powered_off;
                             panel.refresh_power();
@@ -1082,7 +1477,7 @@ fn main() {
                                 }
                             }
                             if let Some(mut test) = panel.bundle_smoke.take() {
-                                match test.tick(panel, cx) {
+                                match test.tick(panel, window, cx) {
                                     Ok(true) => {
                                         passed.store(true, std::sync::atomic::Ordering::Relaxed);
                                         cx.quit();

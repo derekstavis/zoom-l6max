@@ -33,7 +33,7 @@ Choose **File → Use SD Card Folder…** (**⇧⌘O**) after selecting firmware
 Select a folder containing the files and subdirectories you want on the card.
 The app imports it in the background, then inserts it live into the running
 guest's SD slot — no restart, like inserting a card into the real slot. The
-selected card is remembered per firmware. **File → Eject SD Card** removes it
+selected card is remembered per model. **File → Eject SD Card** removes it
 the same way.
 
 The folder is copied into a private FAT card; it is not a live shared folder.
@@ -48,6 +48,12 @@ Previously imported cards are retained in Application Support.
 - Audio playback remains unmodeled; the card still exercises firmware browsing,
   assignment, and update-file checks.
 
+## Audio input
+
+**Audio Input → Channels and Playback…** assigns a WAV file to each input channel and plays
+them together. See [audio emulation](../emulator/audio.md#input) for what the channels
+receive.
+
 ## Local storage
 
 Bundled mode writes to `~/Library/Application Support/L6max Emulator/`:
@@ -55,15 +61,13 @@ Bundled mode writes to `~/Library/Application Support/L6max Emulator/`:
 | Path | Contents |
 | --- | --- |
 | `firmware/<package-sha256>/` | Imported package and extracted components |
-| `devices/<package-sha256>/` | Persistent flash, RTC, and the model-matched demo SD card |
+| `config.toml` | Selected model, firmware, SD card and audio files; see [`config.example.toml`](../../config.example.toml) |
+| `devices/<model>/` | Persistent flash, RTC, prepared input audio, and the model-matched demo SD card |
 | `logs/<package-sha256>/` | QEMU trace and diagnostic output |
 | `cards/card-*.img` | Persistent copies imported from selected directories |
-| `devices/<package-sha256>/sd-card-selection.txt` | Remembered imported card selection |
-| `selected-firmware.txt` | Identity of the last successfully started package |
 
-Each package has separate device storage so selecting another firmware starts
-that image instead of reusing a different image already installed in NOR.
-Returning to the same package reuses its state. The app bundle itself stays
+Each model has its own device storage, as a real unit does: selecting another package
+of the same model installs into its existing state. The app bundle itself stays
 read-only. `L6_APP_DATA` overrides the writable directory for development tests.
 
 ## Build a bundle

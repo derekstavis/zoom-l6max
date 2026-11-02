@@ -160,6 +160,33 @@ static void l6max_audio_adc_register_types(void)
 }
 type_init(l6max_audio_adc_register_types)
 
+/* One input channel's receive words, counted across the SAI's data lines. Mono
+ * channels are dual gain: word_a is the high-gain word and word_b the low-gain
+ * word. Stereo channels carry left in word_a and right in word_b. */
+typedef struct L6AudioInputRoute {
+    uint8_t sai;
+    uint8_t word_a;
+    uint8_t word_b;
+    bool dual_gain;
+} L6AudioInputRoute;
+
+#define L6_AUDIO_INPUT_CHANNELS 8
+/* The firmware reads the high-gain word 26.4 dB above the low-gain word. */
+#define L6_AUDIO_INPUT_HIGH_GAIN 20.89
+
+static const L6AudioInputRoute L6_AUDIO_INPUT_ROUTES[] = {
+    { 1, 0, 1, true }, { 1, 2, 3, true },
+    { 0, 0, 1, false }, { 0, 2, 3, false },
+    { 0, 4, 5, false }, { 0, 6, 7, false },
+};
+
+static const L6AudioInputRoute L6MAX_AUDIO_INPUT_ROUTES[] = {
+    { 0, 0, 1, true }, { 0, 2, 3, true },
+    { 0, 12, 13, true }, { 0, 14, 15, true },
+    { 0, 8, 9, false }, { 0, 10, 11, false },
+    { 0, 4, 5, false }, { 0, 6, 7, false },
+};
+
 typedef struct L6BoardProfile {
     const char *name;
     hwaddr main_flash_base;
@@ -183,6 +210,8 @@ typedef struct L6BoardProfile {
     unsigned sai_count;
     unsigned audio_output_left_slot;
     unsigned audio_output_right_slot;
+    const L6AudioInputRoute *audio_input_routes;
+    unsigned audio_input_route_count;
     unsigned audio_sample_rate_hz;
     unsigned audio_source_clock_hz;
     bool resource_flash;
@@ -220,6 +249,8 @@ static const L6BoardProfile L6_PROFILE = {
     .sai_bases = { 0x384000, 0x38c000 },
     .sai_count = 2,
     .audio_output_left_slot = 0,
+    .audio_input_routes = L6_AUDIO_INPUT_ROUTES,
+    .audio_input_route_count = ARRAY_SIZE(L6_AUDIO_INPUT_ROUTES),
     .audio_output_right_slot = 1,
     /* Both stock images pass 24.576 MHz to their SAI divider helpers. This
      * is the firmware's source-clock assumption, not a measured CCM root. */
@@ -263,6 +294,8 @@ static const L6BoardProfile L6MAX_PROFILE = {
      * right channel first; slots 4-5 follow the MONITOR knob with inverted
      * polarity; slots 6-7 follow neither. */
     .audio_output_left_slot = 3,
+    .audio_input_routes = L6MAX_AUDIO_INPUT_ROUTES,
+    .audio_input_route_count = ARRAY_SIZE(L6MAX_AUDIO_INPUT_ROUTES),
     .audio_output_right_slot = 2,
     .audio_sample_rate_hz = 48000,
     .audio_source_clock_hz = 24576000,
@@ -384,6 +417,14 @@ typedef struct L6ChipState {
     bool audio_tx_probe_logged[2];
     AudioBackend *audio_backend;
     SWVoiceOut *audio_voice;
+    struct {
+        GMappedFile *file;
+        const float *samples;
+        size_t frames;
+    } audio_input[L6_AUDIO_INPUT_CHANNELS];
+    const char *audio_input_dir;
+    size_t audio_input_position;
+    bool audio_input_playing;
     GByteArray *audio_pending;
     bool audio_primed;
     FILE *audio_raw_capture;
@@ -570,6 +611,8 @@ static void l6_flexspi_rx_window(L6ChipState *s)
  * Timed diagnostic keys use the same device GPIO path.
  */
 static void l6_input_read(void *opaque);
+static bool l6_audio_input_load(L6ChipState *s, unsigned channel, bool loaded);
+static void l6_audio_input_report(L6ChipState *s);
 static void l6_input_write(void *opaque);
 
 static void l6_input_handlers(L6ChipState *s)
@@ -612,7 +655,7 @@ static void l6_input_reply(L6ChipState *s, uint32_t kind, uint32_t seq,
     stl_le_p(message + 12, target);
     stl_le_p(message + 16, value);
     stl_le_p(message + 20, qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL));
-    if (kind != L6_INPUT_INDICATOR_LEVELS) {
+    if (kind != L6_INPUT_INDICATOR_LEVELS && kind != 0x8000000bu) {
         qemu_log_mask(LOG_UNIMP,
                       "l6 %s input reply kind=%08x seq=%u target=%u value=%d at %" PRId64 " ms\n",
                       s->panel ? "panel" : "main", kind, seq, target, value,
@@ -671,6 +714,35 @@ static void l6_input_command(L6ChipState *s, const uint8_t *message)
             !l6_display_ack(&s->display, seq, target)) {
             l6_input_disconnect(s);
         }
+        return;
+    }
+    if (kind == 7) {
+        if (s->panel || target >= s->profile->audio_input_route_count ||
+            (value != 0 && value != 1) || duration ||
+            !l6_audio_input_load(s, target, value)) {
+            l6_input_reply(s, 0x80000003u, seq, 0, -EINVAL);
+        } else {
+            l6_input_reply(s, 0x80000001u, seq, 0, value);
+        }
+        return;
+    }
+    if (kind == 8) {
+        if (s->panel || target > 3 || value < 0 || (target != 3 && value) ||
+            duration) {
+            l6_input_reply(s, 0x80000003u, seq, 0, -EINVAL);
+            return;
+        }
+        if (target == 3) {
+            s->audio_input_position = (uint64_t)value *
+                s->profile->audio_sample_rate_hz / 1000;
+        } else {
+            s->audio_input_playing = target == 1;
+            if (target == 0) {
+                s->audio_input_position = 0;
+            }
+        }
+        l6_input_reply(s, 0x80000001u, seq, 0, value);
+        l6_audio_input_report(s);
         return;
     }
     if (kind == 6) {
@@ -2799,6 +2871,88 @@ static bool l6_edma_service_request(L6ChipState *s, uint8_t request)
     return serviced;
 }
 
+static uint32_t l6_audio_input_word(double value)
+{
+    return (uint32_t)(int32_t)(CLAMP(value, -1.0, 1.0) * 2147483647.0);
+}
+
+/* Fill one frame of SAI receive words from the assigned channels' audio. */
+static void l6_audio_input_frame(L6ChipState *s, unsigned sai, uint32_t *words)
+{
+    if (!s->audio_input_playing) {
+        return;
+    }
+    for (unsigned i = 0; i < s->profile->audio_input_route_count; i++) {
+        const L6AudioInputRoute *route = &s->profile->audio_input_routes[i];
+        if (route->sai != sai ||
+            s->audio_input_position >= s->audio_input[i].frames) {
+            continue;
+        }
+        const float *frame = s->audio_input[i].samples +
+            s->audio_input_position * 2;
+        if (route->dual_gain) {
+            double mono = (frame[0] + (double)frame[1]) / 2;
+            words[route->word_a] =
+                l6_audio_input_word(mono * L6_AUDIO_INPUT_HIGH_GAIN);
+            words[route->word_b] = l6_audio_input_word(mono);
+        } else {
+            words[route->word_a] = l6_audio_input_word(frame[0]);
+            words[route->word_b] = l6_audio_input_word(frame[1]);
+        }
+    }
+}
+
+static void l6_audio_input_report(L6ChipState *s)
+{
+    uint64_t rate = s->profile->audio_sample_rate_hz;
+    l6_input_reply(s, 0x8000000bu, 1, s->audio_input_playing,
+                   (int32_t)(s->audio_input_position * 1000 / rate));
+}
+
+/* Advance the shared position, looping after the longest channel. */
+static void l6_audio_input_advance(L6ChipState *s)
+{
+    if (!s->audio_input_playing) {
+        return;
+    }
+    size_t length = 0;
+    for (unsigned i = 0; i < s->profile->audio_input_route_count; i++) {
+        length = MAX(length, s->audio_input[i].frames);
+    }
+    if (++s->audio_input_position >= length) {
+        s->audio_input_position = 0;
+    }
+    if (s->audio_input_position % (s->profile->audio_sample_rate_hz / 4) == 0) {
+        l6_audio_input_report(s);
+    }
+}
+
+/* Map or drop a channel's prepared audio: 48 kHz stereo 32-bit float. */
+static bool l6_audio_input_load(L6ChipState *s, unsigned channel, bool loaded)
+{
+    GMappedFile *file = NULL;
+    if (loaded) {
+        if (!s->audio_input_dir) {
+            return false;
+        }
+        g_autofree char *name = g_strdup_printf("channel-%u.f32", channel + 1);
+        g_autofree char *path = g_build_filename(s->audio_input_dir, name, NULL);
+        file = g_mapped_file_new(path, FALSE, NULL);
+        if (!file || !g_mapped_file_get_length(file) ||
+            g_mapped_file_get_length(file) % (2 * sizeof(float))) {
+            g_clear_pointer(&file, g_mapped_file_unref);
+            return false;
+        }
+    }
+    g_clear_pointer(&s->audio_input[channel].file, g_mapped_file_unref);
+    s->audio_input[channel].file = file;
+    s->audio_input[channel].samples =
+        file ? (const float *)g_mapped_file_get_contents(file) : NULL;
+    s->audio_input[channel].frames =
+        file ? g_mapped_file_get_length(file) / (2 * sizeof(float)) : 0;
+    return true;
+}
+
 /* The stock firmware configures these SAI streams for 48 kHz. Its RT1041
  * SAI3 (L6) or SAI1 (L6max) master supplies the frame clock; synchronous
  * slave instances on L6 share that clock. Each frame advances the configured
@@ -2821,7 +2975,7 @@ static unsigned l6_sai_audio_clock_advance(L6ChipState *s, unsigned frames)
         return frames;
     }
 
-    uint32_t silence[L6_SAI_CHANNELS * L6_SAI_FIFO_DEPTH] = { 0 };
+    uint32_t rx_samples[L6_SAI_CHANNELS * L6_SAI_FIFO_DEPTH];
     uint32_t tx_samples[L6_SAI_FIFO_DEPTH];
     int32_t audio_frames[64 * 2];
     uint32_t tdm_frames[64][L6_SAI_FIFO_DEPTH] = { 0 };
@@ -2829,6 +2983,7 @@ static unsigned l6_sai_audio_clock_advance(L6ChipState *s, unsigned frames)
     unsigned frame;
     s->audio_edma_irq_raised = false;
     for (frame = 0; frame < frames && !s->audio_edma_irq_raised; frame++) {
+        bool audio_input_used = false;
         for (unsigned i = 0; i < s->profile->sai_count; i++) {
             L6Sai *sai = &s->sai[i];
             unsigned words = l6_sai_frame_words(sai, true);
@@ -2933,13 +3088,19 @@ static unsigned l6_sai_audio_clock_advance(L6ChipState *s, unsigned frames)
                 }
             }
             if (rx & L6_SAI_RE) {
-                l6_sai_rx_frame(sai, silence, rx_words);
+                memset(rx_samples, 0, sizeof(rx_samples));
+                l6_audio_input_frame(s, i, rx_samples);
+                audio_input_used = true;
+                l6_sai_rx_frame(sai, rx_samples, rx_words);
                 /* RX requests assert after the frame has been written into
                  * the FIFO, so evaluate the updated count for this edge. */
                 if (l6_sai_read(sai, L6_SAI_RCSR, 4) & L6_SAI_FRDE) {
                     l6_edma_service_request(s, rx_request);
                 }
             }
+        }
+        if (audio_input_used) {
+            l6_audio_input_advance(s);
         }
     }
     l6_audio_output_write(s, audio_frames, audio_frame_count);
@@ -4413,6 +4574,11 @@ static void l6_chip_init(MachineState *machine, L6ChipState *s, bool panel,
     s->audio_sample_trace = g_getenv("L6_AUDIO_SAMPLE_TRACE") != NULL;
     if (!panel) {
         const char *raw_capture_path = g_getenv("L6_AUDIO_RAW_CAPTURE");
+
+        s->audio_input_dir = g_getenv("L6_AUDIO_INPUT_DIR");
+        for (unsigned i = 0; i < profile->audio_input_route_count; i++) {
+            l6_audio_input_load(s, i, true);
+        }
         const char *tdm_capture_path = g_getenv("L6_AUDIO_TDM_CAPTURE");
         const char *dma_source_capture_path =
             g_getenv("L6_AUDIO_DMA_SOURCE_CAPTURE");

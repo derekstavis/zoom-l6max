@@ -47,6 +47,7 @@ tables. Unknown header fields fail parsing.
 | `update_patches` | no | Patches per model for the case's update package, built from the model's package. |
 | `gdb` | no | Enable the debugger socket. |
 | `audio_device` | no | QEMU audio-device syntax; `{logs}` expands to the case's log directory. |
+| `audio_input` | no | Array of tables assigning audio to input channels: `channel` plus one card-file source such as `loop-tone` or `copy`. Nothing plays until an `audio-input-transport` step. See [audio input](../emulator/audio.md#input). |
 | `main_sha256` | no | Exact 64-character hexadecimal MAIN firmware hash for revision-specific operations. |
 | `main_sha256_any` | no | Additional explicitly allowed MAIN hashes for the same guarded operations. |
 | `backends` | no | `"headless"` and/or `"gui"`; defaults to both. Typed device/GDB operations require headless. |
@@ -157,6 +158,11 @@ Scenarios default to `backends = ["headless", "gui"]`. Typed device steps requir
 | `l6max-channel-signal-pwm` | — | Seed the twelve firmware channel-level accumulators and verify five distinct increasing sampled PWM levels on all eight green SIGNAL lamps; requires L6max MAIN 1.10 and GDB. This qualifies the firmware-to-panel brightness path, not audio-input routing. |
 | `l6-level-meter-pwm` | — | Seed ten L6 1.10 level accumulators at the measured brightness thresholds and sample the raw panel matrix; require at least one output cell with five distinct nonzero duty means. Uses GDB and no SD, USB, MIDI, or host audio. |
 | `l6-main-gpio-event` | `target`, `event` | Hash-guarded L6 GDB check that Tap target 48 submits event `0x19` and Sound Pad targets 49–52 submit `0x15`–`0x18` |
+| `audio-input-transport` | `command` (`play`, `pause`, `stop` or `seek`), `position_ms` for `seek` | Control input playback |
+| `audio-input-load` | `channel`, `loaded` | Map a channel's prepared audio again, or drop it |
+| `expect-audio-input` | `playing`, `min_ms`, `max_ms` | Check the reported input playback state |
+| `expect-output-tone` | `hz`, optional `left_db`, `right_db`, `tolerance_db` (default 1) | Measure a tone in the last second of `L6_AUDIO_RAW_CAPTURE`. A side with no level must be below -70 dB |
+| `expect-recorded-tone` | `file`, `hz`, optional `left_db`, `right_db`, `tolerance_db` (default 1) | Measure a tone in a file of the newest recorder project, after its first second. A side with no level must be below -70 dB |
 | `expect-card-entry` | `path` | Wait until the firmware has created `path` on the SD card, within `wall_timeout_s` |
 | `l6max-tap-handler` | none | Hash-guarded L6max GDB check that Tap target 48 reaches the firmware's TAP press handler. |
 | `l6-din-event-dispatch` | `group`, `cc`, `value` | Hash-guarded L6 check of DIN CC-to-event dispatch |
@@ -186,21 +192,18 @@ complex USB, MIDI, storage or debugger assertions as typed Rust operations with
 focused tests. Avoid arbitrary shell commands, embedded expressions, loops or
 firmware-memory addressing in TOML.
 
-A catalog case has either a scenario path or a supervised GUI executable. A
-local `[legacy."case-id"]` entry may declare an external `executable` and its
-required `executable_sha256`, plus `arguments` and `environment`. This lets the driver
-attest and supervise a packaged GUI binary while keeping native menu and picker
-interactions in the GUI adapter. These cases boot from the `setup-complete` state and
-an `empty` card. Configuration-required cases stay BLOCKED until their matching
-configuration section is present. Read the case prerequisites before enabling them.
+A catalog case has either a scenario path or a supervised GUI executable. A case with
+`needs_configuration` and no scenario runs the packaged GUI from `--app`, which keeps
+native menu and picker interactions in the GUI adapter. These cases boot from the
+`setup-complete` state and an `empty` card, and stay BLOCKED without `--app`.
 
 Legacy arguments support `{firmware_dir}`, `{logs}`, `{qemu}` and `{package}`
-substitutions. Remaining braces are an error. Paths in these arguments must be
+substitutions; case environments also support `{l6_package}` and `{app_qemu_sha256}`. Remaining braces are an error. Paths in these arguments must be
 absolute. The driver strips ambient `L6_*` and `L6MAX_*` variables
 from every child, then applies declared case configuration and explicit logging/
 case-context settings. This prevents old probe flags silently changing a later run.
 
-Packaged bundle/menu tests run under the driver with a hash-pinned app
+Packaged bundle/menu tests run under the driver with the app from `--app`
 executable, isolated `L6_APP_DATA` beneath the case artifacts, and an explicit
 hash check for the QEMU shipped inside the bundle. The bundle case imports both
 model packages and checks their separate persisted state; the menu case

@@ -187,10 +187,10 @@ The sidecar lives until reset; popup allocations are still freed at detach.
 
 ```sh
 cargo test --offline -p l6patch
-cargo run --offline -p l6test -- run --config smoke.local.toml --case knob-dialog --model l6max
-cargo run --offline -p l6test -- run --config smoke.local.toml --case popup-concurrency --model l6max
+cargo run --offline -p l6test -- run --config config.toml --case knob-dialog --model l6max
+cargo run --offline -p l6test -- run --config config.toml --case popup-concurrency --model l6max
 
-cargo run --offline -p l6test -- run --config smoke.local.toml \
+cargo run --offline -p l6test -- run --config config.toml \
   --case patched-update --model l6max
 ```
 

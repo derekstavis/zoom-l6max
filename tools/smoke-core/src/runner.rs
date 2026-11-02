@@ -540,6 +540,59 @@ impl Runner {
                         path: path.clone(),
                     }));
                 }
+                Action::AudioInputTransport {
+                    command,
+                    position_ms,
+                } => {
+                    return Ok(Progress::Device(devices::Operation::AudioInputTransport {
+                        command: command.clone(),
+                        position_ms,
+                    }));
+                }
+                Action::AudioInputLoad { channel, loaded } => {
+                    return Ok(Progress::Device(devices::Operation::AudioInputLoad {
+                        channel,
+                        loaded,
+                    }));
+                }
+                Action::ExpectAudioInput {
+                    playing,
+                    min_ms,
+                    max_ms,
+                } => {
+                    return Ok(Progress::Device(devices::Operation::ExpectAudioInput {
+                        playing,
+                        min_ms,
+                        max_ms,
+                    }));
+                }
+                Action::ExpectOutputTone {
+                    hz,
+                    left_db,
+                    right_db,
+                    tolerance_db,
+                } => {
+                    return Ok(Progress::Device(devices::Operation::ExpectTone {
+                        file: None,
+                        hz,
+                        levels: [left_db, right_db],
+                        tolerance_db,
+                    }));
+                }
+                Action::ExpectRecordedTone {
+                    file,
+                    hz,
+                    left_db,
+                    right_db,
+                    tolerance_db,
+                } => {
+                    return Ok(Progress::Device(devices::Operation::ExpectTone {
+                        file: Some(file.clone()),
+                        hz,
+                        levels: [left_db, right_db],
+                        tolerance_db,
+                    }));
+                }
                 Action::L6maxTapHandler => {
                     return Ok(Progress::Device(devices::Operation::L6maxTapHandler));
                 }

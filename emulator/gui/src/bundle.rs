@@ -1,15 +1,19 @@
 //! Firmware import and writable paths for a relocatable application: a macOS
 //! `.app` bundle or a Linux AppDir (as mounted from an AppImage).
-use l6max_host::engine::Options;
+use l6max_host::{config, engine::Options};
 use sha2::{Digest, Sha256};
 use std::{
     fs,
     path::{Path, PathBuf},
 };
 
+/// Where firmware selection keeps its files: a packaged app's data directory, or a
+/// repository run that has no firmware yet.
 pub struct Bundle {
-    pub resources: PathBuf,
+    pub qemu: PathBuf,
     pub data: PathBuf,
+    /// The parent of each model's state directory.
+    pub devices: PathBuf,
 }
 
 impl Bundle {
@@ -23,19 +27,63 @@ impl Bundle {
             None => default_data_directory()?,
         };
         fs::create_dir_all(&data).map_err(|e| e.to_string())?;
-        Ok(Some(Self { resources, data }))
+        Ok(Some(Self {
+            qemu: resources.join("libexec/qemu-system-arm"),
+            devices: data.join("devices"),
+            data,
+        }))
+    }
+
+    /// Firmware selection for a repository run. Imports stay apart from the cache
+    /// that configured firmware unpacks to, and state stays where such runs keep it.
+    pub fn development(qemu: PathBuf, state: &Path) -> Self {
+        Self {
+            qemu,
+            data: state.join("imported"),
+            devices: state.join("models"),
+        }
     }
 
     pub fn restore(&self, options: &mut Options) -> Result<bool, String> {
         options.qemu = None;
         options.logs = self.data.join("logs");
-        let marker = self.data.join("selected-firmware.txt");
-        if !marker.exists() {
+        let path = self.data.join(config::FILE_NAME);
+        options.config_path = Some(path.clone());
+        self.adopt_previous_selection(&path)?;
+        config::ensure_file(&path)?;
+        options.reload_config()?;
+        let saved = options.config.as_ref().unwrap();
+        let package = options
+            .model
+            .or(saved.selected_model())
+            .and_then(|model| saved.firmware(model))
+            .or(saved.firmware(l6fw::Model::L6max))
+            .or(saved.firmware(l6fw::Model::L6));
+        let Some(package) = package.cloned() else {
             return Ok(false);
-        }
-        let hash = fs::read_to_string(marker).map_err(|e| e.to_string())?;
-        self.configure(&hash, options)?;
+        };
+        self.import(&package, options)?;
         Ok(true)
+    }
+
+    /// Move a previous version's firmware selection and device state into place.
+    fn adopt_previous_selection(&self, path: &Path) -> Result<(), String> {
+        let marker = self.data.join("selected-firmware.txt");
+        if path.exists() || !marker.is_file() {
+            return Ok(());
+        }
+        let hash = fs::read_to_string(&marker).map_err(|e| e.to_string())?;
+        let firmware = self.data.join("firmware").join(hash.trim());
+        let package = selected_package(&firmware)?;
+        let bytes = fs::read(&package).map_err(|e| e.to_string())?;
+        let model = l6fw::model_from_package(&bytes)?;
+        let previous = self.data.join("devices").join(hash.trim());
+        let current = self.data.join("devices").join(config::model_name(model));
+        if previous.is_dir() && !current.exists() {
+            fs::rename(previous, current).map_err(|e| e.to_string())?;
+        }
+        config::save_firmware(path, model, &package)?;
+        fs::remove_file(marker).map_err(|e| e.to_string())
     }
 
     fn configure(&self, hash: &str, options: &mut Options) -> Result<(), String> {
@@ -51,13 +99,15 @@ impl Bundle {
         if !firmware.join("L6.bin").is_file() && !firmware.join("L6max.bin").is_file() {
             return Err("Saved firmware package is missing; select it again".into());
         }
-        let qemu = self.resources.join("libexec/qemu-system-arm");
-        if !qemu.is_file() {
+        if !self.qemu.is_file() {
             return Err("The application bundle is missing QEMU".into());
         }
-        options.qemu = Some(qemu);
+        options.qemu = Some(self.qemu.clone());
         options.firmware_dir = firmware;
-        options.state_dir = Some(self.data.join("devices").join(hash));
+        let main =
+            fs::read(options.firmware_dir.join("main_firmware.bin")).map_err(|e| e.to_string())?;
+        let model = l6fw::model_from_main(&main)?;
+        options.state_dir = Some(self.devices.join(config::model_name(model)));
         options.logs = self.data.join("logs").join(hash);
         options.sd_image = None;
         options.no_sd = false;
@@ -107,15 +157,19 @@ impl Bundle {
         self.configure(&hash, options)
     }
 
-    pub fn remember(&self, options: &Options) -> Result<(), String> {
-        let hash = options
-            .firmware_dir
-            .file_name()
-            .and_then(|s| s.to_str())
-            .ok_or("Missing firmware identity")?;
-        let temporary = self.data.join("selected-firmware.tmp");
-        fs::write(&temporary, hash).map_err(|e| e.to_string())?;
-        fs::rename(temporary, self.data.join("selected-firmware.txt")).map_err(|e| e.to_string())
+    /// Save the imported copy of the package, so the file the user chose can move.
+    /// Only complete imports are saved.
+    pub fn remember(&self, options: &mut Options) -> Result<(), String> {
+        let package = selected_package(&options.firmware_dir)?;
+        let bytes = fs::read(&package).map_err(|e| e.to_string())?;
+        let model = l6fw::model_from_package(&bytes)?;
+        let path = options
+            .config_path
+            .clone()
+            .unwrap_or_else(|| self.data.join(config::FILE_NAME));
+        config::save_firmware(&path, model, &package)?;
+        options.config_path = Some(path);
+        options.reload_config()
     }
 }
 
@@ -134,20 +188,19 @@ pub fn selected_package(firmware_dir: &Path) -> Result<PathBuf, String> {
     Ok(package)
 }
 
-pub fn verify_bundled_qemu(resources: &Path, expected_sha256: &str) -> Result<PathBuf, String> {
+pub fn verify_bundled_qemu(qemu: &Path, expected_sha256: &str) -> Result<PathBuf, String> {
     if expected_sha256.len() != 64 || !expected_sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
     {
         return Err("A 64-character bundled QEMU SHA-256 is required".into());
     }
-    let qemu = resources.join("libexec/qemu-system-arm");
-    let bytes = fs::read(&qemu).map_err(|error| format!("Cannot read bundled QEMU: {error}"))?;
+    let bytes = fs::read(qemu).map_err(|error| format!("Cannot read bundled QEMU: {error}"))?;
     let actual = format!("{:x}", Sha256::digest(bytes));
     if !actual.eq_ignore_ascii_case(expected_sha256) {
         return Err(format!(
             "Bundled QEMU hash mismatch: expected {expected_sha256}, got {actual}"
         ));
     }
-    Ok(qemu)
+    Ok(qemu.to_path_buf())
 }
 
 /// Writable per-user storage: Application Support on macOS, XDG data elsewhere.
@@ -242,9 +295,17 @@ mod tests {
         let qemu = resources.join("libexec/qemu-system-arm");
         fs::write(&qemu, b"pinned bundled qemu").unwrap();
         let expected = format!("{:x}", Sha256::digest(b"pinned bundled qemu"));
-        assert_eq!(verify_bundled_qemu(&resources, &expected).unwrap(), qemu);
-        assert!(verify_bundled_qemu(&resources, &"0".repeat(64)).is_err());
-        assert!(verify_bundled_qemu(&resources, "not-a-sha").is_err());
+        assert_eq!(
+            verify_bundled_qemu(&resources.join("libexec/qemu-system-arm"), &expected).unwrap(),
+            qemu
+        );
+        assert!(
+            verify_bundled_qemu(&resources.join("libexec/qemu-system-arm"), &"0".repeat(64))
+                .is_err()
+        );
+        assert!(
+            verify_bundled_qemu(&resources.join("libexec/qemu-system-arm"), "not-a-sha").is_err()
+        );
         fs::remove_dir_all(root).unwrap();
     }
     #[test]
@@ -252,7 +313,8 @@ mod tests {
         let root = std::env::temp_dir().join(format!("l6-bundle-test-{}", std::process::id()));
         fs::create_dir_all(&root).unwrap();
         let bundle = Bundle {
-            resources: root.join("Resources"),
+            qemu: root.join("Resources/libexec/qemu-system-arm"),
+            devices: root.join("data/devices"),
             data: root.clone(),
         };
         let bad = root.join("invalid.bin");
