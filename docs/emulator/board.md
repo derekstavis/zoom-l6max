@@ -2,10 +2,8 @@
 
 [Documentation index](../README.md)
 
-The custom `l6max-dual` machine runs either model's main Cortex-M7 and panel Cortex-M0
-with separate address spaces and a shared virtual clock. For live audio,
-[`--timing split`](audio.md#live-output) runs each chip in its own QEMU process using
-the `l6max-main` and `l6max-panel` machines. QEMU's Cortex-M0
+The custom `l6max-main` and `l6max-panel` machines run either model's main Cortex-M7
+and panel Cortex-M0, [each in its own QEMU process](audio.md#live-output). QEMU's Cortex-M0
 stands in for the panel's Cortex-M0+. Internal UART links the chips, and the
 main firmware can program, verify, and restart the panel's executable flash.
 
@@ -162,14 +160,12 @@ button/encoder commands, and guest-time acknowledgments. QMP management uses
 a separate inherited socket. See the [native UI architecture](frontend.md)
 for ownership and transport details.
 
-In a single process, the engine uses single-threaded TCG with
-`-icount shift=1,align=on,sleep=on` to enforce virtual timer deadlines and pace
+MAIN uses single-threaded TCG with `-icount` to enforce virtual timer deadlines and pace
 execution against wall time. L6max's full-rate audio task starves lower-priority
-tasks at `shift=2`. Paced execution can run slower than wall time.
-`--timing adaptive` selects QEMU's automatic instruction clock. See [CPU consumption](frontend.md#cpu-consumption)
+tasks at `shift=2`, so it uses `shift=1`, and L6 uses `shift=2`. See [CPU consumption](frontend.md#cpu-consumption)
 for the idle-loop findings and comparison harness. Panel TIM2 derives its period from the firmware's
 registers at 48 MHz; the current configuration gives 50 µs. Button holds and
-release gaps default to 50 ms of guest time. QMP pause freezes both chips and
+release gaps default to 50 ms of guest time. QMP pause freezes that chip and its
 device timers. Firmware owns GPIO scanning, debouncing, and key reports. The
 host selects the matching physical input wiring from the detected model.
 
@@ -238,7 +234,7 @@ coordinates and their user-visible effects still need faceplate correlation. The
 instance 6 (LPUART7) at
 115200 baud, base `0x4019c000`, IRQ 26; the L6max panel link remains on LPUART1.
 The QEMU profiles route the panel link and ROM-entry GPIOs accordingly. A normal
-L6 `l6dbg uart-startup --exercise-inputs` run completes ROM sync, reaches the
+L6 run completes ROM sync, reaches the
 panel parser (`0x08000544`), event callback (`0x80039ef8`), and dispatcher
 (`0x800393d0`), then records panel UART reports for injected inputs. The L6
 probe injects one encoder detent per channel at two-second intervals and

@@ -2,7 +2,8 @@ version = 1
 name = "l6max-din-mixer-control"
 models = ["l6max"]
 backends = ["headless"]
-fixture = "prepared"
+state = "setup-complete"
+card = "empty"
 
 [[step]]
 action = "include"

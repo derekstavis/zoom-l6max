@@ -1,7 +1,7 @@
 # `l6test`
 
 `l6test` is the suite driver for repeatable emulator scenarios. It validates
-fixture configuration, prepares isolated guest state, supervises the requested
+local configuration, prepares isolated guest state, supervises the requested
 headless or GUI cases, and writes a structured report with case artifacts.
 Use [diagnostic tools](l6dbg.md) for observation without pass/fail assertions.
 
@@ -17,8 +17,7 @@ cargo run --offline --locked -p l6test -- run --config smoke.local.toml --suite 
 
 - `list` prints catalog cases, model scope, suites, and cases needing explicit
   local configuration.
-- `check` validates `smoke.local.toml`, its pinned QEMU digest, fixture paths,
-  firmware model, and patch selections without starting a guest.
+- `check` validates `smoke.local.toml` without starting a guest.
 - `run` selects one `--case ID` or a `--suite NAME`, optionally filtered by
   `--model l6|l6max|all` and `--backend headless|gui|both`.
 - `--output NEW_DIRECTORY` chooses an artifact directory. It must not already
@@ -30,9 +29,9 @@ cargo run --offline --locked -p l6test -- run --config smoke.local.toml --suite 
   host MIDI ports and external executables run alone. Shareable cases run
   first. `--jobs 1` restores strictly sequential execution.
 
-Copy the [example fixture file](../../../tests/smoke/fixtures.example.toml) to
-`smoke.local.toml`, pin the QEMU binary’s SHA-256, and provide firmware and
-optional state/card paths. Firmware, device state, and generated reports stay
+Copy the [example file](../../../tests/smoke/fixtures.example.toml) to
+`smoke.local.toml` and set your stock L6 and L6max package paths. Firmware, device
+state, and generated reports stay
 local. See the
 [testing workflow](../testing.md).
 
@@ -78,7 +77,7 @@ scaled with nearest-neighbor pixels, and does not require ffmpeg.
 `capture gui` boots an isolated L6max guest, samples its live panel indicators
 and LCD, then renders the full emulator panel with GPUI's offscreen renderer.
 It works without a window server and retains the sampled panel data next to the
-PNG for inspection. Use a state directory built from a `state_spec` when a
+PNG for inspection. Use a state directory built from a state spec when a
 specific mixer value or indicator state is needed:
 
 ```sh
@@ -96,19 +95,18 @@ the sampled indicator levels and masks, analog positions and LCD framebuffer.
 
 There are three related TOML inputs:
 
-1. `smoke.local.toml` supplies a pinned QEMU and named local fixtures, optional
+1. `smoke.local.toml` supplies the firmware packages, and optionally an external QEMU,
    supervised legacy executables, and expected failures. See
-   [fixture and catalog configuration](../testing.md#fixture-and-catalog-toml).
+   [local configuration and catalog](../testing.md#local-configuration-and-catalog-toml).
 2. `tests/smoke/catalog.toml` registers each case, model/suite membership,
    scenario or GUI package, prerequisites, and timeout.
 3. Each `tests/smoke/scenarios/*.toml` file describes an ordered scenario.
-   Fixture `state_recipe` points to this same scenario format and uses its
-   device-preparation operations. The complete list of header, per-step, and
+   The complete list of header, per-step, and
    action blocks is in the [scenario format reference](../scenario-format.md).
-   Fixture `state_spec` instead declares the starting device directly; see
+   Its `state` header declares the starting device directly; see
    [`l6nor` state specs](l6nor.md#state-specs).
 
-Fixture and catalog configuration, scenario headers, and action-specific
+Local configuration, catalog entries, scenario headers, and action-specific
 fields are strict. Paths in local configuration are resolved relative to the
 TOML file. Scenario includes are confined to their scenario directory.
 
@@ -117,36 +115,14 @@ TOML file. Scenario includes are confined to their scenario directory.
 The `l6max-volume-meter-sweep` case uses the Pad 4 assignment already saved
 on the SD card, presses pad 4, and records indicator PWM levels through a short
 sweep and decay. It does not enumerate USB or assign the pad during the test.
-Configure a dedicated `volume-meter` fixture with
-`tests/smoke/states/l6max-volume-meter-ready.toml` and an SD image containing
-a short stereo WAV with successive left-only and right-only level stages. A
-`[[fixture.sound_pad]]` block prepares the Pad 4 assignment and one-shot mode on
-the disposable copy. For example, add this to `smoke.local.toml`:
-
-```toml
-[[fixture]]
-name = "volume-meter"
-model = "l6max"
-firmware_dir = "unpacked"
-state_spec = "tests/smoke/states/l6max-volume-meter-ready.toml"
-sd_image = "/path/to/meter-card.img"
-
-[[fixture.sound_pad]]
-pad = 4
-file = "SOUND_PAD/PAD4/TONE660.WAV"
-mode = "one-shot"
-level = 59
-```
-
-This fixture omits `audio_device`, so QEMU uses no host audio backend. The state
-spec sets the first-run settings and panel clock needed for a ready guest. The
-scenario allows the audio engine to start after mixer readiness, verifies the
-active Pad 4 assignment, and turns the analog output controls to maximum. It
-then presses the pad and captures the indicator PWM levels during playback and
-decay. Use a low-amplitude sweep to avoid saturating the meter with the controls
-at maximum.
-The default `sound-pad-playback` window is six seconds;
-`playback_window_ms` can extend it to 120 seconds for long fixtures.
+Its card, [`l6max-meter-levels.toml`](../../../tests/smoke/cards/l6max-meter-levels.toml),
+holds a stereo WAV with successive left-only and right-only level stages, assigned to
+Pad 4. The scenario uses no host audio backend, and its state spec sets the first-run
+settings and panel clock needed for a ready guest. It allows the audio engine to start
+after mixer readiness, verifies the active Pad 4 assignment, and turns the analog output
+controls to maximum. It then presses the pad and captures the indicator PWM levels during
+playback and decay. The default `sound-pad-playback` window is six seconds;
+`playback_window_ms` can extend it to 120 seconds for long cards.
 
 ```sh
 cargo run --offline --locked -p l6test -- run \
@@ -154,9 +130,7 @@ cargo run --offline --locked -p l6test -- run \
   --backend headless
 ```
 
-The `volume-meter` fixture's `sd_image` must contain the test WAV at the
-filename declared in `fixture.sound_pad`. Inspect `sound-pad-playback.json` in the
-case logs.
+Inspect `sound-pad-playback.json` in the case logs.
 For an offscreen screenshot, use the `capture gui` command described above.
 To render a recorded indicator sample, place its `indicator_levels` in a full
 panel snapshot JSON containing `indicators`, `switches`, `analog`, `powered`,
@@ -169,10 +143,9 @@ not establish physical meter calibration.
 
 ### L6 stereo level-meter sweep
 
-The `l6-volume-meter-playback` case uses the same stereo isolation WAV at
-`SOUND_PAD/PAD1/TONE220.WAV`. Set `pad = 1` and that path in its
-`[[fixture.sound_pad]]` block. Its `l6-volume-meter` fixture needs L6 firmware,
-the L6 settings state spec, and that card. The scenario checks the active
+The `l6-volume-meter-playback` case uses a similar stereo isolation WAV at
+`SOUND_PAD/PAD1/TONE220.WAV`, from
+[`l6-meter-levels.toml`](../../../tests/smoke/cards/l6-meter-levels.toml). The scenario checks the active
 assignment and one-shot mode, sets the four analog output controls to maximum,
 plays the pad, and requires independent left and right meter responses without
 USB setup. The report contains the per-sample
@@ -183,8 +156,7 @@ meter levels and panel output.
 The `l6-level-meter-pwm` case drives the ten L6 1.10 meter accumulators at the
 measured threshold values and samples all 192 raw panel matrix cells. It uses
 a dedicated fresh state, no SD image, no USB or MIDI setup, and no host audio.
-Add a `l6-meter-pwm` fixture to `smoke.local.toml` with L6 1.10 firmware,
-`tests/smoke/states/l6-settings-defaults.toml`, and `gdb = true`. Run it with:
+It needs L6 1.10 firmware. Run it with:
 
 ```sh
 cargo run --offline --locked -p l6test -- run \

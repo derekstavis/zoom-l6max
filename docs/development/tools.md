@@ -16,7 +16,7 @@ options. Run commands from the repository root unless that page says otherwise.
 | `qemu-run` | Low-level scripted QEMU input, memory probes and timed runs | [qemu-run](tools/qemu-run.md) |
 | `cpu-profile` | Measure CPU use, guest clock, sampled PCs and exceptions | [cpu-profile](tools/cpu-profile.md) |
 
-For the smoke driver’s TOML files, see [fixture and catalog configuration](testing.md#fixture-and-catalog-toml)
+For the smoke driver’s TOML files, see [local configuration and catalog](testing.md#local-configuration-and-catalog-toml)
 and the complete [scenario and state-recipe schema](scenario-format.md).
 The diagnostic recipe schema is documented in the [l6dbg reference](tools/l6dbg.md#toml-recipe-schema).
 

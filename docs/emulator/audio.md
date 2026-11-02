@@ -42,11 +42,11 @@ Two model properties are required for a faithful stream:
 
 ## Live output
 
-The GUI defaults to `--timing split`, which runs MAIN and the panel in separate
+The emulator runs MAIN and the panel in separate
 QEMU processes so MAIN has a host thread to itself. MAIN uses 2 ns per instruction
 on L6max and 4 ns on L6. A socket pair carries panel reset and ROM mode, and MAIN
-programs panel flash through the shared `panel-flash.bin`. These runs are not
-deterministic, so qualification keeps the single-process timing.
+programs panel flash through the shared `panel-flash.bin`. The two clocks are not
+synchronized, so runs are not deterministic.
 
 The panel runs at 64 ns per instruction with `sleep=off`, so idle time jumps to its
 next timer, and each virtual millisecond is then held to the host clock. Host sleeps
@@ -55,8 +55,8 @@ ring level doubles with the instruction cost, and 64 ns reaches the rings' measu
 full scale on both models.
 
 Firmware accelerates encoders by the spacing of their reports. With two clocks that
-spacing varies, so equal and opposite turns need not cancel. Split-mode ring checks
-assert direction and report count, and single-process runs keep the exact check.
+spacing varies, so equal and opposite turns need not cancel. Ring checks assert
+direction and report count.
 
 MAIN has little real-time margin. Other host load, even two busy processes, can
 underrun live output, and the waveform comparison detects this where the test case

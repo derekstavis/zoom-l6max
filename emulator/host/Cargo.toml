@@ -16,7 +16,6 @@ libc.workspace = true
 memmap2.workspace = true
 serde_json.workspace = true
 qapi.workspace = true
-fatfs.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 coremidi = "0.9"

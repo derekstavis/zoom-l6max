@@ -1,12 +1,9 @@
-//! Prepare sound-pad assignments on a disposable fixture card.
+//! Sound-pad assignments, saved on the card in the model's pad settings file.
+use crate::{BlockDevice, Volume};
 use serde::{Deserialize, Serialize};
-use std::{
-    fs::OpenOptions,
-    io::{Read, Write},
-    path::Path,
-};
+use std::path::Path;
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SoundPad {
     pub pad: u8,
@@ -16,7 +13,7 @@ pub struct SoundPad {
     #[serde(default = "default_level")]
     pub level: u8,
 }
-#[derive(Clone, Copy, Default, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum PlayMode {
     #[default]
@@ -62,42 +59,37 @@ pub fn validate(pads: &[SoundPad]) -> Result<(), String> {
     Ok(())
 }
 
-pub fn apply(card: &Path, model: &str, pads: &[SoundPad]) -> Result<(), String> {
+/// Assign pads on a card image.
+pub fn apply(card: &Path, model: l6fw::Model, pads: &[SoundPad]) -> Result<(), String> {
+    let mut volume = crate::open(card).map_err(|e| e.to_string())?;
+    apply_to(&mut volume, model, pads)?;
+    volume.flush().map_err(|e| e.to_string())
+}
+
+/// Create or update the pad settings file. The assigned WAVs must already exist.
+pub fn apply_to<D: BlockDevice>(
+    volume: &mut Volume<D>,
+    model: l6fw::Model,
+    pads: &[SoundPad],
+) -> Result<(), String> {
     validate(pads)?;
-    let model_name = match model {
-        "l6" => "L6",
-        "l6max" => "L6MAX",
-        _ => return Err("unknown sound pad model".into()),
+    let (model_name, settings_name) = match model {
+        l6fw::Model::L6 => ("L6", "L6PADSETTING.ZST"),
+        l6fw::Model::L6max => ("L6MAX", "L6MAXPADSETTING.ZST"),
     };
-    let settings_name = if model == "l6" {
-        "L6PADSETTING.ZST"
-    } else {
-        "L6MAXPADSETTING.ZST"
-    };
-    let file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(card)
-        .map_err(|e| e.to_string())?;
-    let fs = fatfs::FileSystem::new(file, fatfs::FsOptions::new()).map_err(|e| e.to_string())?;
+    let settings_path = format!("SOUND_PAD/{settings_name}");
     {
-        let root = fs.root_dir();
         for pad in pads {
             let path = pad.file.replace('\\', "/");
-            root.open_file(&path)
-                .map_err(|e| format!("sound_pad {} file {path}: {e}", pad.pad))?;
-        }
-        let dir = root
-            .open_dir("SOUND_PAD")
-            .map_err(|e| format!("SOUND_PAD directory: {e}"))?;
-        let mut data = match dir.open_file(settings_name) {
-            Ok(mut settings) => {
-                let mut bytes = Vec::new();
-                settings
-                    .read_to_end(&mut bytes)
-                    .map_err(|e| e.to_string())?;
-                bytes
+            if !volume.exists(&path) {
+                return Err(format!("sound_pad {} file {path}: not found", pad.pad));
             }
+        }
+        if !volume.exists("SOUND_PAD") {
+            return Err("SOUND_PAD directory: not found".into());
+        }
+        let mut data = match volume.read(&settings_path) {
+            Ok(bytes) => bytes,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 let mut bytes = vec![0u8; 0x1094];
                 let header = format!("ZOOM {model_name:<7}PAD SETTING VER0001");
@@ -141,13 +133,39 @@ pub fn apply(card: &Path, model: &str, pads: &[SoundPad]) -> Result<(), String> 
             };
             data[0x890 + index] = pad.level;
         }
-        let mut settings = dir.create_file(settings_name).map_err(|e| e.to_string())?;
-        settings.truncate().map_err(|e| e.to_string())?;
-        settings.write_all(&data).map_err(|e| e.to_string())?;
-        settings.flush().map_err(|e| e.to_string())?;
+        volume
+            .write(&settings_path, &data)
+            .map_err(|e| e.to_string())?;
     }
-    fs.unmount().map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// Parse `PAD=FILE[,mode=MODE][,level=LEVEL]`, as `l6fs` takes on its command line.
+impl std::str::FromStr for SoundPad {
+    type Err = String;
+    fn from_str(value: &str) -> Result<Self, String> {
+        let usage =
+            || format!("{value}: expected PAD=FILE[,mode=one-shot|loop|hold][,level=0..59]");
+        let (pad, rest) = value.split_once('=').ok_or_else(usage)?;
+        let mut fields = rest.split(',');
+        let mut result = SoundPad {
+            pad: pad.parse().map_err(|_| usage())?,
+            file: fields.next().ok_or_else(usage)?.into(),
+            mode: PlayMode::default(),
+            level: default_level(),
+        };
+        for field in fields {
+            match field.split_once('=').ok_or_else(usage)? {
+                ("mode", "one-shot") => result.mode = PlayMode::OneShot,
+                ("mode", "loop") => result.mode = PlayMode::Loop,
+                ("mode", "hold") => result.mode = PlayMode::Hold,
+                ("level", level) => result.level = level.parse().map_err(|_| usage())?,
+                _ => return Err(usage()),
+            }
+        }
+        validate(std::slice::from_ref(&result))?;
+        Ok(result)
+    }
 }
 
 #[cfg(test)]
@@ -163,43 +181,25 @@ mod tests {
             .as_nanos();
         let path =
             std::env::temp_dir().join(format!("l6-pad-state-{}-{stamp}.img", std::process::id()));
-        let mut image = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create_new(true)
-            .open(&path)
-            .unwrap();
-        image.set_len(16 * 1024 * 1024).unwrap();
-        fatfs::format_volume(&mut image, fatfs::FormatVolumeOptions::new()).unwrap();
-        let fs = fatfs::FileSystem::new(image, fatfs::FsOptions::new()).unwrap();
-        {
-            let root = fs.root_dir();
-            let sounds = root.create_dir("SOUND_PAD").unwrap();
-            let first = sounds.create_dir("PAD1").unwrap();
-            first.create_file("ONE.WAV").unwrap();
-            let fourth = sounds.create_dir("PAD4").unwrap();
-            fourth.create_file("FOUR.WAV").unwrap();
+        let mut volume = crate::create_empty(&path, "TEST").unwrap();
+        for directory in ["SOUND_PAD", "SOUND_PAD/PAD1", "SOUND_PAD/PAD4"] {
+            volume.create_dir(directory).unwrap();
         }
-        fs.unmount().unwrap();
+        volume.write("SOUND_PAD/PAD1/ONE.WAV", b"").unwrap();
+        volume.write("SOUND_PAD/PAD4/FOUR.WAV", b"").unwrap();
+        volume.flush().unwrap();
+        drop(volume);
         let first: SoundPad =
             toml::from_str("pad=1\nfile='SOUND_PAD/PAD1/ONE.WAV'\nmode='one-shot'\nlevel=59")
                 .unwrap();
         let fourth: SoundPad =
             toml::from_str("pad=4\nfile='SOUND_PAD/PAD4/FOUR.WAV'\nmode='loop'\nlevel=25").unwrap();
-        apply(&path, "l6", &[first]).unwrap();
-        apply(&path, "l6", &[fourth]).unwrap();
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(&path)
-            .unwrap();
-        let fs = fatfs::FileSystem::new(file, fatfs::FsOptions::new()).unwrap();
+        apply(&path, l6fw::Model::L6, &[first]).unwrap();
+        apply(&path, l6fw::Model::L6, &[fourth]).unwrap();
         {
-            let mut data = Vec::new();
-            fs.root_dir()
-                .open_file("SOUND_PAD/L6PADSETTING.ZST")
+            let data = crate::open(&path)
                 .unwrap()
-                .read_to_end(&mut data)
+                .read("SOUND_PAD/L6PADSETTING.ZST")
                 .unwrap();
             let decode = |start: usize| {
                 String::from_utf16(
@@ -216,8 +216,22 @@ mod tests {
             assert_eq!([data[0x88c], data[0x88f]], [0, 1]);
             assert_eq!([data[0x890], data[0x893]], [59, 25]);
         }
-        fs.unmount().unwrap();
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn command_line_assignments_parse_and_reject_bad_input() {
+        let pad: SoundPad = "4=SOUND_PAD/PAD4/A.WAV,mode=loop,level=25".parse().unwrap();
+        assert_eq!(
+            (pad.pad, pad.file.as_str(), pad.level),
+            (4, "SOUND_PAD/PAD4/A.WAV", 25)
+        );
+        assert!(matches!(pad.mode, PlayMode::Loop));
+        let pad: SoundPad = "1=A.WAV".parse().unwrap();
+        assert_eq!(pad.level, 49);
+        for bad in ["A.WAV", "9=A.WAV", "1=A.WAV,mode=other", "1=A.WAV,level=60"] {
+            assert!(bad.parse::<SoundPad>().is_err(), "{bad}");
+        }
     }
 
     #[test]

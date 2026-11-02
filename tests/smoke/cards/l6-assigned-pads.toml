@@ -1,0 +1,35 @@
+# A WAV assigned to each pad, for cases that play them.
+version = 1
+model = "l6"
+
+[[file]]
+path = "SOUND_PAD/PAD1/TONE220.WAV"
+tone = { hz = 220.0, seconds = 1.0, amplitude = 0.5 }
+
+[[sound_pad]]
+pad = 1
+file = "SOUND_PAD/PAD1/TONE220.WAV"
+
+[[file]]
+path = "SOUND_PAD/PAD2/TONE330.WAV"
+tone = { hz = 330.0, seconds = 1.0, amplitude = 0.5 }
+
+[[sound_pad]]
+pad = 2
+file = "SOUND_PAD/PAD2/TONE330.WAV"
+
+[[file]]
+path = "SOUND_PAD/PAD3/TONE440.WAV"
+tone = { hz = 440.0, seconds = 1.0, amplitude = 0.5 }
+
+[[sound_pad]]
+pad = 3
+file = "SOUND_PAD/PAD3/TONE440.WAV"
+
+[[file]]
+path = "SOUND_PAD/PAD4/TONE660.WAV"
+tone = { hz = 660.0, seconds = 1.0, amplitude = 0.5 }
+
+[[sound_pad]]
+pad = 4
+file = "SOUND_PAD/PAD4/TONE660.WAV"

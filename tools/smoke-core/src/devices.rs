@@ -100,6 +100,9 @@ pub enum Operation {
         value: u8,
     },
     L6maxTapHandler,
+    ExpectCardEntry {
+        path: String,
+    },
     L6InputSweep,
     L6DinSweep,
     L6maxInputTiming,
@@ -121,7 +124,7 @@ pub fn prepare(scenario: &Scenario, options: &mut Options) -> Result<(), String>
         options.gdb_socket =
             Some(std::env::temp_dir().join(format!("l6sp-{}.sock", std::process::id())));
     }
-    if scenario.fixture == "factory-protocol" {
+    if scenario.name == "factory-protocol" {
         prepare_factory_fixture(options)?;
     }
     if scenario.main_sha256.is_some() || !scenario.main_sha256_any.is_empty() {
@@ -276,7 +279,6 @@ pub fn prepare(scenario: &Scenario, options: &mut Options) -> Result<(), String>
             );
         }
         options.start_paused = true;
-        options.timing = l6max_host::engine::Timing::Adaptive;
         options.usb_enabled = false;
         options.midi_enabled = false;
         options.gdb_socket =
@@ -800,30 +802,12 @@ fn run_l6max_update(options: &Options, main: &[u8]) -> Result<(), String> {
             package[0x1fc] ^= 1;
         }
         let card = directory.join("card.img");
-        let mut file = fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create_new(true)
-            .open(&card)
-            .map_err(|e| e.to_string())?;
-        file.set_len(128 * 1024 * 1024).map_err(|e| e.to_string())?;
-        fatfs::format_volume(
-            &mut file,
-            fatfs::FormatVolumeOptions::new()
-                .fat_type(fatfs::FatType::Fat16)
-                .bytes_per_cluster(16384),
-        )
-        .map_err(|e| e.to_string())?;
-        let volume = fatfs::FileSystem::new(&mut file, fatfs::FsOptions::new())
-            .map_err(|e| e.to_string())?;
+        let mut volume = sd_image::create_empty(&card, "L6MAX").map_err(|e| e.to_string())?;
         volume
-            .root_dir()
-            .create_file("L6max.BIN")
-            .and_then(|mut output| output.write_all(&package))
+            .write("L6max.BIN", &package)
+            .and_then(|()| volume.flush())
             .map_err(|e| e.to_string())?;
-        volume.unmount().map_err(|e| e.to_string())?;
-        file.sync_all().map_err(|e| e.to_string())?;
-        drop(file);
+        drop(volume);
         let mut local = options.clone();
         local.sd_image = Some(card);
         local.no_sd = false;
@@ -1008,33 +992,14 @@ fn run_l6max_update(options: &Options, main: &[u8]) -> Result<(), String> {
 }
 
 fn create_factory_card(card: &std::path::Path) -> Result<(), String> {
-    let mut file = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create_new(true)
-        .open(&card)
-        .map_err(|error| error.to_string())?;
-    file.set_len(64 * 1024 * 1024)
-        .map_err(|error| error.to_string())?;
-    fatfs::format_volume(
-        &mut file,
-        fatfs::FormatVolumeOptions::new().fat_type(fatfs::FatType::Fat32),
-    )
-    .map_err(|error| error.to_string())?;
-    {
-        let volume = fatfs::FileSystem::new(&mut file, fatfs::FsOptions::new())
-            .map_err(|error| error.to_string())?;
-        volume
-            .root_dir()
-            .create_file("D445_JIG_000.txt")
-            .and_then(|mut fixture| {
-                fixture.write_all(b"emulator fixture; no calibration parameters\n")
-            })
-            .map_err(|error| error.to_string())?;
-        volume.unmount().map_err(|error| error.to_string())?;
-    }
-    file.sync_all().map_err(|error| error.to_string())?;
-    Ok(())
+    let mut volume = sd_image::create_empty(card, "L6MAX").map_err(|e| e.to_string())?;
+    volume
+        .write(
+            "D445_JIG_000.txt",
+            b"emulator fixture; no calibration parameters\n",
+        )
+        .and_then(|()| volume.flush())
+        .map_err(|error| error.to_string())
 }
 
 #[derive(Default)]
@@ -1043,6 +1008,7 @@ pub struct State {
     midi: Option<l6max_host::usb::Endpoints>,
     gdb: Option<l6max_diagnostics::gdb::Gdb>,
     host_midi: Option<Box<dyn crate::host_midi::Client>>,
+    encoder_turned_up: bool,
 }
 
 impl State {
@@ -2059,10 +2025,17 @@ fn run_l6_din_sweep_inner(
     };
     let trace_path = options.logs.join("engine.trace");
     let ready_deadline = Instant::now() + Duration::from_secs(120);
+    let main_queue_pending = || -> Result<u32, String> {
+        let bytes = session.engine.management[0]
+            .read_memory(0, 0x806b2f20, 4)
+            .map_err(|e| e.to_string())?;
+        Ok(u32::from_le_bytes(bytes.try_into().unwrap()))
+    };
+    // Main must be draining its queue, or the sweep only fills it.
     loop {
         session.poll()?;
         let trace = fs::read_to_string(&trace_path).map_err(|e| e.to_string())?;
-        if trace.contains("LPUART2 (MIDI jacks) CTRL 002c0000") {
+        if trace.contains("LPUART2 (MIDI jacks) CTRL 002c0000") && main_queue_pending()? == 0 {
             break;
         }
         if Instant::now() >= ready_deadline {
@@ -2178,8 +2151,8 @@ fn run_l6_din_sweep_inner(
         || read_index != write_index
         || changes.is_empty()
         || dispatch_hits[0] != 128
-        || dispatch_hits[1] != 66
-        || dispatch_hits[2] != dispatch_hits[1]
+        || dispatch_hits[1] < mapped_cc_count
+        || dispatch_hits[2] < dispatch_hits[1]
         || dispatch_hits[3] == 0
         || mixer_changed_bytes == 0
     {
@@ -2208,13 +2181,17 @@ fn run_l6max_input_timing(session: &Session, options: &Options) -> Result<Value,
         Ok(trace.matches(pattern).count())
     };
     let current = session.poll()?;
-    let input_before = inputs.panel.snapshot();
-    let presses_before = report_count("l6 panel USART1 TX 91\n")?;
-    let releases_before = report_count("l6 panel USART1 TX 90\n")?;
     let qmp_clients = &session.engine.management;
     for client in qmp_clients {
         client.stop().map_err(|error| error.to_string())?;
     }
+    // Take the baseline once paused: a heartbeat sent just before the pause can
+    // still arrive after it, and would read as the clock advancing while paused.
+    thread::sleep(Duration::from_millis(100));
+    session.poll()?;
+    let input_before = inputs.panel.snapshot();
+    let presses_before = report_count("l6 panel USART1 TX 91\n")?;
+    let releases_before = report_count("l6 panel USART1 TX 90\n")?;
     let send_result = (|| -> Result<(), String> {
         inputs
             .panel
@@ -2409,7 +2386,9 @@ impl State {
         };
         let start_guest = inputs.panel.snapshot().guest_ms;
         let deadline = Instant::now() + Duration::from_secs(wall_timeout_s.min(30));
-        inputs.encoder(0, -4)?;
+        // Alternate direction: repeated turns one way saturate and send no CC.
+        self.encoder_turned_up = !self.encoder_turned_up;
+        inputs.encoder(0, if self.encoder_turned_up { -4 } else { 4 })?;
         let mut knob_message = None;
         while Instant::now() < deadline {
             session.poll()?;
@@ -2430,9 +2409,8 @@ impl State {
                 "model-specific encoder CC {expected_cc:02x?} did not reach the host MIDI endpoint"
             ))
         })?;
-        if model == l6fw::Model::L6 {
-            wait_guest_duration(session, 1000, deadline)?;
-        }
+        // Let the encoder's remaining reports land before taking the baseline.
+        wait_guest_duration(session, 1000, deadline)?;
         let before = inputs.panel.snapshot().indicators;
         let mixer_cc = if model == l6fw::Model::L6 { 0x53 } else { 0x51 };
         client
@@ -3057,6 +3035,15 @@ impl State {
         } else {
             (94, None)
         };
+        // Leftover encoder CCs would otherwise count as replies.
+        let mut quiet_since = Instant::now();
+        while quiet_since.elapsed() < Duration::from_millis(500) {
+            session.poll()?;
+            while client.poll().map_err(std::io::Error::other)?.is_some() {
+                quiet_since = Instant::now();
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
         client
             .send(&[0xb0, 127, 127])
             .map_err(std::io::Error::other)?;
@@ -3563,6 +3550,23 @@ impl State {
                     thread::sleep(Duration::from_millis(5));
                 }
                 Ok(json!({"target":target,"column":column,"row":row,"event":event,"report":bytes}))
+            }
+            Operation::ExpectCardEntry { path } => {
+                let card = options
+                    .sd_image
+                    .as_ref()
+                    .ok_or("expect-card-entry requires an SD card")?;
+                let deadline =
+                    std::time::Instant::now() + std::time::Duration::from_secs(wall_timeout_s);
+                loop {
+                    if sd_image::entry_exists(card, &path)? {
+                        return Ok(json!({ "card_entry": path }));
+                    }
+                    if std::time::Instant::now() >= deadline {
+                        return Err(format!("{path} did not appear on the SD card").into());
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(250));
+                }
             }
             Operation::L6maxTapHandler => {
                 const TAP_TARGET: u32 = 48;
@@ -4217,38 +4221,28 @@ impl State {
                 if disk.read_sector((blocks - 1) as u32)? != original {
                     return Err("USB sector write/read mismatch".into());
                 }
-                let mut disk = l6max_host::usb_storage::UsbDisk::new(disk)?;
-                let filesystem = fatfs::FileSystem::new(&mut disk, fatfs::FsOptions::new())?;
+                let disk = l6max_host::usb_storage::UsbDisk::new(disk)?;
+                let mut volume = sd_image::Volume::open(disk)?;
                 let filename = format!("L6T{:05X}.TXT", std::process::id() & 0xfffff);
                 let expected = (0..1537)
                     .map(|index| ((index * 37 + 11) % 256) as u8)
                     .collect::<Vec<_>>();
-                {
-                    let root = filesystem.root_dir();
-                    match root.open_file(&filename) {
-                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                        _ => return Err("USB FAT roundtrip filename already exists".into()),
-                    }
-                    {
-                        let mut file = root.create_file(&filename)?;
-                        file.write_all(&expected)?;
-                        file.flush()?;
-                    }
-                    use std::io::Read;
-                    let mut actual = Vec::new();
-                    root.open_file(&filename)?.read_to_end(&mut actual)?;
-                    root.remove(&filename)?;
-                    if expected != actual {
-                        return Err(format!(
-                            "USB FAT file roundtrip mismatch: wrote {} bytes, read {} bytes",
-                            expected.len(),
-                            actual.len()
-                        )
-                        .into());
-                    }
+                if volume.exists(&filename) {
+                    return Err("USB FAT roundtrip filename already exists".into());
                 }
-                filesystem.unmount()?;
-                disk.flush()?;
+                volume.write(&filename, &expected)?;
+                volume.flush()?;
+                let actual = volume.read(&filename)?;
+                volume.remove(&filename)?;
+                if expected != actual {
+                    return Err(format!(
+                        "USB FAT file roundtrip mismatch: wrote {} bytes, read {} bytes",
+                        expected.len(),
+                        actual.len()
+                    )
+                    .into());
+                }
+                volume.flush()?;
                 Ok(
                     json!({"inquiry":String::from_utf8_lossy(&inquiry[8..36]),"blocks":blocks,"sector_size":size,"sector_round_trip":true,"fat_file_round_trip_bytes":expected.len()}),
                 )
@@ -5828,18 +5822,34 @@ fn run_l6max_ui_pad_assignment(
         Ok(())
     };
 
-    // Match the legacy Sound Assign navigation: Menu, two Down presses to
-    // Sound Pad, Confirm into Sound Assign, Confirm into the pad list, select
-    // the requested pad, Confirm into its file list and Confirm the first WAV.
+    // A "Data OK." popup can still be up, and it would swallow the Menu press.
+    wait_guest_duration(session, 5000, deadline)?;
+
+    // Sound Assign navigation: Menu, Confirm into Sound Pad, Confirm into Sound
+    // Assign, select the pad, Confirm into its file list, Down past its first row,
+    // None Assigned, and Confirm the first WAV. Menus keep their cursors between
+    // visits, so only the first pad moves down to Sound Pad, and each later pad moves
+    // one row from the last. A stray Down here reaches SD Card and its Format.
     tap(0, true, &mut key_evidence)?;
-    for button in [2, 2, 3, 3]
-        .into_iter()
-        .chain(std::iter::repeat_n(2, pad as usize))
-        .chain([3, 3])
+    let to_sound_pad: &[u32] = if pad == 0 { &[2, 2] } else { &[] };
+    let to_pad: &[u32] = if pad == 0 { &[] } else { &[2] };
+    for &button in to_sound_pad
+        .iter()
+        .chain(&[3, 3])
+        .chain(to_pad)
+        .chain(&[3, 2, 3])
     {
+        // Each menu loads after its key, and the file list drops keys until then.
+        wait_guest_duration(session, 2000, deadline)?;
         tap(button, false, &mut key_evidence)?;
     }
-    tap(0, true, &mut key_evidence)?;
+    // Back out through Sound Pad and Menu to the home screen, which saves the
+    // assignment and leaves the next visit starting from the same place.
+    for _ in 0..3 {
+        wait_guest_duration(session, 2000, deadline)?;
+        tap(0, true, &mut key_evidence)?;
+    }
+    wait_guest_duration(session, 2000, deadline)?;
 
     // Verify the UI assignment through the same Editor state query used by
     // the original probe, after opening an Editor session on cable 2.
@@ -6211,10 +6221,7 @@ fn compare_pad_waveform(
     source: &str,
     capture: &[u8],
 ) -> Result<Value, Box<dyn std::error::Error>> {
-    let volume = fatfs::FileSystem::new(fs::File::open(card)?, fatfs::FsOptions::new())?;
-    use std::io::Read;
-    let mut wav = Vec::new();
-    volume.root_dir().open_file(source)?.read_to_end(&mut wav)?;
+    let wav = sd_image::read_file(card, source, u64::MAX)?;
     let source = waveform::decode_wav(&wav).map_err(std::io::Error::other)?;
     waveform::compare(&source, &waveform::decode_capture(capture))
         .map_err(|error| std::io::Error::other(error).into())
@@ -6342,6 +6349,10 @@ fn run_l6_recorder_playback(
             "L6 class-0 dispatcher received an unexpected event (state={event_state}, class={event_class}, code={event_code:#x}, bytes={event:02x?})"
         )).into());
     }
+    // A breakpoint left at the current PC would stop here again.
+    debugger
+        .breakpoint(0x8002_c9d8, false)
+        .map_err(|error| std::io::Error::other(format!("clearing dispatcher: {error}")))?;
     debugger
         .continue_until_stop(Duration::from_secs(10))
         .map_err(|error| std::io::Error::other(format!("waiting for L6 Play handler: {error}")))?;
@@ -6366,6 +6377,9 @@ fn run_l6_recorder_playback(
         ))
         .into());
     }
+    debugger
+        .breakpoint(0x8000_8a08, false)
+        .map_err(|error| std::io::Error::other(format!("clearing Play handler: {error}")))?;
     debugger
         .continue_until_stop(Duration::from_secs(10))
         .map_err(|error| {
@@ -6677,7 +6691,6 @@ mod tests {
     use l6fw::Model;
     use std::{
         fs,
-        io::Read,
         time::{SystemTime, UNIX_EPOCH},
     };
 
@@ -6703,22 +6716,11 @@ mod tests {
         let path =
             std::env::temp_dir().join(format!("factory-jig-{}-{nonce}.img", std::process::id()));
         create_factory_card(&path).unwrap();
-        let mut image = fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(&path)
-            .unwrap();
-        let volume = fatfs::FileSystem::new(&mut image, fatfs::FsOptions::new()).unwrap();
-        let mut contents = String::new();
-        volume
-            .root_dir()
-            .open_file("D445_JIG_000.txt")
+        let contents = sd_image::open(&path)
             .unwrap()
-            .read_to_string(&mut contents)
+            .read("D445_JIG_000.txt")
             .unwrap();
-        assert_eq!(contents, "emulator fixture; no calibration parameters\n");
-        volume.unmount().unwrap();
-        drop(image);
+        assert_eq!(contents, b"emulator fixture; no calibration parameters\n");
         fs::remove_file(path).unwrap();
     }
 

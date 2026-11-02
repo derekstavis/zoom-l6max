@@ -2,7 +2,7 @@ version = 1
 name = "persistence"
 models = ["l6max"]
 backends = ["headless"]
-fixture = "fresh"
+card = "empty"
 
 [[step]]
 action = "wait"

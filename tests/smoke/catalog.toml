@@ -84,7 +84,6 @@ suites = ["full"]
 models = ["l6", "l6max"]
 scenario = "scenarios/editor-pad-assignments.toml"
 needs_configuration = true
-fixture = "prepared"
 wall_timeout_s = 1200
 
 [[case]]
@@ -101,7 +100,6 @@ id = "l6max-volume-meter-sweep"
 suites = []
 models = ["l6max"]
 scenario = "scenarios/l6max-volume-meter-sweep.toml"
-fixture = "volume-meter"
 needs_configuration = true
 environment = { L6_AUDIO_SAMPLE_TRACE = "1" }
 wall_timeout_s = 1800
@@ -148,7 +146,6 @@ models = ["l6"]
 scenario = "scenarios/l6-din-sweep.toml"
 no_sd = true
 needs_configuration = true
-fixture = "prepared"
 wall_timeout_s = 900
 
 [[case]]
@@ -209,7 +206,6 @@ suites = ["quick", "full"]
 models = ["l6max"]
 scenario = "scenarios/l6max-tap-handler.toml"
 needs_configuration = true
-fixture = "prepared"
 no_sd = true
 wall_timeout_s = 900
 
@@ -219,7 +215,6 @@ suites = []
 models = ["l6"]
 scenario = "scenarios/l6-main-gpio-events.toml"
 needs_configuration = true
-fixture = "prepared"
 no_sd = true
 wall_timeout_s = 900
 
@@ -229,7 +224,6 @@ suites = []
 models = ["l6"]
 scenario = "scenarios/l6-recorder-record-stop.toml"
 needs_configuration = true
-fixture = "prepared"
 wall_timeout_s = 900
 
 [[case]]
@@ -238,7 +232,6 @@ suites = ["full"]
 models = ["l6"]
 scenario = "scenarios/l6-recorder-playback.toml"
 needs_configuration = true
-fixture = "l6-recorder-playback"
 environment = { L6_AUDIO_SAMPLE_TRACE = "1" }
 wall_timeout_s = 900
 
@@ -248,7 +241,6 @@ suites = ["full"]
 models = ["l6max"]
 scenario = "scenarios/l6max-recorder-playback.toml"
 needs_configuration = true
-fixture = "l6max-recorder-playback"
 environment = { L6_AUDIO_SAMPLE_TRACE = "1" }
 wall_timeout_s = 1800
 
@@ -267,7 +259,6 @@ suites = ["full"]
 models = ["l6", "l6max"]
 scenario = "scenarios/host-midi.toml"
 needs_configuration = true
-fixture = "prepared"
 no_sd = true
 wall_timeout_s = 900
 
@@ -277,7 +268,6 @@ suites = ["full"]
 models = ["l6max"]
 scenario = "scenarios/host-midi-sync.toml"
 needs_configuration = true
-fixture = "prepared"
 no_sd = true
 wall_timeout_s = 900
 
@@ -287,7 +277,6 @@ suites = ["full"]
 models = ["l6"]
 scenario = "scenarios/l6-midi-sync.toml"
 needs_configuration = true
-fixture = "prepared"
 volatile = true
 no_sd = true
 wall_timeout_s = 180
@@ -298,7 +287,6 @@ suites = ["full"]
 models = ["l6"]
 scenario = "scenarios/l6-direct-midi-sync.toml"
 needs_configuration = true
-fixture = "prepared"
 volatile = true
 no_sd = true
 wall_timeout_s = 900
@@ -309,7 +297,6 @@ suites = ["full"]
 models = ["l6max"]
 scenario = "scenarios/l6max-direct-midi-sync.toml"
 needs_configuration = true
-fixture = "prepared"
 volatile = true
 no_sd = true
 wall_timeout_s = 900
@@ -320,7 +307,6 @@ suites = ["full"]
 models = ["l6", "l6max"]
 scenario = "scenarios/patched-update.toml"
 needs_configuration = true
-fixture = "patched-update"
 volatile = true
 no_sd = true
 
@@ -337,7 +323,6 @@ id = "state-spec"
 suites = ["lifecycle", "full"]
 models = ["l6max"]
 scenario = "scenarios/l6max-state-spec.toml"
-fixture = "spec-setup"
 no_sd = true
 
 [[case]]
@@ -354,6 +339,14 @@ id = "power"
 suites = ["lifecycle", "full"]
 models = ["l6", "l6max"]
 scenario = "scenarios/power.toml"
+
+[[case]]
+id = "card-record"
+suites = ["devices", "full"]
+models = ["l6", "l6max"]
+scenario = "scenarios/card-record.toml"
+needs_configuration = true
+wall_timeout_s = 900
 
 [[case]]
 id = "storage"
@@ -464,7 +457,6 @@ id = "l6max-channel-signal-pwm"
 suites = []
 models = ["l6max"]
 scenario = "scenarios/l6max-channel-signal-pwm.toml"
-fixture = "signal-pwm"
 volatile = true
 no_sd = true
 wall_timeout_s = 900
@@ -474,7 +466,6 @@ id = "l6-level-meter-pwm"
 suites = []
 models = ["l6"]
 scenario = "scenarios/l6-level-meter-pwm.toml"
-fixture = "l6-meter-pwm"
 volatile = true
 no_sd = true
 wall_timeout_s = 1800
@@ -484,7 +475,6 @@ id = "l6-volume-meter-playback"
 suites = []
 models = ["l6"]
 scenario = "scenarios/l6-volume-meter-playback.toml"
-fixture = "l6-volume-meter"
 environment = { L6_AUDIO_SAMPLE_TRACE = "1" }
 wall_timeout_s = 900
 

@@ -20,7 +20,19 @@ pub struct Scenario {
     pub version: u32,
     pub name: String,
     pub models: Vec<String>,
-    pub fixture: String,
+    /// Boot from `states/<model>-<state>.toml` beside the catalog.
+    pub state: Option<String>,
+    /// Build the case's card from `cards/<model>-<card>.toml` beside the catalog.
+    pub card: Option<String>,
+    /// Firmware patches applied to the configured package.
+    #[serde(default)]
+    pub patches: Vec<String>,
+    /// Patches for the update package, per model, applied to the configured package.
+    #[serde(default)]
+    pub update_patches: std::collections::BTreeMap<String, Vec<String>>,
+    #[serde(default)]
+    pub gdb: bool,
+    pub audio_device: Option<String>,
     pub main_sha256: Option<String>,
     #[serde(default)]
     pub main_sha256_any: Vec<String>,
@@ -278,6 +290,10 @@ pub enum Action {
         event: u8,
     },
     L6maxTapHandler,
+    /// Wait until an entry appears on the card, written by the firmware.
+    ExpectCardEntry {
+        path: String,
+    },
     L6UsbStartup,
     L6DinEventDispatch {
         group: u8,
@@ -781,6 +797,7 @@ impl Scenario {
                 | Action::PanelEvent { .. }
                 | Action::L6MainGpioEvent { .. }
                 | Action::L6maxTapHandler
+                | Action::ExpectCardEntry { .. }
                 | Action::L6UsbStartup
                 | Action::L6DinEventDispatch { .. }
                 | Action::L6InputSweep

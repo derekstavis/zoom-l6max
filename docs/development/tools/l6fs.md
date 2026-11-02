@@ -6,16 +6,29 @@ mass-storage device.
 ## Create SD cards
 
 ```sh
-cargo run -p l6fs -- card create emulator/state/blank.img --size-mib 64
+cargo run -p l6fs -- card create emulator/state/blank.img --model l6max
 cargo run -p l6fs -- card demo emulator/state/demo.img --firmware-package /path/to/L6max.bin
-cargo run -p l6fs -- card import emulator/state/imported.img --directory /path/to/card-folder
+cargo run -p l6fs -- card import emulator/state/imported.img --directory /path/to/card-folder --model l6max
 ```
 
-`create` produces an empty FAT32 image. Size defaults to 64 MiB and must be a
-power of two from 64 MiB through 1 TiB. It refuses to overwrite an existing
-image. `demo` creates a 128 MiB card populated with the package’s demo audio.
-`import` creates a card from a host directory. Both populated-card commands
-also refuse to overwrite the target.
+Every command creates a 4 GiB FAT32 image with 32 KiB clusters, which the firmware
+accepts for recording; see [card layout](../../emulator/usb.md#card-layout). Images
+are sparse, so they use only the disk space their files need. `create` makes an empty
+card, `demo` adds the package's demo audio, and `import` copies a host directory.
+All three add the model's system file and refuse to overwrite an existing image.
+
+`create` can also define the card's contents:
+
+```sh
+cargo run -p l6fs -- card create emulator/state/pads.img --model l6max \\
+  --file SOUND_PAD/PAD4/KICK.WAV=/path/to/kick.wav \\
+  --sound-pad 4=SOUND_PAD/PAD4/KICK.WAV,mode=loop,level=40
+```
+
+`--file` copies a host file to a card path, and `--sound-pad` writes the model's pad
+settings file. `--no-system-file` leaves the system file out. `card set-pads CARD --model MODEL --sound-pad ...` updates assignments on an
+existing card, and `card build PATH --spec SPEC.toml` builds a
+[card spec](../testing.md).
 
 ## Read and write through USB storage
 

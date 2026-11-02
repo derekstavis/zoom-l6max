@@ -2,7 +2,8 @@ version = 1
 name = "l6max-volume-meter-sweep"
 models = ["l6max"]
 main_sha256 = "980d92272c1f84bed200b4d2f83575202f6a00082c928d99b9e8b53af8d44461"
-fixture = "volume-meter"
+state = "volume-meter-ready"
+card = "meter-levels"
 backends = ["headless"]
 
 [[step]]

@@ -1,7 +1,8 @@
 version = 1
 name = "buttons"
 models = ["l6", "l6max"]
-fixture = "prepared"
+state = "setup-complete"
+card = "empty"
 
 [[step]]
 action = "include"

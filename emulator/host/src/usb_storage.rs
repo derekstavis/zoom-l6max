@@ -175,6 +175,25 @@ impl<'a> MassStorage<'a> {
         cdb[8] = 1;
         self.command(&cdb, 512, Some(bytes)).map(|_| ())
     }
+    pub fn read_sectors(&mut self, lba: u32, bytes: &mut [u8]) -> io::Result<()> {
+        let mut cdb = [0u8; 10];
+        cdb[0] = 0x28;
+        cdb[2..6].copy_from_slice(&lba.to_be_bytes());
+        cdb[7..9].copy_from_slice(&((bytes.len() / 512) as u16).to_be_bytes());
+        let data = self.command(&cdb, bytes.len(), None)?;
+        if data.len() != bytes.len() {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "sector length"));
+        }
+        bytes.copy_from_slice(&data);
+        Ok(())
+    }
+    pub fn write_sectors(&mut self, lba: u32, bytes: &[u8]) -> io::Result<()> {
+        let mut cdb = [0u8; 10];
+        cdb[0] = 0x2a;
+        cdb[2..6].copy_from_slice(&lba.to_be_bytes());
+        cdb[7..9].copy_from_slice(&((bytes.len() / 512) as u16).to_be_bytes());
+        self.command(&cdb, bytes.len(), Some(bytes)).map(|_| ())
+    }
     /// Flush the device cache. A device without SYNCHRONIZE CACHE rejects it
     /// as an invalid opcode; like host operating systems, treat that as
     /// having no cache to flush.
@@ -221,6 +240,12 @@ impl SectorDevice for UsbSectors<'_> {
     }
     fn write_sector(&mut self, lba: u32, bytes: &[u8; SECTOR]) -> io::Result<()> {
         self.disk.write_sector(lba, bytes)
+    }
+    fn read_sectors(&mut self, lba: u32, bytes: &mut [u8]) -> io::Result<()> {
+        self.disk.read_sectors(lba, bytes)
+    }
+    fn write_sectors(&mut self, lba: u32, bytes: &[u8]) -> io::Result<()> {
+        self.disk.write_sectors(lba, bytes)
     }
     fn flush(&mut self) -> io::Result<()> {
         self.disk.synchronize()
