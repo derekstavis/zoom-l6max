@@ -120,6 +120,19 @@ device, select another state directory:
 cargo run -p l6max-gui -- /path/to/qemu-system-arm --state-dir emulator/state/demo-device
 ```
 
+To run firmware patches, use **File → Firmware Patches…**, which restarts the
+guest and saves the selection, or `patches` in `config.toml`. `--patch` selects
+patches for one run and `--no-patches` runs without any; repeat `--patch` to
+combine them:
+
+```sh
+cargo run -p l6max-gui -- --patch knob-dialog --patch midi-sync
+```
+
+Patches apply to the stock 1.10 package. A saved device keeps its settings. Its
+application changes when the selection does, and an SD card update is replaced
+at the next start while any patch is selected.
+
 For a fresh disposable run without an SD card:
 
 ```sh

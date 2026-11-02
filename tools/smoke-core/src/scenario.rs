@@ -27,6 +27,9 @@ pub struct Scenario {
     /// Firmware patches applied to the configured package.
     #[serde(default)]
     pub patches: Vec<String>,
+    /// Patches the engine installs on a device already running the stock firmware.
+    #[serde(default)]
+    pub installed_patches: Vec<String>,
     /// Patches for the update package, per model, applied to the configured package.
     #[serde(default)]
     pub update_patches: std::collections::BTreeMap<String, Vec<String>>,
