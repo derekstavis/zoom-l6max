@@ -59,7 +59,12 @@ impl BundleSmoke {
         Ok(())
     }
 
-    pub fn tick(&mut self, panel: &mut NativePanel, cx: &mut gpui::App) -> Result<bool, String> {
+    pub fn tick(
+        &mut self,
+        panel: &mut NativePanel,
+        window: &mut gpui::Window,
+        cx: &mut gpui::App,
+    ) -> Result<bool, String> {
         if Instant::now() > self.deadline {
             return Err("Packaged firmware smoke timed out".into());
         }
@@ -73,7 +78,7 @@ impl BundleSmoke {
                 let expected_qemu = std::env::var("L6_BUNDLE_SMOKE_QEMU_SHA256")
                     .map_err(|_| "L6_BUNDLE_SMOKE_QEMU_SHA256 is required")?;
                 crate::bundle::verify_bundled_qemu(
-                    &panel.bundle.as_ref().unwrap().resources,
+                    &panel.bundle.as_ref().unwrap().qemu,
                     &expected_qemu,
                 )?;
                 let menus = cx.get_menus().ok_or("No native menu")?;
@@ -107,6 +112,17 @@ impl BundleSmoke {
                     return Err(format!(
                         "No firmware display after boot:\n{}",
                         panel_data.display_ascii()
+                    ));
+                }
+                // The window follows the running model's shape, with no bars beside it.
+                let viewport = window.viewport_size();
+                let shape = viewport.width.as_f32() / viewport.height.as_f32();
+                let expected = panel.layout.width / panel.layout.height;
+                if (shape - expected).abs() > 0.02 {
+                    return Err(format!(
+                        "{} window {:?} shape {shape:.3} does not match its panel {expected:.3}",
+                        crate::model_name(panel.model),
+                        viewport
                     ));
                 }
                 let bundle = panel.bundle.as_ref().unwrap();

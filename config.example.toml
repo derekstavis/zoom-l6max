@@ -1,0 +1,23 @@
+# Copy to config.toml at the repository root, which Git ignores. A packaged app keeps
+# its own in its data directory. The GUI saves its selections here, keeping comments.
+# Relative paths follow this file.
+version = 1
+
+# The model to run without --model.
+model = "l6max"
+
+# Your stock update packages. The test runner reads only these; a test for a model
+# with no package is BLOCKED.
+[firmware]
+l6 = "/absolute/path/to/L6.BIN"
+l6max = "/absolute/path/to/L6max.bin"
+
+# Settings for each model's emulator: its SD card, and the audio its input channels
+# play, 1-8 on L6max and 1-6 on L6, from WAV files of any common rate and depth.
+#
+# [emulator.l6max]
+# sd_card = "/absolute/path/to/card.img"
+#
+# [emulator.l6max.input_patch]
+# 1 = "/absolute/path/to/kick.wav"
+# 5 = "/absolute/path/to/overheads.wav"

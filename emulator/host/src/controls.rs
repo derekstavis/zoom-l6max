@@ -6,6 +6,13 @@ pub struct Control {
     pub switch: bool,
 }
 pub const INPUT_COUNT: usize = 54;
+/// Input channels that can be fed from audio files. See docs/emulator/audio.md.
+pub const fn audio_input_channels(model: l6fw::Model) -> u32 {
+    match model {
+        l6fw::Model::L6 => 6,
+        l6fw::Model::L6max => 8,
+    }
+}
 /// Physical ADC channels in UI order: SOUND PAD, EFX RTN, MASTER, MONITOR, SUB-OUT.
 /// L6 has no SUB-OUT knob. See docs/emulator/controls.md.
 pub const fn analog_channels(model: l6fw::Model) -> [u32; 5] {

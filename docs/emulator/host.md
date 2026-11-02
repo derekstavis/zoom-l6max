@@ -36,12 +36,17 @@ working directory: `unpacked/`, `emulator/logs/`, and `emulator/state/`. Pass ex
 paths when using a binary away from that checkout. The host does not automatically
 create or attach a demo card; use `l6fs card demo` and `--sd-image` to select one.
 
-The GUI keeps persistent device state separate for L6 and L6max under
+Device state stays separate for L6 and L6max under
 `emulator/state/models/l6/` and `emulator/state/models/l6max/`. This includes
 MAIN NOR, panel flash and RTC state. When opening an existing state directory,
 the firmware already installed in its MAIN NOR keeps using that legacy state;
 the other model is started in its own model-specific directory. SD-card images
-and selections are also model-specific.
+are also model-specific.
+
+A development run reads `config.toml` from the working directory, or `--config FILE`; a
+packaged app keeps its own in its data directory. `--model` picks from its firmware, and
+otherwise its `model` key. See [`config.example.toml`](../../config.example.toml). Runs
+with `--no-auto-setup`, including every test, do not read it.
 
 ## Modules
 

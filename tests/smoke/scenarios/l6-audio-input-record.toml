@@ -1,0 +1,114 @@
+version = 1
+name = "l6-audio-input-record"
+models = ["l6"]
+state = "volume-meter-ready"
+card = "empty"
+backends = ["headless"]
+
+[[audio_input]]
+channel = 1
+loop-tone = { hz = 300.0, seconds = 1.0, amplitude = 0.0004 }
+
+[[audio_input]]
+channel = 2
+loop-tone = { hz = 500.0, seconds = 1.0, amplitude = 0.05 }
+
+[[audio_input]]
+channel = 3
+loop-tone = { hz = 700.0, seconds = 1.0, amplitude = 0.002 }
+
+[[audio_input]]
+channel = 4
+loop-tone = { hz = 900.0, seconds = 1.0, amplitude = 0.002 }
+
+[[audio_input]]
+channel = 5
+loop-tone = { hz = 1100.0, seconds = 1.0, amplitude = 0.002 }
+
+[[audio_input]]
+channel = 6
+loop-tone = { hz = 1300.0, seconds = 1.0, amplitude = 0.002 }
+
+[[step]]
+action = "audio-input-transport"
+command = "play"
+
+[[step]]
+action = "wait"
+until = "mixer-ready"
+guest_timeout_ms = 60000
+wall_timeout_s = 300
+
+[[step]]
+action = "delay"
+guest_ms = 8000
+guest_timeout_ms = 20000
+wall_timeout_s = 300
+
+[[step]]
+action = "press"
+control = "rec-record"
+
+[[step]]
+action = "delay"
+guest_ms = 5000
+guest_timeout_ms = 20000
+wall_timeout_s = 300
+
+[[step]]
+action = "press"
+control = "rec-record"
+
+[[step]]
+action = "delay"
+guest_ms = 5000
+guest_timeout_ms = 20000
+wall_timeout_s = 300
+
+# Tracks hold each channel before its fader, alone, on the matching track number.
+[[step]]
+action = "expect-recorded-tone"
+file = "TRACK01.WAV"
+hz = 300.0
+left_db = -53.0
+right_db = -53.0
+
+[[step]]
+action = "expect-recorded-tone"
+file = "TRACK02.WAV"
+hz = 500.0
+left_db = -11.0
+right_db = -11.0
+
+[[step]]
+action = "expect-recorded-tone"
+file = "TRACK03_ST.WAV"
+hz = 700.0
+left_db = -54.0
+right_db = -54.0
+
+[[step]]
+action = "expect-recorded-tone"
+file = "TRACK04_ST.WAV"
+hz = 900.0
+left_db = -54.0
+right_db = -54.0
+
+[[step]]
+action = "expect-recorded-tone"
+file = "TRACK05_ST.WAV"
+hz = 1100.0
+left_db = -54.0
+right_db = -54.0
+
+[[step]]
+action = "expect-recorded-tone"
+file = "TRACK06_ST.WAV"
+hz = 1300.0
+left_db = -54.0
+right_db = -54.0
+
+[[step]]
+action = "expect-recorded-tone"
+file = "TRACK01.WAV"
+hz = 500.0

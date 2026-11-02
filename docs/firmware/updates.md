@@ -46,7 +46,7 @@ partition in an MBR.
 
 ```sh
 cargo run --offline --locked -p l6test -- run \
-  --config smoke.local.toml --case firmware-update --model all
+  --config config.toml --case firmware-update --model all
 ```
 
 The scenario uses disposable state and media and checks package rejection,

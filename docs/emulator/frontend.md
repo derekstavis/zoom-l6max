@@ -278,10 +278,10 @@ scenarios. Both use the production `PanelFeed` and `PanelData`; GUI tests also
 exercise hit testing and event dispatch.
 
 ```sh
-cargo run --offline --locked -p l6test -- run --case l6-input-sweep --model l6 --config smoke.local.toml
-cargo run --offline --locked -p l6test -- run --case l6max-input-smoke --model l6max --config smoke.local.toml
-cargo run --offline --locked -p l6test -- run --case panel --model l6 --backend gui --config smoke.local.toml
-cargo run --offline --locked -p l6test -- run --case panel --model l6max --backend gui --config smoke.local.toml
+cargo run --offline --locked -p l6test -- run --case l6-input-sweep --model l6 --config config.toml
+cargo run --offline --locked -p l6test -- run --case l6max-input-smoke --model l6max --config config.toml
+cargo run --offline --locked -p l6test -- run --case panel --model l6 --backend gui --config config.toml
+cargo run --offline --locked -p l6test -- run --case panel --model l6max --backend gui --config config.toml
 ```
 
 The [current status](../development/current-status.md) lists qualification

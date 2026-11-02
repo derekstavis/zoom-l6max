@@ -13,6 +13,14 @@ pub const TAP: u32 = 3;
 pub const ENCODER_STEP: u32 = 4;
 pub const FRAME_CONSUMED: u32 = 5;
 pub const ADC_SET: u32 = 6;
+/// Target is a zero-based input channel. Value 1 maps its prepared file; 0 drops it.
+pub const AUDIO_INPUT_LOAD: u32 = 7;
+/// Target is one of the `AUDIO_INPUT_*` commands. Value is milliseconds for a seek.
+pub const AUDIO_INPUT_TRANSPORT: u32 = 8;
+pub const AUDIO_INPUT_STOP: u32 = 0;
+pub const AUDIO_INPUT_PLAY: u32 = 1;
+pub const AUDIO_INPUT_PAUSE: u32 = 2;
+pub const AUDIO_INPUT_SEEK: u32 = 3;
 pub const APPLIED: u32 = 0x8000_0001;
 pub const RELEASED: u32 = 0x8000_0002;
 pub const ERROR: u32 = 0x8000_0003;
@@ -30,6 +38,8 @@ pub const POWER_OFF: u32 = 0x8000_0009;
 /// Three packed 8-bit PWM brightness levels for one indicator row.
 /// Target is row * 8 + three-pixel group; value stores the levels in bytes.
 pub const INDICATOR_LEVELS: u32 = 0x8000_000a;
+/// Input playback position in milliseconds; target is 1 while playing.
+pub const AUDIO_INPUT_POSITION: u32 = 0x8000_000b;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Message {
@@ -66,6 +76,20 @@ impl Message {
                         && (0..=1023).contains(&self.value)
                         && self.duration_ms == 0
                 }
+                AUDIO_INPUT_LOAD => {
+                    self.target < 8 && matches!(self.value, 0 | 1) && self.duration_ms == 0
+                }
+                AUDIO_INPUT_TRANSPORT => {
+                    self.duration_ms == 0
+                        && match self.target {
+                            AUDIO_INPUT_STOP | AUDIO_INPUT_PLAY | AUDIO_INPUT_PAUSE => {
+                                self.value == 0
+                            }
+                            AUDIO_INPUT_SEEK => self.value >= 0,
+                            _ => false,
+                        }
+                }
+                AUDIO_INPUT_POSITION => self.target < 2 && self.value >= 0,
                 APPLIED | RELEASED => self.target < crate::controls::INPUT_COUNT as u32,
                 ERROR => self.target < crate::controls::INPUT_COUNT as u32 && self.value < 0,
                 FRAME_CONSUMED => self.target < 2 && self.value == 0 && self.duration_ms == 0,

@@ -120,5 +120,5 @@ outputs.
 - L6 Play/Stop and TAP illumination, L6max Bounce illumination, and L6max
   logical LED 32 do not have verified artwork assignments.
 - Physical LED brightness and analog knob travel and taper are not calibrated.
-- Audio input and analog codec behavior are incomplete. See
+- Live audio input and analog codec behavior are not modeled. See
   [audio emulation](audio.md) and [current status](../development/current-status.md).

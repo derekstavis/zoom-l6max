@@ -31,6 +31,8 @@ pub struct InputStatus {
     pub adc_samples: [u16; 5],
     pub adc_updates: u64,
     pub guest_ms: u32,
+    pub audio_input_position_ms: u32,
+    pub audio_input_playing: bool,
     pub last_ack: Option<Message>,
     pub error: Option<String>,
 }
@@ -119,6 +121,13 @@ impl EngineInput {
                                     };
                             }
                             state.indicator_updates += 1;
+                        }
+                        Ok(message) if message.kind == protocol::AUDIO_INPUT_POSITION => {
+                            let mut state = reader_status
+                                .lock()
+                                .unwrap_or_else(|error| error.into_inner());
+                            state.audio_input_position_ms = message.value as u32;
+                            state.audio_input_playing = message.target == 1;
                         }
                         Ok(message) if message.kind == protocol::INDICATOR_LEVELS => {
                             let mut state = reader_status
@@ -332,6 +341,12 @@ impl EngineInput {
     }
     pub fn encoder(&self, index: u32, steps: i32) -> io::Result<u32> {
         self.send(protocol::ENCODER_STEP, index, steps, 0)
+    }
+    pub fn audio_input_load(&self, channel: u32, loaded: bool) -> io::Result<u32> {
+        self.send(protocol::AUDIO_INPUT_LOAD, channel, i32::from(loaded), 0)
+    }
+    pub fn audio_input_transport(&self, command: u32, position_ms: i32) -> io::Result<u32> {
+        self.send(protocol::AUDIO_INPUT_TRANSPORT, command, position_ms, 0)
     }
     pub fn adc(&self, channel: u32, value: u16) -> io::Result<u32> {
         self.send(protocol::ADC_SET, channel, value as i32, 0)

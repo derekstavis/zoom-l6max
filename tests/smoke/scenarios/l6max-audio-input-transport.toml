@@ -1,0 +1,224 @@
+version = 1
+name = "l6max-audio-input-transport"
+models = ["l6max"]
+state = "audio-input"
+card = "empty"
+backends = ["headless"]
+
+[[audio_input]]
+channel = 1
+loop-tone = { hz = 300.0, seconds = 30.0, amplitude = 0.004 }
+
+[[audio_input]]
+channel = 2
+loop-tone = { hz = 500.0, seconds = 30.0, amplitude = 0.05 }
+
+[[step]]
+action = "wait"
+until = "mixer-ready"
+guest_timeout_ms = 60000
+wall_timeout_s = 900
+
+[[step]]
+action = "delay"
+guest_ms = 5000
+guest_timeout_ms = 10000
+wall_timeout_s = 300
+
+[[step]]
+action = "analog"
+channel = 1
+steps = 16
+
+[[step]]
+action = "analog"
+channel = 2
+steps = 16
+
+[[step]]
+action = "analog"
+channel = 3
+steps = 8
+
+[[step]]
+action = "analog"
+channel = 4
+steps = 16
+
+[[step]]
+action = "analog"
+channel = 5
+steps = 16
+
+# Nothing plays until the transport starts.
+[[step]]
+action = "expect-output-tone"
+hz = 300.0
+
+[[step]]
+action = "expect-output-tone"
+hz = 500.0
+
+[[step]]
+action = "audio-input-transport"
+command = "play"
+
+[[step]]
+action = "delay"
+guest_ms = 2000
+guest_timeout_ms = 10000
+wall_timeout_s = 120
+
+[[step]]
+action = "expect-output-tone"
+hz = 300.0
+left_db = -56.3
+right_db = -56.3
+
+[[step]]
+action = "expect-output-tone"
+hz = 500.0
+left_db = -34.2
+right_db = -34.2
+
+[[step]]
+action = "expect-audio-input"
+playing = true
+min_ms = 1000
+max_ms = 4000
+
+[[step]]
+action = "audio-input-transport"
+command = "pause"
+
+[[step]]
+action = "delay"
+guest_ms = 2000
+guest_timeout_ms = 10000
+wall_timeout_s = 120
+
+# Paused input is silent and holds its position.
+[[step]]
+action = "expect-output-tone"
+hz = 300.0
+
+[[step]]
+action = "expect-audio-input"
+playing = false
+min_ms = 1000
+max_ms = 4000
+
+[[step]]
+action = "audio-input-transport"
+command = "seek"
+position_ms = 20000
+
+[[step]]
+action = "delay"
+guest_ms = 2000
+guest_timeout_ms = 10000
+wall_timeout_s = 120
+
+[[step]]
+action = "expect-audio-input"
+playing = false
+min_ms = 20000
+max_ms = 20000
+
+[[step]]
+action = "audio-input-transport"
+command = "play"
+
+[[step]]
+action = "delay"
+guest_ms = 2000
+guest_timeout_ms = 10000
+wall_timeout_s = 120
+
+[[step]]
+action = "expect-audio-input"
+playing = true
+min_ms = 21000
+max_ms = 24000
+
+[[step]]
+action = "expect-output-tone"
+hz = 300.0
+left_db = -56.3
+right_db = -56.3
+
+[[step]]
+action = "audio-input-transport"
+command = "stop"
+
+[[step]]
+action = "delay"
+guest_ms = 2000
+guest_timeout_ms = 10000
+wall_timeout_s = 120
+
+[[step]]
+action = "expect-audio-input"
+playing = false
+min_ms = 0
+max_ms = 0
+
+[[step]]
+action = "expect-output-tone"
+hz = 300.0
+
+[[step]]
+action = "audio-input-transport"
+command = "play"
+
+[[step]]
+action = "delay"
+guest_ms = 2000
+guest_timeout_ms = 10000
+wall_timeout_s = 120
+
+# Dropping one channel leaves the others playing.
+[[step]]
+action = "audio-input-load"
+channel = 1
+loaded = false
+
+[[step]]
+action = "delay"
+guest_ms = 2000
+guest_timeout_ms = 10000
+wall_timeout_s = 120
+
+[[step]]
+action = "expect-output-tone"
+hz = 300.0
+
+[[step]]
+action = "expect-output-tone"
+hz = 500.0
+left_db = -34.2
+right_db = -34.2
+
+[[step]]
+action = "audio-input-load"
+channel = 1
+loaded = true
+
+[[step]]
+action = "delay"
+guest_ms = 2000
+guest_timeout_ms = 10000
+wall_timeout_s = 120
+
+[[step]]
+action = "expect-output-tone"
+hz = 300.0
+left_db = -56.3
+right_db = -56.3
+
+[[step]]
+action = "expect-output-tone"
+hz = 500.0
+left_db = -34.2
+right_db = -34.2
+

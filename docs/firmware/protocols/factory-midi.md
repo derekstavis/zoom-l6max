@@ -8,7 +8,7 @@ the scenario does not start calibration or change hardware routing.
 
 ```sh
 cargo run --offline --locked -p l6test -- run --case factory-protocol \
-  --model l6max --config smoke.local.toml
+  --model l6max --config config.toml
 ```
 
 The test covers session connection, input queries, metadata, keep-alive expiry,
