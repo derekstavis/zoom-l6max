@@ -17,7 +17,7 @@ way. See the
 From a source checkout, create the same folder snapshot explicitly:
 
 ```sh
-cargo run -p l6fs -- card import /path/to/card.img --directory /path/to/sd-folder
+cargo run -p l6fs -- card import /path/to/card.img --directory /path/to/sd-folder --model l6max
 cargo run -p l6max-gui -- /path/to/qemu-system-arm --sd-image /path/to/card.img
 ```
 
@@ -55,19 +55,30 @@ and controller interrupts continue through upstream QEMU.
 
 ### Card layout
 
-Observed on L6max firmware 1.10 through the emulator, by pressing Record:
+Observed on firmware 1.10 through the emulator, by pressing Record, on L6max unless
+noted:
 
 | Card | Result |
 | --- | --- |
-| FAT16 with 2 KiB clusters, FAT32 with 4 or 8 KiB clusters | `Invalid SD Card!` |
-| FAT16, 16 KiB clusters, no `ZOOM_L6max.sys` | Opens the SD Card menu, which also blocks pad input |
-| FAT16, 16 KiB clusters, with `ZOOM_L6max.sys` | Records |
+| FAT16 with 2 KiB clusters | `Invalid SD Card!` |
+| FAT16 with 16 KiB clusters, no system file | Opens the SD Card menu, which also blocks pad input |
+| FAT16 with 16 KiB clusters, with the system file | Records, on L6 and L6max |
+| FAT32 with 8 KiB clusters or less, up to 16 GiB | `Invalid SD Card!` |
+| FAT32 with 16 KiB clusters, up to 32 GiB | `Invalid SD Card!` |
+| FAT32 with 32 KiB clusters, 2.5 to 16 GiB, with the system file | Records; 4 GiB also on L6 |
+| FAT32 with 32 KiB clusters, 33 GiB | `Invalid SD Card!` |
 | exFAT, 32 GiB or smaller | `Invalid SD Card!` |
-| exFAT, 33 GiB or larger, 128 KiB clusters, with `ZOOM_L6max.sys` | Records |
+| exFAT, 33 GiB or larger, 128 KiB clusters, with the system file | Records |
 
-Cards with small clusters still boot and play assigned pads. WAV files need the
-FAT archive attribute to appear in the firmware's file list. L6 has not been
-tested against this table.
+The system file is `ZOOM_L6max.sys` on L6max and `ZOOM_L6.SYS` on L6, as observed on
+cards the firmware formatted. It is 2188 bytes: a header naming the file with
+ZOOM's copyright notice, a version ` 1.00` at offset `0x50`, the model name padded to
+32 bytes at `0x60`, and zeros. Generated cards include it. Cards with small clusters still boot and play assigned pads. WAV
+files need the FAT archive attribute to appear in the firmware's file list. The firmware's
+own Format, on a 4 GiB card, writes an MBR with one FAT32 partition at sector 8192,
+32 KiB clusters, and the label `ZOOM_SD`. Generated cards are 4 GiB FAT32 with 32 KiB
+clusters, with no partition table. They are sparse, so they use only the disk
+space their files need.
 
 ### Validation
 
@@ -215,7 +226,7 @@ From the repository root:
 
 ```sh
 # Create an empty FAT32 raw card. Existing files are never overwritten.
-cargo run -p l6fs -- card create /path/to/card.img --size-mib 64
+cargo run -p l6fs -- card create /path/to/card.img --model l6max
 
 # Native panel with SD storage and host MIDI ports (CoreMIDI or ALSA).
 cargo run -p l6max-gui -- --sd-image /path/to/card.img --usb

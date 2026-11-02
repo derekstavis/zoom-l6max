@@ -9,12 +9,29 @@
 use std::io::{self, Read, Seek, SeekFrom, Write};
 
 pub const SECTOR: usize = 512;
+/// The firmware moves at most 16 KiB per USB transfer.
+const MAX_BATCH_BYTES: usize = 16 * 1024;
 
 pub trait SectorDevice {
     /// Number of 512-byte sectors.
     fn sector_count(&self) -> u64;
     fn read_sector(&mut self, lba: u32) -> io::Result<[u8; SECTOR]>;
     fn write_sector(&mut self, lba: u32, bytes: &[u8; SECTOR]) -> io::Result<()>;
+    /// Read whole sectors from `lba` into `bytes`. Devices with a costly
+    /// per-command overhead transfer these together.
+    fn read_sectors(&mut self, lba: u32, bytes: &mut [u8]) -> io::Result<()> {
+        for (index, sector) in bytes.chunks_exact_mut(SECTOR).enumerate() {
+            sector.copy_from_slice(&self.read_sector(lba + index as u32)?);
+        }
+        Ok(())
+    }
+    /// Write whole sectors from `bytes` starting at `lba`.
+    fn write_sectors(&mut self, lba: u32, bytes: &[u8]) -> io::Result<()> {
+        for (index, sector) in bytes.chunks_exact(SECTOR).enumerate() {
+            self.write_sector(lba + index as u32, sector.try_into().unwrap())?;
+        }
+        Ok(())
+    }
     /// Make completed writes durable on the underlying device.
     fn flush(&mut self) -> io::Result<()> {
         Ok(())
@@ -88,7 +105,8 @@ impl<D: SectorDevice> SectorDisk<D> {
         let boot = device.read_sector(0)?;
         let mut first = 0;
         let mut volume_blocks = blocks;
-        if u16::from_le_bytes([boot[11], boot[12]]) != SECTOR as u16 {
+        if boot[3..11] != *b"EXFAT   " && u16::from_le_bytes([boot[11], boot[12]]) != SECTOR as u16
+        {
             if boot[510..] != [0x55, 0xaa] {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
@@ -97,7 +115,7 @@ impl<D: SectorDevice> SectorDisk<D> {
             }
             let p = boot[446..510]
                 .chunks_exact(16)
-                .find(|p| matches!(p[4], 1 | 4 | 6 | 0xb | 0xc | 0xe))
+                .find(|p| matches!(p[4], 1 | 4 | 6 | 7 | 0xb | 0xc | 0xe))
                 .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "no FAT partition"))?;
             first = u32::from_le_bytes(p[8..12].try_into().unwrap());
             volume_blocks = u32::from_le_bytes(p[12..16].try_into().unwrap()) as u64;
@@ -132,6 +150,13 @@ impl<D: SectorDevice> SectorDisk<D> {
         }
         Ok(&mut self.cached.as_mut().unwrap().1)
     }
+    /// Bytes of a transfer at the current position that can bypass the sector
+    /// cache: aligned, whole sectors within the volume, at most one batch.
+    fn whole_sectors(&self, length: usize) -> Option<usize> {
+        let available = self.length.saturating_sub(self.position).min(length as u64) as usize;
+        let count = available.min(MAX_BATCH_BYTES) / SECTOR * SECTOR;
+        (self.position.is_multiple_of(SECTOR as u64) && count > 0).then_some(count)
+    }
     /// Bytes available to the volume.
     pub fn len(&self) -> u64 {
         self.length
@@ -142,6 +167,14 @@ impl<D: SectorDevice> SectorDisk<D> {
 }
 impl<D: SectorDevice> Read for SectorDisk<D> {
     fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+        if let Some(count) = self.whole_sectors(bytes.len()) {
+            self.flush_sector()?;
+            self.cached = None;
+            let lba = self.first + (self.position / SECTOR as u64) as u32;
+            self.device.read_sectors(lba, &mut bytes[..count])?;
+            self.position += count as u64;
+            return Ok(count);
+        }
         let offset = (self.position % SECTOR as u64) as usize;
         let count = bytes
             .len()
@@ -158,6 +191,14 @@ impl<D: SectorDevice> Read for SectorDisk<D> {
 }
 impl<D: SectorDevice> Write for SectorDisk<D> {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        if let Some(count) = self.whole_sectors(bytes.len()) {
+            self.flush_sector()?;
+            self.cached = None;
+            let lba = self.first + (self.position / SECTOR as u64) as u32;
+            self.device.write_sectors(lba, &bytes[..count])?;
+            self.position += count as u64;
+            return Ok(count);
+        }
         let offset = (self.position % SECTOR as u64) as usize;
         let count = bytes
             .len()
@@ -195,6 +236,19 @@ impl<D: SectorDevice> Seek for SectorDisk<D> {
     }
 }
 
+impl<D: SectorDevice + Send> sd_image::BlockDevice for SectorDisk<D> {
+    fn block_size(&self) -> u32 {
+        SECTOR as u32
+    }
+    fn total_size(&self) -> u64 {
+        self.length
+    }
+    fn sync(&mut self) -> Result<(), sd_image::DeviceError> {
+        Write::flush(self)?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -202,9 +256,7 @@ mod tests {
 
     /// A formatted FAT volume of `sectors` sectors.
     fn volume(sectors: usize) -> Vec<u8> {
-        let mut bytes = Cursor::new(vec![0; sectors * SECTOR]);
-        fatfs::format_volume(&mut bytes, fatfs::FormatVolumeOptions::new()).unwrap();
-        bytes.into_inner()
+        sd_image::blank_volume_bytes((sectors * SECTOR) as u64, false).unwrap()
     }
     /// One MBR with a single FAT32 (LBA) partition at sector 2048.
     fn partitioned(volume: &[u8]) -> Vec<u8> {
@@ -217,27 +269,48 @@ mod tests {
         disk[first * SECTOR..].copy_from_slice(volume);
         disk
     }
+    #[test]
+    fn large_transfers_batch_whole_sectors_and_keep_partial_writes_coherent() {
+        let mut device = StreamSectors::new(Cursor::new(vec![0; 64 * SECTOR])).unwrap();
+        let mut boot = [0; SECTOR];
+        boot[11..13].copy_from_slice(&(SECTOR as u16).to_le_bytes());
+        device.write_sector(0, &boot).unwrap();
+        let mut disk = SectorDisk::open(device).unwrap();
+        let data: Vec<u8> = (0..40 * SECTOR).map(|i| (i % 251) as u8).collect();
+        // A dirty partial sector must reach the device before a batch overlaps it.
+        disk.seek(SeekFrom::Start(SECTOR as u64 + 3)).unwrap();
+        disk.write_all(&[9; 4]).unwrap();
+        disk.seek(SeekFrom::Start(SECTOR as u64)).unwrap();
+        disk.write_all(&data).unwrap();
+        disk.seek(SeekFrom::Start(SECTOR as u64)).unwrap();
+        let mut back = vec![0; data.len()];
+        disk.read_exact(&mut back).unwrap();
+        assert_eq!(back, data);
+        // Partial access after a batch sees what the batch wrote.
+        disk.seek(SeekFrom::Start(SECTOR as u64 + 5)).unwrap();
+        let mut byte = [0];
+        disk.read_exact(&mut byte).unwrap();
+        assert_eq!(byte[0], data[5]);
+    }
+
     fn round_trip(image: Vec<u8>) {
         let mut device = StreamSectors::new(Cursor::new(image)).unwrap();
         {
-            let mut disk = SectorDisk::open(&mut device).unwrap();
-            let fs = fatfs::FileSystem::new(&mut disk, fatfs::FsOptions::new()).unwrap();
-            let mut file = fs.root_dir().create_file("TRACK.WAV").unwrap();
+            let disk = SectorDisk::open(&mut device).unwrap();
+            let mut volume = sd_image::Volume::open(disk).unwrap();
             // Crosses several sectors and a cluster boundary.
-            file.write_all(&(0..3000u32).map(|i| i as u8).collect::<Vec<_>>())
+            volume
+                .write(
+                    "TRACK.WAV",
+                    &(0..3000u32).map(|i| i as u8).collect::<Vec<_>>(),
+                )
                 .unwrap();
-            file.flush().unwrap();
-            drop(file);
-            fs.unmount().unwrap();
-            disk.flush().unwrap();
+            volume.flush().unwrap();
         }
-        let mut disk = SectorDisk::open(&mut device).unwrap();
-        let fs = fatfs::FileSystem::new(&mut disk, fatfs::FsOptions::new()).unwrap();
-        let mut content = Vec::new();
-        fs.root_dir()
-            .open_file("TRACK.WAV")
+        let disk = SectorDisk::open(&mut device).unwrap();
+        let content = sd_image::Volume::open(disk)
             .unwrap()
-            .read_to_end(&mut content)
+            .read("TRACK.WAV")
             .unwrap();
         assert_eq!(content.len(), 3000);
         assert!(content.iter().enumerate().all(|(i, &b)| b == i as u8));
@@ -255,6 +328,10 @@ mod tests {
         fn flush(&mut self) -> io::Result<()> {
             (**self).flush()
         }
+    }
+    #[test]
+    fn exfat_files_round_trip_on_a_whole_disk_volume() {
+        round_trip(sd_image::blank_volume_bytes(16 * 1024 * 1024, true).unwrap());
     }
     #[test]
     fn fat_files_round_trip_on_a_whole_disk_volume() {

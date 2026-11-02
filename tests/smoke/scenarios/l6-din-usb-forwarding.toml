@@ -2,7 +2,7 @@ version = 1
 name = "l6-din-usb-forwarding"
 models = ["l6"]
 backends = ["headless"]
-fixture = "fresh"
+card = "empty"
 
 [[step]]
 action = "wait"

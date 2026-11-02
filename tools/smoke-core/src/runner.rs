@@ -30,7 +30,6 @@ struct Observation {
 struct SceneSaveState {
     scene: usize,
     target: u32,
-    before: [bool; 3],
     press_pattern: String,
     release_pattern: String,
     press_count: u64,
@@ -69,7 +68,6 @@ pub struct Runner {
     last_progress: Instant,
     panel_quiet: Option<([u32; 8], u32)>,
     ring_quiet: Option<([u32; 8], u32)>,
-    separate_clocks: bool,
     last_report_guest: u32,
     checkpoints: BTreeMap<String, Observation>,
     scene_save: Option<SceneSaveState>,
@@ -141,7 +139,6 @@ impl Runner {
             last_progress: Instant::now(),
             panel_quiet: None,
             ring_quiet: None,
-            separate_clocks: false,
             last_report_guest: 0,
             checkpoints: Default::default(),
             scene_save: None,
@@ -538,6 +535,11 @@ impl Runner {
                         event,
                     }));
                 }
+                Action::ExpectCardEntry { path } => {
+                    return Ok(Progress::Device(devices::Operation::ExpectCardEntry {
+                        path: path.clone(),
+                    }));
+                }
                 Action::L6maxTapHandler => {
                     return Ok(Progress::Device(devices::Operation::L6maxTapHandler));
                 }
@@ -703,7 +705,6 @@ impl Runner {
                         let state = SceneSaveState {
                             scene,
                             target,
-                            before: l6max_host::indicators::l6_scene_leds(obs.data.indicators),
                             press_count: obs.traces.get(&press_pattern).copied().unwrap_or(0),
                             release_count: obs.traces.get(&release_pattern).copied().unwrap_or(0),
                             press_pattern,
@@ -739,12 +740,12 @@ impl Runner {
                             if press_delta > 1 {
                                 return Err(format!("duplicate L6 scene {scene} press report"));
                             }
-                            let mut expected = state.before;
-                            expected[scene - 1] = true;
+                            // Only this scene's lamp: another just saved can still be
+                            // flashing, so the others are not a stable baseline.
                             if self.acknowledged(&obs)?
                                 && press_delta == 1
                                 && l6max_host::indicators::l6_scene_leds(obs.data.indicators)
-                                    == expected
+                                    [scene - 1]
                             {
                                 return self.dispatch(Command::Release { target }, obs);
                             }
@@ -918,22 +919,17 @@ impl Runner {
                         >= settle_ms;
                     reports_ready
                         && settled
-                        && checkpoint.as_ref().is_none_or(|name| {
-                            // Firmware accelerates encoders by report spacing, which
-                            // only repeats exactly when both MCUs share one clock.
-                            if self.separate_clocks {
-                                let moved = after[channel - 1].count_ones() as i64
-                                    - before[channel - 1].count_ones() as i64;
-                                return match self.last_command {
-                                    Some(Command::Encoder { steps, .. }) => {
-                                        moved.signum() == i64::from(steps.signum())
-                                    }
-                                    _ => moved == 0,
-                                };
+                        // Firmware accelerates encoders by report spacing, so
+                        // assert the direction of a turn and not its exact mask.
+                        && checkpoint.as_ref().is_none_or(|_| {
+                            let moved = after[channel - 1].count_ones() as i64
+                                - before[channel - 1].count_ones() as i64;
+                            match self.last_command {
+                                Some(Command::Encoder { steps, .. }) => {
+                                    moved.signum() == i64::from(steps.signum())
+                                }
+                                _ => moved == 0,
                             }
-                            self.checkpoints.get(name).is_some_and(|o| {
-                                rings(o.data.indicators)[channel - 1] == after[channel - 1]
-                            })
                         })
                         && mask.is_none_or(|v| after[channel - 1] == v)
                         && (!changed || before[channel - 1] != after[channel - 1])
@@ -993,9 +989,6 @@ impl Runner {
             return Err(format!("duplicate encoder reports: {delta}"));
         }
         Ok(delta == u64::from(steps.unsigned_abs()))
-    }
-    pub fn set_separate_clocks(&mut self, separate: bool) {
-        self.separate_clocks = separate;
     }
     pub(crate) fn trace_file(&mut self, path: PathBuf) {
         self.trace_path = path;
@@ -1150,10 +1143,8 @@ mod tests {
         }
     }
     fn test_runner(steps: &str) -> Runner {
-        let scenario = Scenario::parse(&format!(
-            "version=1\nname='unit'\nmodels=['l6']\nfixture='prepared'\n{steps}"
-        ))
-        .unwrap();
+        let scenario =
+            Scenario::parse(&format!("version=1\nname='unit'\nmodels=['l6']\n{steps}")).unwrap();
         let stamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -1173,7 +1164,7 @@ mod tests {
     #[test]
     fn direct_usb_midi_cable_is_configurable_and_range_checked() {
         let default = Scenario::parse(
-            "version=1\nname='midi'\nmodels=['l6max']\nfixture='prepared'\nbackends=['headless']\n[[step]]\naction='direct-usb-midi-round-trip'\n",
+            "version=1\nname='midi'\nmodels=['l6max']\nbackends=['headless']\n[[step]]\naction='direct-usb-midi-round-trip'\n",
         )
         .unwrap();
         assert!(matches!(
@@ -1185,7 +1176,7 @@ mod tests {
         ));
 
         let ignored_cable = Scenario::parse(
-            "version=1\nname='midi'\nmodels=['l6max']\nfixture='prepared'\nbackends=['headless']\n[[step]]\naction='direct-usb-midi-round-trip'\ncable=5\nexpect_ring_change=false\n",
+            "version=1\nname='midi'\nmodels=['l6max']\nbackends=['headless']\n[[step]]\naction='direct-usb-midi-round-trip'\ncable=5\nexpect_ring_change=false\n",
         )
         .unwrap();
         assert!(matches!(
@@ -1196,7 +1187,7 @@ mod tests {
             }
         ));
         assert!(Scenario::parse(
-            "version=1\nname='midi'\nmodels=['l6max']\nfixture='prepared'\nbackends=['headless']\n[[step]]\naction='direct-usb-midi-round-trip'\ncable=16\n",
+            "version=1\nname='midi'\nmodels=['l6max']\nbackends=['headless']\n[[step]]\naction='direct-usb-midi-round-trip'\ncable=16\n",
         )
         .is_err());
     }
@@ -1467,7 +1458,7 @@ mod tests {
     }
     #[test]
     fn parser_rejects_typos_and_unavailable_model_controls() {
-        let prefix = "version=1\nname='test'\nmodels=['l6']\nfixture='prepared'\n";
+        let prefix = "version=1\nname='test'\nmodels=['l6']\n";
         assert!(
             Scenario::parse(&format!(
                 "{prefix}[[step]]\naction='press'\ncontrol='recorder.down'\n"
@@ -1501,16 +1492,16 @@ mod tests {
     #[test]
     fn usb_sysex_scenario_requires_complete_messages_and_accepts_reply_prefixes() {
         let valid = Scenario::parse(
-            "version=1\nname='sysex'\nmodels=['l6max']\nbackends=['headless']\nfixture='prepared'\n[[step]]\naction='usb-descriptors'\n[[step]]\naction='usb-sysex'\nrequests=[{bytes=[240,126,127,6,1,247],expect_prefix=[240,126,127,6,2],reject_prefixes=[[240,82]]}]\n",
+            "version=1\nname='sysex'\nmodels=['l6max']\nbackends=['headless']\n[[step]]\naction='usb-descriptors'\n[[step]]\naction='usb-sysex'\nrequests=[{bytes=[240,126,127,6,1,247],expect_prefix=[240,126,127,6,2],reject_prefixes=[[240,82]]}]\n",
         )
         .unwrap();
         assert!(matches!(valid.step[1].action, Action::UsbSysex { .. }));
         let invalid = Scenario::parse(
-            "version=1\nname='sysex'\nmodels=['l6max']\nbackends=['headless']\nfixture='prepared'\n[[step]]\naction='usb-sysex'\nrequests=[{bytes=[240,1,2]}]\n",
+            "version=1\nname='sysex'\nmodels=['l6max']\nbackends=['headless']\n[[step]]\naction='usb-sysex'\nrequests=[{bytes=[240,1,2]}]\n",
         );
         assert!(invalid.unwrap_err().contains("complete F0..F7"));
         let invalid_reject = Scenario::parse(
-            "version=1\nname='sysex'\nmodels=['l6max']\nbackends=['headless']\nfixture='prepared'\n[[step]]\naction='usb-sysex'\nrequests=[{bytes=[240,1,247],reject_prefixes=[[]]}]\n",
+            "version=1\nname='sysex'\nmodels=['l6max']\nbackends=['headless']\n[[step]]\naction='usb-sysex'\nrequests=[{bytes=[240,1,247],reject_prefixes=[[]]}]\n",
         );
         assert!(
             invalid_reject
@@ -1518,7 +1509,7 @@ mod tests {
                 .contains("reject_prefixes must not contain empty prefixes")
         );
         let invalid_timeout = Scenario::parse(
-            "version=1\nname='sysex'\nmodels=['l6max']\nbackends=['headless']\nfixture='prepared'\n[[step]]\naction='usb-sysex'\nguest_timeout_ms=100\nrequests=[{bytes=[240,1,247],reply_timeout_ms=101}]\n",
+            "version=1\nname='sysex'\nmodels=['l6max']\nbackends=['headless']\n[[step]]\naction='usb-sysex'\nguest_timeout_ms=100\nrequests=[{bytes=[240,1,247],reply_timeout_ms=101}]\n",
         );
         assert!(
             invalid_timeout
@@ -1528,8 +1519,7 @@ mod tests {
     }
     #[test]
     fn editor_pad_assignment_requires_prior_usb_midi_enumeration() {
-        let prefix =
-            "version=1\nname='pads'\nmodels=['l6max']\nfixture='prepared'\nbackends=['headless']\n";
+        let prefix = "version=1\nname='pads'\nmodels=['l6max']\nbackends=['headless']\n";
         let without_usb = Scenario::parse(&format!(
             "{prefix}[[step]]\naction='editor-pad-assignments'\n"
         ));
@@ -1567,7 +1557,7 @@ mod tests {
     }
     #[test]
     fn sound_pad_playback_supports_editor_or_saved_assignment() {
-        let prefix = "version=1\nname='pad-playback'\nmodels=['l6']\nfixture='prepared'\nbackends=['headless']\n";
+        let prefix = "version=1\nname='pad-playback'\nmodels=['l6']\nbackends=['headless']\n";
         let action = "[[step]]\naction='usb-descriptors'\n[[step]]\naction='editor-pad-assignments'\n[[step]]\naction='sound-pad-playback'\npad=0\ntarget=49\n";
         assert!(Scenario::parse(&format!("{prefix}{action}")).is_ok());
         let l6max = prefix.replace("models=['l6']", "models=['l6max']");
@@ -1604,7 +1594,7 @@ mod tests {
 
     #[test]
     fn l6_recorder_playback_is_scoped_to_the_verified_play_gpio() {
-        let prefix = "version=1\nname='recorder-playback'\nmodels=['l6']\nfixture='prepared'\nbackends=['headless']\n";
+        let prefix = "version=1\nname='recorder-playback'\nmodels=['l6']\nbackends=['headless']\n";
         let scenario = format!("{prefix}[[step]]\naction='l6-recorder-playback'\ntarget=4\n");
         assert!(Scenario::parse(&scenario).is_ok());
         assert!(
@@ -1620,7 +1610,7 @@ mod tests {
     }
     #[test]
     fn l6max_recorder_playback_is_scoped_to_its_verified_firmware_and_gpio() {
-        let prefix = "version=1\nname='recorder-playback'\nmodels=['l6max']\nfixture='prepared'\nbackends=['headless']\nmain_sha256='980d92272c1f84bed200b4d2f83575202f6a00082c928d99b9e8b53af8d44461'\n";
+        let prefix = "version=1\nname='recorder-playback'\nmodels=['l6max']\nbackends=['headless']\nmain_sha256='980d92272c1f84bed200b4d2f83575202f6a00082c928d99b9e8b53af8d44461'\n";
         let scenario = format!("{prefix}[[step]]\naction='l6max-recorder-playback'\ntarget=4\n");
         assert!(Scenario::parse(&scenario).is_ok());
         assert!(Scenario::parse(&scenario.replace("target=4", "target=5")).is_err());
@@ -1635,14 +1625,14 @@ mod tests {
     }
     #[test]
     fn unsupported_schema_and_zero_timeouts_fail_before_boot() {
-        let text = "version=1\nname='test'\nmodels=['l6max']\nfixture='prepared'\n[[step]]\naction='wait'\nuntil='boot-ready'\n";
+        let text = "version=1\nname='test'\nmodels=['l6max']\n[[step]]\naction='wait'\nuntil='boot-ready'\n";
         assert!(Scenario::parse(text).is_ok());
         assert!(Scenario::parse(&text.replace("version=1", "version=2")).is_err());
         assert!(Scenario::parse(&format!("{text}wall_timeout_s=0\n")).is_err());
     }
     #[test]
     fn l6_main_gpio_event_scenario_rejects_wrong_model_and_mapping() {
-        let base = "version=1\nname='gpio'\nmodels=['l6']\nfixture='prepared'\nbackends=['headless']\n[[step]]\naction='l6-main-gpio-event'\ntarget=48\nevent=25\n";
+        let base = "version=1\nname='gpio'\nmodels=['l6']\nbackends=['headless']\n[[step]]\naction='l6-main-gpio-event'\ntarget=48\nevent=25\n";
         assert!(Scenario::parse(base).is_ok());
         assert!(Scenario::parse(&base.replace("models=['l6']", "models=['l6max']")).is_err());
         assert!(Scenario::parse(&base.replace("event=25", "event=26")).is_err());
@@ -1650,7 +1640,7 @@ mod tests {
     }
     #[test]
     fn l6_usb_startup_requires_first_step_l6_scope_and_exact_firmware_hash() {
-        let base = "version=1\nname='usb'\nmodels=['l6']\nfixture='fresh'\nbackends=['headless']\nmain_sha256='827c7c5cb2a43cc3a011d4556462b8cb9539242f817ebeed7727d66a36c03799'\n[[step]]\naction='l6-usb-startup'\n";
+        let base = "version=1\nname='usb'\nmodels=['l6']\nbackends=['headless']\nmain_sha256='827c7c5cb2a43cc3a011d4556462b8cb9539242f817ebeed7727d66a36c03799'\n[[step]]\naction='l6-usb-startup'\n";
         assert!(Scenario::parse(base).is_ok());
         assert!(
             Scenario::parse(&base.replace(
@@ -1668,7 +1658,7 @@ mod tests {
     }
     #[test]
     fn l6_din_sweep_requires_its_l6_110_main_hash() {
-        let base = "version=1\nname='din-sweep'\nmodels=['l6']\nfixture='prepared'\nbackends=['headless']\nmain_sha256='827c7c5cb2a43cc3a011d4556462b8cb9539242f817ebeed7727d66a36c03799'\n[[step]]\naction='l6-din-sweep'\n";
+        let base = "version=1\nname='din-sweep'\nmodels=['l6']\nbackends=['headless']\nmain_sha256='827c7c5cb2a43cc3a011d4556462b8cb9539242f817ebeed7727d66a36c03799'\n[[step]]\naction='l6-din-sweep'\n";
         assert!(Scenario::parse(base).is_ok());
         let without_hash = base.replace(
             "main_sha256='827c7c5cb2a43cc3a011d4556462b8cb9539242f817ebeed7727d66a36c03799'\n",
@@ -1724,7 +1714,7 @@ mod tests {
             "[[step]]\naction='delay'\nguest_ms=2\n",
         )
         .unwrap();
-        let prefix = "version=1\nname='include'\nmodels=['l6','l6max']\nfixture='prepared'\n[[step]]\nmodels=['l6max']\naction='include'\npath='fragment.toml'\n";
+        let prefix = "version=1\nname='include'\nmodels=['l6','l6max']\n[[step]]\nmodels=['l6max']\naction='include'\npath='fragment.toml'\n";
         fs::write(root.join("test.toml"), prefix).unwrap();
         let loaded = Scenario::load(&root.join("test.toml")).unwrap();
         assert_eq!(loaded.step[0].models, ["l6max"]);
@@ -1789,7 +1779,7 @@ mod tests {
         .unwrap();
         fs::write(
             root.join("test.toml"),
-            "version=1\nname='setup'\nmodels=['l6max']\nfixture='prepared'\n[[step]]\nsetup_input=true\naction='include'\npath='fragment.toml'\n[[step]]\naction='delay'\nguest_ms=4\n",
+            "version=1\nname='setup'\nmodels=['l6max']\n[[step]]\nsetup_input=true\naction='include'\npath='fragment.toml'\n[[step]]\naction='delay'\nguest_ms=4\n",
         )
         .unwrap();
         let loaded = Scenario::load(&root.join("test.toml")).unwrap();
@@ -1808,7 +1798,7 @@ mod tests {
     }
     #[test]
     fn unsupported_operations_and_switch_semantics_fail_before_boot() {
-        let prefix = "version=1\nname='invalid'\nmodels=['l6max']\nfixture='prepared'\n";
+        let prefix = "version=1\nname='invalid'\nmodels=['l6max']\n";
         for step in [
             "action='usb-descriptors'",
             "action='press'\ncontrol='ch5-pad-switch'",
@@ -1849,7 +1839,7 @@ mod tests {
     }
     #[test]
     fn wire_edges_wait_for_release_and_reject_duplicate_edges() {
-        let text = "version=1\nname='edges'\nmodels=['l6max']\nfixture='prepared'\n[[step]]\naction='press'\ncontrol='scene-a'\n[[step]]\naction='expect-button-report'\ncontrol='scene-a'\n";
+        let text = "version=1\nname='edges'\nmodels=['l6max']\n[[step]]\naction='press'\ncontrol='scene-a'\n[[step]]\naction='expect-button-report'\ncontrol='scene-a'\n";
         for duplicate in [false, true] {
             let mut runner = test_runner("[[step]]\naction='delay'\nguest_ms=1\n");
             runner.scenario = Scenario::parse(text).unwrap();

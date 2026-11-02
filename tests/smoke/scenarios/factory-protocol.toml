@@ -2,7 +2,6 @@ version = 1
 name = "factory-protocol"
 models = ["l6max"]
 backends = ["headless"]
-fixture = "factory-protocol"
 main_sha256 = "980d92272c1f84bed200b4d2f83575202f6a00082c928d99b9e8b53af8d44461"
 
 [[step]]

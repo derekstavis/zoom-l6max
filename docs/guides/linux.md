@@ -161,7 +161,7 @@ Verified on Ubuntu 26.04 x86_64:
   the sync check receives 0 replies.
 - `linux-package` builds the AppDir and an AppImage with pinned tools. Its checks
   show the bundled QEMU runs with only bundled and host libraries and lists
-  `l6max-dual`, in the AppDir and in the extracted AppImage.
+  `l6max-main`, in the AppDir and in the extracted AppImage.
 
 Not verified:
 

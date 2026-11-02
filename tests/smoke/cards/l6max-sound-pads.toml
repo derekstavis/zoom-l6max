@@ -1,0 +1,14 @@
+# Sound-pad audio for the waveform and playback cases. Higher levels make firmware
+# gain clip this sweep.
+version = 1
+model = "l6max"
+
+[[file]]
+path = "SOUND_PAD/PAD4/SWEEP.WAV"
+sweep = { low_hz = 100.0, high_hz = 8000.0, seconds = 6.0, amplitude = 0.7 }
+
+[[sound_pad]]
+pad = 4
+file = "SOUND_PAD/PAD4/SWEEP.WAV"
+mode = "one-shot"
+level = 30

@@ -1,7 +1,8 @@
 version = 1
 name = "l6max-input-smoke"
 models = ["l6max"]
-fixture = "prepared"
+state = "setup-complete"
+card = "empty"
 backends = ["headless"]
 
 [[step]]

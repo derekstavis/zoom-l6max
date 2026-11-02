@@ -1,0 +1,8 @@
+# A recording in the folder layout the L6 recorder scans at boot, longer than the
+# case samples it. l6-recorder-playback checks its 960000 frames.
+version = 1
+model = "l6"
+
+[[file]]
+path = "RECORDER/260101_000000/MASTER.WAV"
+tone = { hz = 440.0, seconds = 20.0, amplitude = 0.25 }

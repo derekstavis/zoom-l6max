@@ -36,7 +36,8 @@ impl BundleSmoke {
             .as_ref()
             .ok_or("SD folder fixture is required")?;
         let image = panel.new_sd_image();
-        l6max_host::demo_sd::from_directory(&image, folder).map_err(|e| e.to_string())?;
+        l6max_host::demo_sd::from_directory(&image, folder, panel.model)
+            .map_err(|e| e.to_string())?;
         // One restart to turn on SD command tracing for this diagnostic's own
         // verification below; the card itself is then hotplugged in without a
         // further restart, which is the behavior under test.

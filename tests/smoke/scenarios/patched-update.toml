@@ -2,7 +2,7 @@ version = 1
 name = "patched-update"
 models = ["l6", "l6max"]
 backends = ["headless"]
-fixture = "patched-update"
+update_patches = { l6 = ["midi-sync"], l6max = ["knob-dialog"] }
 
 [[step]]
 action = "firmware-update"

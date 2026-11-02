@@ -2,7 +2,6 @@
 mod input;
 mod midi;
 mod popup_trigger;
-mod uart_startup;
 use l6max_diagnostics::gdb::Gdb;
 use l6max_host::{engine::Options, headless::Headless, indicators::rings, panel::PanelData};
 use serde::Deserialize;
@@ -482,12 +481,9 @@ fn execute() -> Result<(), String> {
     if recipe == Path::new("popup-trigger") {
         return popup_trigger::run(args.collect()).map_err(|error| error.to_string());
     }
-    if recipe == Path::new("uart-startup") {
-        return uart_startup::run(args.collect()).map_err(|error| error.to_string());
-    }
     if recipe == Path::new("--help") || recipe == Path::new("-h") {
         println!(
-            "Usage: l6dbg RECIPE.toml --logs NEW_DIR (--volatile | --state-dir DIR) [engine options]\n       l6dbg input|midi|popup-trigger|uart-startup [engine options]"
+            "Usage: l6dbg RECIPE.toml --logs NEW_DIR (--volatile | --state-dir DIR) [engine options]\n       l6dbg input|midi|popup-trigger [engine options]"
         );
         return Ok(());
     }

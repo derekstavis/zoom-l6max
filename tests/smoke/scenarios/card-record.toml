@@ -1,0 +1,29 @@
+version = 1
+name = "card-record"
+models = ["l6", "l6max"]
+backends = ["headless"]
+state = "setup-complete"
+card = "empty"
+
+# A generated card must be one the firmware accepts for recording: it rejects
+# others only at this point, after booting and playing pads normally.
+[[step]]
+action = "wait"
+until = "mixer-ready"
+guest_timeout_ms = 60000
+wall_timeout_s = 300
+
+[[step]]
+action = "delay"
+guest_ms = 8000
+guest_timeout_ms = 20000
+wall_timeout_s = 300
+
+[[step]]
+action = "press"
+control = "rec-record"
+
+[[step]]
+action = "expect-card-entry"
+path = "RECORDER"
+wall_timeout_s = 60

@@ -41,8 +41,8 @@ Guest writes persist in that copy and never sync back into the original folder.
 Choose the folder again to import newer host contents into another card copy.
 Previously imported cards are retained in Application Support.
 
-- Capacity is chosen automatically from 128 to 512 MiB, with 16 KiB clusters.
-- Nested directories and long Unicode filenames are preserved within FAT limits.
+- Cards are 4 GiB FAT32, and use only the disk space their files need.
+- Nested directories and long Unicode filenames are preserved within FAT name limits.
 - Symbolic links, special files, invalid FAT names, and case-insensitive filename
   collisions are rejected before changing the running guest.
 - Audio playback remains unmodeled; the card still exercises firmware browsing,
@@ -87,7 +87,7 @@ Use `--debug` for a faster local build, or `--output DIR` for another destinatio
 Existing app/ZIP outputs are rejected; use a new output directory for another build.
 The bundle targets the build machine's architecture, not a universal GUI binary.
 
-The packager verifies that QEMU contains `l6max-dual`, copies native dependencies
+The packager verifies that QEMU contains `l6max-main`, copies native dependencies
 recursively, rewrites their loader paths, includes the original app icon and
 license notices, and applies/verifies an ad-hoc signature before creating the ZIP.
 It never copies firmware or device state. Native and Rust dependency inventories

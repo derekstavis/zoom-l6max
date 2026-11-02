@@ -1,5 +1,5 @@
 # L6max state after first-boot setup, built without pressing buttons.
-# Equivalent to scenarios/state-l6max-setup.toml: the date editor result is
+# Equivalent to completing first-boot setup: the date entered is
 # written to the panel RTC, and the settings bank is the firmware default with
 # setup completed (the default Battery Type is kept). The panel is
 # pre-programmed so the first boot skips panel ROM programming.

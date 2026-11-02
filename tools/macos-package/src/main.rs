@@ -174,8 +174,8 @@ fn run() -> Result<(), String> {
         qemu.to_str().ok_or("Non-UTF8 QEMU path")?,
         &["-machine".as_ref(), "help".as_ref()],
     )?;
-    if !machines.lines().any(|line| line.starts_with("l6max-dual")) {
-        return Err("QEMU binary is missing l6max-dual; build the custom board first".into());
+    if !machines.lines().any(|line| line.starts_with("l6max-main")) {
+        return Err("QEMU binary is missing l6max-main; build the custom board first".into());
     }
     let mut build = Command::new("cargo");
     build

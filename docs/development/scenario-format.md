@@ -10,7 +10,6 @@ belong in Rust model mappings, not scenario files.
 version = 1
 name = "mute"
 models = ["l6", "l6max"]
-fixture = "prepared"
 
 [[step]]
 action = "wait"
@@ -30,8 +29,7 @@ guest_timeout_ms = 3000
 
 The example abbreviates prepared setup (SD navigation, mixer restoration and
 LEVEL selection); see the checked-in
-`tests/smoke/scenarios/mute.toml` for the prepared fixture sequence. Fixture
-names are contracts, not automatic setup commands.
+`tests/smoke/scenarios/mute.toml` for the prepared sequence.
 
 ## Scenario header and common step fields
 
@@ -43,7 +41,12 @@ tables. Unknown header fields fail parsing.
 | `version` | yes | Schema version; currently `1`. |
 | `name` | yes | Nonempty scenario name used in reports. |
 | `models` | yes | One or both of `"l6"` and `"l6max"`. |
-| `fixture` | yes | Named local fixture the scenario expects. |
+| `state` | no | Boot from `tests/smoke/states/<model>-<state>.toml`; first boot without it. |
+| `card` | no | Card to build for each run, from `tests/smoke/cards/<model>-<card>.toml`; no card without it. |
+| `patches` | no | Firmware patches applied to the model's package. |
+| `update_patches` | no | Patches per model for the case's update package, built from the model's package. |
+| `gdb` | no | Enable the debugger socket. |
+| `audio_device` | no | QEMU audio-device syntax; `{logs}` expands to the case's log directory. |
 | `main_sha256` | no | Exact 64-character hexadecimal MAIN firmware hash for revision-specific operations. |
 | `main_sha256_any` | no | Additional explicitly allowed MAIN hashes for the same guarded operations. |
 | `backends` | no | `"headless"` and/or `"gui"`; defaults to both. Typed device/GDB operations require headless. |
@@ -56,12 +59,10 @@ Every `[[step]]` has a required `action` and may also set:
 | `models` | all scenario models | Restrict this step to a subset of the scenario models. |
 | `guest_timeout_ms` | `10000` | Guest-clock deadline for the step. Must be positive. |
 | `wall_timeout_s` | `180` | Host wall-clock deadline for the step. Must be positive. |
-| `setup_input` | `false` | The step is UI input that only brings the device to the scenario's starting state, such as confirming startup prompts. The driver drops it when the case state was built from a fixture `state_spec`. On an `include`, it applies to every included step. |
+| `setup_input` | `false` | The step is UI input that only brings the device to the scenario's starting state, such as confirming startup prompts. The driver drops it when the case state was built from a state spec. On an `include`, it applies to every included step. |
 
 Each action table adds its action-specific fields below. For composed scenarios,
 `include` takes a path to a TOML fragment containing only `[[step]]` tables.
-`state_recipe` in a fixture points to a normal scenario document; it does not
-introduce a second recipe syntax.
 
 Mark only input whose result a state spec reproduces with `setup_input`. Input
 that is the behavior under test, or that sets runtime-only state (for example
@@ -138,16 +139,16 @@ Scenarios default to `backends = ["headless", "gui"]`. Typed device steps requir
 | `editor-pad-assignments` | — | Initialize the Editor session, enumerate WAV files, assign the first file on all four pads and verify assignment state through SysEx readback; requires a preceding `usb-descriptors` step |
 | `editor-pad-playback` | `pad` | L6-only assigned-pad playback check; requires preceding `editor-pad-assignments` |
 | `l6max-ui-pad-assignment` | `pad` | L6max UI assignment check; requires preceding `usb-descriptors` and an L6max-scoped scenario |
-| `sound-pad-playback` | `pad`, `target`, optional `assignment` (`editor` by default or `saved-state`), optional `require_pad_led_change` (default `true`), optional `require_stereo_meter` (default `false`), optional `playback_window_ms` (default `6000`, range `1000..120000`), optional `expect_source` (WAV path on the card; requires `L6_AUDIO_RAW_CAPTURE`) and `max_residual_db` (default `-60`) | Press one L6 or L6max MAIN pad input and require nonzero SAI1 TX samples; require its model-specific pad LED response unless `require_pad_led_change = false`; `editor` requires a preceding Editor assignment step, while `saved-state` uses the assignment already present in the fixture; capture indicator PWM levels throughout playback; when `require_stereo_meter = true`, require two distinct levels of at least two bars on each side independently using a stereo isolation WAV; enable `L6_AUDIO_SAMPLE_TRACE=1` in the case environment |
+| `sound-pad-playback` | `pad`, `target`, optional `assignment` (`editor` by default or `saved-state`), optional `require_pad_led_change` (default `true`), optional `require_stereo_meter` (default `false`), optional `playback_window_ms` (default `6000`, range `1000..120000`), optional `expect_source` (WAV path on the card; requires `L6_AUDIO_RAW_CAPTURE`) and `max_residual_db` (default `-60`) | Press one L6 or L6max MAIN pad input and require nonzero SAI1 TX samples; require its model-specific pad LED response unless `require_pad_led_change = false`; `editor` requires a preceding Editor assignment step, while `saved-state` uses the assignment already present in the state; capture indicator PWM levels throughout playback; when `require_stereo_meter = true`, require two distinct levels of at least two bars on each side independently using a stereo isolation WAV; enable `L6_AUDIO_SAMPLE_TRACE=1` in the case environment |
 | `wasm-patch` | — | Exercise a generated WebAssembly patch package through the firmware update path |
-| `l6-recorder-playback` | `target` | L6 only; GDB verifies event `0x20`, handler acceptance, and the mode-0 callback on MAIN target 4; after five guest seconds it requires a changed SAI1 TX signature and sample data in the channel-14 TCD source. Requires a mode-0 state, valid `MASTER.WAV`, GDB fixture support, and `L6_AUDIO_SAMPLE_TRACE=1` |
-| `l6max-recorder-playback` | `target` | L6max only, MAIN target 4; GDB verifies Play event `0x2c`, event dispatch, callback slot 2, and the recorder action, then requires nonzero changed SAI1 TX windows and sample data in channel-14's TCD source. Requires a prepared playable recording, GDB fixture support, and `L6_AUDIO_SAMPLE_TRACE=1` |
+| `l6-recorder-playback` | `target` | L6 only; GDB verifies event `0x20`, handler acceptance, and the mode-0 callback on MAIN target 4; after five guest seconds it requires a changed SAI1 TX signature and sample data in the channel-14 TCD source. Requires a mode-0 state, valid `MASTER.WAV`, GDB support, and `L6_AUDIO_SAMPLE_TRACE=1` |
+| `l6max-recorder-playback` | `target` | L6max only, MAIN target 4; GDB verifies Play event `0x2c`, event dispatch, callback slot 2, and the recorder action, then requires nonzero changed SAI1 TX windows and sample data in channel-14's TCD source. Requires a prepared playable recording, GDB support, and `L6_AUDIO_SAMPLE_TRACE=1` |
 | `l6max-din-mixer-control` | `expect_din_ring_change` | After editor SysEx setup, verify USB mixer control, stock/patched DIN response, and DIN mute-echo suppression |
 | `usb-storage` | — | Enumerate storage, compare sector zero to the copied card, round-trip its last sector, then create/read/compare/delete a 1,537-byte FAT file through the USB disk |
 | `audio-callbacks` | — | First step only; arm revision-guarded breakpoints before boot and require every model callback |
 | `knob-dialog` | — | Patched L6max only; verify all ten popup modes, firmware-formatted values, heap lifetime, busy-aware expiry, display cleanup, widget restoration and exact encoder reports; frequency text allows one display unit of firmware rounding |
 | `popup-concurrency` | — | Patched L6max only; exercise recorder polling, stock notification priority, expiry-boundary input, queue overflow, busy pause/resume, allocation failure and held-lock contention through GDB |
-| `firmware-update` | — | L6 and L6max disposable-state update lifecycle, corrupt-checksum rejection, NOR segment install, L6max panel programming, protected-region preservation and clean restart; a fixture `update_package` additionally checks model-specific post-install behavior |
+| `firmware-update` | — | L6 and L6max disposable-state update lifecycle, corrupt-checksum rejection, NOR segment install, L6max panel programming, protected-region preservation and clean restart; an `update_patches` package additionally checks model-specific post-install behavior |
 | `power-press` | `hold_ms`, `powered` | Check expected power result, model cutoff timing and stopped clock |
 | `restart` | — | Retire the session before reopening its isolated persistent state; reset readiness, trace counters and action baselines |
 | `expect-recorder` | — | L6max startup mode restored after restart |
@@ -156,6 +157,7 @@ Scenarios default to `backends = ["headless", "gui"]`. Typed device steps requir
 | `l6max-channel-signal-pwm` | — | Seed the twelve firmware channel-level accumulators and verify five distinct increasing sampled PWM levels on all eight green SIGNAL lamps; requires L6max MAIN 1.10 and GDB. This qualifies the firmware-to-panel brightness path, not audio-input routing. |
 | `l6-level-meter-pwm` | — | Seed ten L6 1.10 level accumulators at the measured brightness thresholds and sample the raw panel matrix; require at least one output cell with five distinct nonzero duty means. Uses GDB and no SD, USB, MIDI, or host audio. |
 | `l6-main-gpio-event` | `target`, `event` | Hash-guarded L6 GDB check that Tap target 48 submits event `0x19` and Sound Pad targets 49–52 submit `0x15`–`0x18` |
+| `expect-card-entry` | `path` | Wait until the firmware has created `path` on the SD card, within `wall_timeout_s` |
 | `l6max-tap-handler` | none | Hash-guarded L6max GDB check that Tap target 48 reaches the firmware's TAP press handler. |
 | `l6-din-event-dispatch` | `group`, `cc`, `value` | Hash-guarded L6 check of DIN CC-to-event dispatch |
 | `l6-usb-startup` | — | First step only; exact-hash L6 probe replays the startup USB-enable sequence, verifies three firmware entry points and controller writes |
@@ -186,14 +188,11 @@ firmware-memory addressing in TOML.
 
 A catalog case has either a scenario path or a supervised GUI executable. A
 local `[legacy."case-id"]` entry may declare an external `executable` and its
-required `executable_sha256`, plus `arguments`, `environment`, and a named
-fixture. This lets the driver attest and supervise a packaged GUI binary while
-keeping native menu and picker interactions in the GUI adapter. A local entry
-can select another named fixture (for example, a generated patched-image
-directory) without changing the stock fixture used by other cases. The default
-fixture is `prepared`; persistence uses `fresh`. Configuration-required cases
-stay BLOCKED until their matching configuration section is present. Read the
-case prerequisites before enabling them.
+required `executable_sha256`, plus `arguments` and `environment`. This lets the driver
+attest and supervise a packaged GUI binary while keeping native menu and picker
+interactions in the GUI adapter. These cases boot from the `setup-complete` state and
+an `empty` card. Configuration-required cases stay BLOCKED until their matching
+configuration section is present. Read the case prerequisites before enabling them.
 
 Legacy arguments support `{firmware_dir}`, `{logs}`, `{qemu}` and `{package}`
 substitutions. Remaining braces are an error. Paths in these arguments must be
@@ -214,5 +213,5 @@ use 3000 ms for delayed L6 feedback; the guest/wall step limits still apply. The
 L6 and eight on L6max; extra generic decoder slots alias button lamps on L6.
 Mapping scenarios use `changed = true` because presets and firmware processing
 can change the numerical value associated with detents. Use `mask` when an exact
-value is established by the fixture/firmware contract. Reverse movement in the
+value is established by the state and firmware. Reverse movement in the
 quick scenario must restore channel 2's known initial mask `0x001`.

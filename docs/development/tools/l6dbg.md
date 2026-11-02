@@ -14,7 +14,7 @@ cargo run --offline --locked -p l6dbg -- tools/l6dbg/example.toml \
 
 Use `--volatile` or a disposable `--state-dir`. The guest can modify persistent
 state. `--logs` must name a new directory so previous evidence is preserved.
-Additional host engine options, such as `--sd-image`, `--timing`, and
+Additional host engine options, such as `--sd-image` and
 `--trace-sd`, can follow the recipe path. Use `--help` for command usage.
 
 ## TOML recipe schema
@@ -58,7 +58,6 @@ The same binary retains low-level probes that do not use recipe reporting:
 cargo run --offline --locked -p l6dbg -- input --volatile --qemu /path/to/qemu-system-arm
 cargo run --offline --locked -p l6dbg -- midi --volatile --qemu /path/to/qemu-system-arm
 cargo run --offline --locked -p l6dbg -- popup-trigger --volatile --qemu /path/to/qemu-system-arm --firmware-dir /path/to/patched-l6max
-cargo run --offline --locked -p l6dbg -- uart-startup --volatile --qemu /path/to/qemu-system-arm --firmware-dir /path/to/l6
 ```
 
 `input` selects recorder, sound-pad, GPIO, and audio probes through its
@@ -83,13 +82,7 @@ The `input` probe accepts these environment variables:
 | `L6_SCREEN_SETTLE_MS`, `L6_BOOT_SETTLE_MS` | Adjust screen-capture and startup wait times. |
 
 For a repeatable playback assertion without Editor or USB setup, use the
-sound-pad scenario and `fixture.sound_pad` in [l6test](l6test.md).
+sound-pad scenario and a card spec's `[[sound_pad]]` in [l6test](l6test.md).
 
 `popup-trigger` collects a focused L6max popup/callback observation and writes
-`popup-trigger.json`. `uart-startup` traces L6 startup, panel/DIN input and
-selected audio paths; options include `--startup-only`, `--exercise-inputs`,
-`--force-panel-parser` (requires `--exercise-inputs`), `--connect-midi`,
-`--trace-audio-path`, `--stop-after-handshake`, `--stop-after-mixer-lock`,
-`--stop-after-mixer-callback-dispatch`, `--step-audio-profile-write`, and
-`--release-audio-profile-lock`. Both accept host engine options. The UART probe
-requires L6 firmware and writes `uart-startup.json` with the selected log path.
+`popup-trigger.json`. It accepts host engine options.

@@ -1,0 +1,22 @@
+# One channel at a time at rising levels, held long enough for the 33 ms meter scan.
+version = 1
+model = "l6"
+
+[[file]]
+path = "SOUND_PAD/PAD1/TONE220.WAV"
+levels = { hz = 220.0, steps = [
+  { seconds = 0.9, left = 0.0, right = 0.0 },
+  { seconds = 0.3, left = 0.01, right = 0.0 },
+  { seconds = 0.3, left = 0.03, right = 0.0 },
+  { seconds = 0.3, left = 0.1, right = 0.0 },
+  { seconds = 0.9, left = 0.0, right = 0.0 },
+  { seconds = 0.3, left = 0.0, right = 0.01 },
+  { seconds = 0.3, left = 0.0, right = 0.03 },
+  { seconds = 0.3, left = 0.0, right = 0.1 },
+] }
+
+[[sound_pad]]
+pad = 1
+file = "SOUND_PAD/PAD1/TONE220.WAV"
+mode = "one-shot"
+level = 49
