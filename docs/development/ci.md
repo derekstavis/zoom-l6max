@@ -24,8 +24,20 @@ local checks driven by [the consolidated smoke workflow](testing.md).
 QEMU is initialized as a non-recursive submodule. Its unrelated ROM submodules
 are not needed for this board. The builder stages a copy before applying model
 sources; the submodule stays at its pinned commit. QEMU's configure step fetches
-its own pinned build dependencies. Cargo dependencies are cached; builds are
-locked to `Cargo.lock`.
+its own pinned build dependencies. Builds are locked to `Cargo.lock`.
+
+Each job caches Cargo sources and compiled dependencies under a key from
+`Cargo.lock`, `Cargo.toml` and `rust-toolchain.toml`. Only `main` saves. When it
+has no cache for those files it builds from an empty `target/`, then saves without
+the workspace's own crates, so the cache holds one build's output and doesn't grow.
+A pull request restores the exact cache or the newest for its platform and never
+saves. Release builds neither restore nor save.
+
+Warnings are errors, through `[workspace.lints.rust]` in `Cargo.toml`, in every
+build of a workspace crate. A new crate needs `[lints] workspace = true`. The
+all-target check is what compiles binaries outside their test harness, so it also
+catches warnings that only a normal build reports. For a local build that must
+ignore them, set `RUSTFLAGS=--cap-lints=warn`.
 
 ## Linux job
 
