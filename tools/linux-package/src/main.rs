@@ -29,6 +29,7 @@ const HOST_LIBRARIES: &[&str] = &[
     "libstdc++.so.6",
     "libz.so.1",
     "libasound.so.2",
+    "libpulse.so.0",
     "libfontconfig.so.1",
     "libfreetype.so.6",
     "libexpat.so.1",

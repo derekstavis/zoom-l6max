@@ -119,6 +119,18 @@ rate after the emulator exits. Output is held until 200 ms is queued, which adds
 that latency. The `*-sound-pad-coreaudio` cases record the device callback through
 `L6_AUDIO_COREAUDIO_CAPTURE`; compare that capture with the source WAV.
 
+On Linux the GUI requests the PulseAudio backend at 48 kHz Float32, including
+on systems using PipeWire's PulseAudio compatibility service. The selected
+sink and its configuration are controlled by the host audio server. This
+connection has not yet been qualified for waveform fidelity or underruns.
+
+With `L6_AUDIO_TRACE` or `L6_AUDIO_SAMPLE_TRACE` enabled, the periodic DMA
+and sample summaries include `window=...ms` and `at=...ms` in virtual time.
+Counts apply to the reported window, which can exceed one second if service
+is delayed. Earlier builds counted service callbacks as milliseconds; their
+summary windows varied with the audio service interval and must not be
+assumed to cover one second.
+
 The demo SD card includes generated tones and a stereo float snare sample.
 Its source and terms are recorded in [NOTICE.md](../../NOTICE.md). The card
 contains a copy of the locally supplied firmware and is generated locally.

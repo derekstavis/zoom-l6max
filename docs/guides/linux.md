@@ -14,7 +14,7 @@ Ubuntu; the build was exercised on Ubuntu 26.04 x86_64.
 
 | Purpose | Debian/Ubuntu packages |
 | --- | --- |
-| QEMU build | `build-essential pkg-config ninja-build python3 libglib2.0-dev libpixman-1-dev libfdt-dev` |
+| QEMU build and PulseAudio output | `build-essential pkg-config ninja-build python3 libglib2.0-dev libpixman-1-dev libfdt-dev libpulse-dev` |
 | ALSA MIDI bridge (needed to compile `l6max-host`) | `libasound2-dev` |
 | Native UI build (GPUI Wayland backend: fonts, keyboard) | `libfontconfig-dev libxkbcommon-dev` |
 | Native UI at run time (GPUI loads these dynamically) | `libwayland-client0 libxkbcommon0 libfontconfig1 libvulkan1`, plus a Vulkan driver such as `mesa-vulkan-drivers` |
@@ -22,7 +22,7 @@ Ubuntu; the build was exercised on Ubuntu 26.04 x86_64.
 
 ```sh
 sudo apt install build-essential pkg-config ninja-build python3 \
-  libglib2.0-dev libpixman-1-dev libfdt-dev libasound2-dev \
+  libglib2.0-dev libpixman-1-dev libfdt-dev libasound2-dev libpulse-dev \
   libfontconfig-dev libxkbcommon-dev alsa-utils
 ```
 
@@ -58,6 +58,12 @@ so `--qemu` may be omitted after `qemu-build`.
 
 `cargo run -p l6max-gui -- emulator/qemu/build-source/build/qemu-system-arm`
 starts the native UI. It compiles on Linux, but see the limits below.
+The GUI uses QEMU's PulseAudio backend for output by default; PipeWire's
+PulseAudio compatibility service is also supported. Set `L6_AUDIODEV` or pass
+`--audio-device` to choose another backend, including `driver=none,id=l6-audio`
+for silence. Headless runs do not select an audio backend automatically. QEMU
+must have been built with PulseAudio support; rebuild it after installing
+`libpulse-dev` if an older build lacks the `pa` driver.
 
 ## Patch builder
 
@@ -128,7 +134,7 @@ Without `--appimagetool` it only assembles `emulator/dist/L6max-Emulator.AppDir`
 The AppImage bundles the GUI, the custom QEMU and the few libraries a typical
 system may lack (GLib, PCRE2, libfdt, libatomic on Ubuntu). It leaves the C
 library, graphics (Vulkan, GL, DRM), display-server and ALSA libraries to the
-host, so it needs a Wayland desktop session (the X11 backend is not enabled), a Vulkan driver, and a C library
+host, so it needs a Wayland desktop session (the X11 backend is not enabled), a Vulkan driver, PulseAudio client libraries, and a C library
 at least as new as the build image's. Firmware is never bundled; select your
 package at first launch. User data lives in `$XDG_DATA_HOME/l6max-emulator`
 (default `~/.local/share/l6max-emulator`). Every bundled library is traced to a
@@ -146,7 +152,7 @@ with `WLR_BACKENDS=headless` works for automated checks. The build needs
 
 ## Verified and not verified
 
-Verified on Ubuntu 26.04 x86_64:
+Verified on Ubuntu 26.04 x86_64 unless otherwise noted:
 
 - QEMU 11.1.2 builds from the pinned submodule with the custom board.
 - `l6fw`, `l6patch`, `l6max-host` and the GUI crate build; the host test
@@ -155,6 +161,9 @@ Verified on Ubuntu 26.04 x86_64:
   from Linux (`cargo check`; not linked or run).
 - The headless host boots the stock firmware; the `knob-dialog` smoke case passes on a
   patched image.
+- On CachyOS x86_64, the GUI connected a 48 kHz stereo stream to PipeWire's
+  PulseAudio service. This checked the connection, not audible playback, waveform
+  fidelity or underruns.
 - The `l6test` driver through live ALSA ports passes on a knob+midi-sync image: knob CC,
   host CC to the LED ring, 80 replies to CC 127, and the ports disappear on
   shutdown. The same check passes in direct USB mode, and on the stock image
