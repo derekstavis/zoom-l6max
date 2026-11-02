@@ -134,7 +134,7 @@ struct Args {
     jobs: usize,
 }
 /// Each guest runs one single-threaded TCG engine plus its scenario process.
-/// Leave headroom so concurrent guests keep their paced clocks.
+/// Leave headroom so concurrent guests keep up with real time.
 fn default_jobs() -> usize {
     thread::available_parallelism().map_or(1, |cores| (cores.get() / 4).clamp(1, 4))
 }

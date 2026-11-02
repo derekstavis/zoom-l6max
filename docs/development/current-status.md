@@ -34,14 +34,14 @@ analog audio behavior, and physical jack routing remain unverified.
 - L6max sound-pad key-bit assertions and DIN/Editor scenarios need live
   qualification. Physical control wiring is not established by emulator tests.
 
-## Fixtures and execution
+## Test setup and execution
 
 The [scenario catalog](../../tests/smoke/catalog.toml) specifies each case's
-models, backends, and prerequisites. Each scenario declares its state, card, patches, and timing, and the local
+models, backends, and prerequisites. Each scenario declares its state, card, and patches, and the local
 configuration supplies the firmware packages. A state spec creates disposable settings
 and panel state without running setup interactions, and a card spec builds the case's
 SD card with its pad assignments. Scenario steps marked `setup_input` are skipped when
 a state spec supplies that setup. See the
-[testing workflow](testing.md) for fixtures, permissions, suites, and reports.
+[testing workflow](testing.md) for configuration, permissions, suites, and reports.
 The driver records the binary hash; an externally supplied binary's build
 source is not attested by that hash.

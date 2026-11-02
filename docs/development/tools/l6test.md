@@ -1,7 +1,7 @@
 # `l6test`
 
 `l6test` is the suite driver for repeatable emulator scenarios. It validates
-fixture configuration, prepares isolated guest state, supervises the requested
+local configuration, prepares isolated guest state, supervises the requested
 headless or GUI cases, and writes a structured report with case artifacts.
 Use [diagnostic tools](l6dbg.md) for observation without pass/fail assertions.
 
@@ -77,7 +77,7 @@ scaled with nearest-neighbor pixels, and does not require ffmpeg.
 `capture gui` boots an isolated L6max guest, samples its live panel indicators
 and LCD, then renders the full emulator panel with GPUI's offscreen renderer.
 It works without a window server and retains the sampled panel data next to the
-PNG for inspection. Use a state directory built from a `state_spec` when a
+PNG for inspection. Use a state directory built from a state spec when a
 specific mixer value or indicator state is needed:
 
 ```sh
@@ -97,16 +97,16 @@ There are three related TOML inputs:
 
 1. `smoke.local.toml` supplies the firmware packages, and optionally an external QEMU,
    supervised legacy executables, and expected failures. See
-   [fixture and catalog configuration](../testing.md#fixture-and-catalog-toml).
+   [local configuration and catalog](../testing.md#local-configuration-and-catalog-toml).
 2. `tests/smoke/catalog.toml` registers each case, model/suite membership,
    scenario or GUI package, prerequisites, and timeout.
 3. Each `tests/smoke/scenarios/*.toml` file describes an ordered scenario.
    The complete list of header, per-step, and
    action blocks is in the [scenario format reference](../scenario-format.md).
-   Fixture `state_spec` instead declares the starting device directly; see
+   Its `state` header declares the starting device directly; see
    [`l6nor` state specs](l6nor.md#state-specs).
 
-Fixture and catalog configuration, scenario headers, and action-specific
+Local configuration, catalog entries, scenario headers, and action-specific
 fields are strict. Paths in local configuration are resolved relative to the
 TOML file. Scenario includes are confined to their scenario directory.
 

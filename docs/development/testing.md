@@ -41,11 +41,11 @@ tests. Use an empty card for cases that compare the home screen across reinserti
 card holding a recorder project shows a new project named from the guest clock.
 
 The driver bypasses GUI demo-media and installer defaults. Headless and GUI runs receive
-the same explicit firmware, timing, card, state and audio backend. Inputs are never
+the same explicit firmware, card, state and audio backend. Inputs are never
 modified. The factory-protocol scenario creates its own disposable jig card and state
 under the case artifact directory, and their hashes are recorded in `inputs.json`.
 
-## Fixture and catalog TOML
+## Local configuration and catalog TOML
 
 `smoke.local.toml` is private machine configuration; the example is
 [`tests/smoke/fixtures.example.toml`](../../tests/smoke/fixtures.example.toml).
@@ -103,7 +103,7 @@ Its top-level `version` is `1`; every `[[case]]` has:
 | `arguments`, `environment` | optional | Arguments and environment for a package or legacy executable. |
 | `needs_configuration` | optional, default `false` | Keep the case BLOCKED until its local executable/configuration prerequisite is supplied. |
 | `gui` | optional, default `false` | Mark a GUI-only catalog case. |
-| `volatile` | optional, default `false` | Discard persistent-state templates for this case and run without persistent state, unless the fixture has a `state_spec`, which is rebuilt for the case; incompatible with `state_recipe`. |
+| `volatile` | optional, default `false` | Discard persistent-state templates for this case and run without persistent state, unless the scenario declares a `state`, which is rebuilt for the case. |
 | `no_sd` | optional, default `false` | Do not attach the scenario's SD card. |
 | `blocked` | optional | Human-readable reason to report this case as BLOCKED. |
 | `wall_timeout_s` | optional, default `900` | Per-case host wall limit. |
@@ -144,7 +144,7 @@ sequentially.
 
 Add `--model l6` or `--model l6max` to focus a run. `--backend both` runs
 identical shared scenarios through headless and GPUI adapters on separate
-copies of the same fixture. Legacy cases execute their declared backend only;
+copies of the same state and card. Legacy cases execute their declared backend only;
 a low-level diagnostic pass does not qualify GUI parity.
 
 `--no-build` explicitly reuses installed debug executables. Their hashes are
@@ -196,7 +196,7 @@ incrementally. Exit 0 means PASS or explicitly matched XFAIL, 1 means FAIL or
 XPASS, and 2 means BLOCKED. Read the outcome rather than inferring a clean pass
 from exit 0. Keep a baseline with XFAIL labeled as incomplete.
 
-Expected failures are optional fixture-config entries matching an exact
+Expected failures are optional local configuration entries matching an exact
 case/model/step and error substring, with a reason. A different failure remains
 FAIL; an unexpected pass becomes XPASS and requires review. No current device
 failure is hidden by a checked-in expected-failure rule.
@@ -217,7 +217,7 @@ than copying setup or asserting results separately.
 Packaged application tests use the same supervisor and report format. Configure
 `[legacy."gui-bundle"]` and `[legacy."gui-menu"]` in `smoke.local.toml` with the
 packaged GUI executable and its SHA-256, each test's isolated `L6_APP_DATA`, and
-the bundled QEMU SHA-256. The example fixture file contains the environment
+the bundled QEMU SHA-256. `tests/smoke/fixtures.example.toml` contains the environment
 variables and firmware paths for both cases. Run them on macOS with:
 
 ```sh
@@ -287,7 +287,7 @@ Use the shared `panel`, `l6-input-sweep`, and `l6max-input-smoke` scenarios.
 
 ## Integration setup
 
-Use the fixture configuration above and the scenario catalog for prerequisites.
+Use the local configuration above and the scenario catalog for prerequisites.
 
 ## Firmware patch
 

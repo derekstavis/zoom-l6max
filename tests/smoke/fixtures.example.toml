@@ -1,5 +1,5 @@
 # Copy to smoke.local.toml at the repository root. Paths are relative to that file.
-# Each scenario declares its own state, card, patches and timing; this file only says
+# Each scenario declares its own state, card and patches; this file only says
 # where your stock update packages are. A case for a model with no package is BLOCKED.
 version = 1
 

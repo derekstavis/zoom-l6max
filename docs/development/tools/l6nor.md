@@ -3,7 +3,7 @@
 `l6nor` reads and writes simulator device state: the MAIN NOR (`main-nor.bin`),
 the L6 external resource NOR (`resource-nor.bin`), their settings banks, the
 panel RTC (`panel-rtc.bin`) and, for L6max, a pre-programmed panel flash. The `l6nor` crate is also the library `l6test` uses
-to build fixture state from a declarative [state spec](#state-specs).
+to build test state from a declarative [state spec](#state-specs).
 
 ```sh
 cargo run --offline --locked -p l6nor -- info STATE
@@ -86,8 +86,9 @@ firmware's default payload instead, for example when no valid bank exists.
 ## State specs
 
 A state spec is a TOML description of a starting device. `l6test` applies it
-to each case's disposable state copy. Use it through the fixture field
-`state_spec`; see the [test workflow](../testing.md#fixture-and-catalog-toml).
+to each case's disposable state copy. A scenario names one with its `state`
+header, read from `tests/smoke/states/<model>-<state>.toml`; see the
+[scenario format](../scenario-format.md).
 
 ```toml
 version = 1
@@ -108,7 +109,7 @@ datetime = "2026-02-02T01:01:00"
 programmed = true        # L6max only
 ```
 
-Missing `main-nor.bin` is seeded from the fixture firmware first. Settings are
+Missing `main-nor.bin` is seeded from the firmware package first. Settings are
 committed with the firmware's bank protocol, so the firmware loads them on its
 first boot. `setup_required = 0` together with a valid RTC calendar skips the
 first-boot Date/Time and Battery Type flow; a pre-programmed panel skips panel
