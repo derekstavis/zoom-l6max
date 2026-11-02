@@ -44,6 +44,7 @@ impl BundleSmoke {
         let mut options = panel.options.clone();
         options.trace_sd = true;
         panel.restart_with_options(options)?;
+        #[cfg(target_os = "macos")]
         let previous = panel
             ._qemu
             .as_ref()
@@ -190,6 +191,7 @@ impl BundleSmoke {
                     return Err("Rejected import disturbed running guest".into());
                 }
                 println!("PASS: invalid selection leaves running firmware untouched");
+                #[cfg(target_os = "macos")]
                 let previous_pid = panel
                     ._qemu
                     .as_ref()

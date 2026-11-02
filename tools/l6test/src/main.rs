@@ -67,16 +67,6 @@ fn gdb_socket_path() -> PathBuf {
     let index = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     env::temp_dir().join(format!("l6gdb-{}-{index}.sock", std::process::id()))
 }
-#[derive(Default, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Legacy {
-    executable: Option<PathBuf>,
-    executable_sha256: Option<String>,
-    #[serde(default)]
-    arguments: Vec<String>,
-    #[serde(default)]
-    environment: BTreeMap<String, String>,
-}
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ExpectedFailure {
@@ -308,11 +298,6 @@ fn git(root: &Path, args: &[&str]) -> String {
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().into())
         .unwrap_or_default()
-}
-fn resolve(base: &Path, path: &mut PathBuf) {
-    if path.is_relative() {
-        *path = base.join(&*path);
-    }
 }
 /// The fixture for a case, from the configured firmware and the case's scenario.
 /// Cases without a scenario boot from the completed-setup state and an empty card.
