@@ -282,6 +282,9 @@ pub fn build(request: &Request) -> Result<PathBuf, String> {
     // optional host services discovered from the runner's installed libraries.
     if minimal {
         configure.args(["--without-default-features", "--enable-tcg"]);
+        if cfg!(target_os = "linux") {
+            configure.arg("--enable-pa");
+        }
     }
     if cfg!(target_os = "macos") {
         let mut cflags = env::var("CFLAGS").unwrap_or_default();

@@ -106,8 +106,10 @@ launch: `emulator/state/models/l6max/sd-card.img` for L6max and
 `emulator/state/models/l6/sd-card-l6.img` for L6. It contains four generated sample WAVs,
 an additional snare sample under Pad 1, and the locally supplied update
 package. Existing cards are reused without overwriting their contents. The
-macOS GUI routes SAI1 playback to CoreAudio by default. Headless runs can set
-`L6_AUDIODEV='driver=coreaudio,id=l6-audio'`. Both models route firmware output to
+GUI routes SAI1 playback to CoreAudio on macOS and PulseAudio on Linux by
+default. Headless runs can select a backend with `L6_AUDIODEV`, for example
+`driver=coreaudio,id=l6-audio` on macOS or `driver=pa,id=l6-audio` on Linux.
+Both models route firmware output to
 the host backend using their SAI1 TDM stereo slots; see
 [audio emulation](emulator/audio.md).
 

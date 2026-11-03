@@ -1271,6 +1271,11 @@ fn main() {
                 .into(),
         );
     }
+    #[cfg(target_os = "linux")]
+    if options.audio_device.is_none() {
+        options.audio_device =
+            Some("driver=pa,id=l6-audio,out.frequency=48000,out.channels=2,out.format=f32".into());
+    }
     let mut bundle = bundle::Bundle::detect().unwrap_or_else(|error| {
         tracing::error!(%error, "Could not open app data");
         std::process::exit(1);
