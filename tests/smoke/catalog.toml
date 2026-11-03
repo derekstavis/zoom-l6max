@@ -580,3 +580,19 @@ scenario = "scenarios/l6-installed-patch.toml"
 needs_configuration = true
 no_sd = true
 wall_timeout_s = 900
+
+[[case]]
+id = "l6max-eq-audio-update"
+suites = ["regression", "full"]
+models = ["l6max"]
+scenario = "scenarios/l6max-eq-audio-update.toml"
+volatile = true
+no_sd = true
+
+[[case]]
+id = "l6-eq-audio-update"
+suites = ["regression", "full"]
+models = ["l6"]
+scenario = "scenarios/l6-eq-audio-update.toml"
+volatile = true
+no_sd = true
