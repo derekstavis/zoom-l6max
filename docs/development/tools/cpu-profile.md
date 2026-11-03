@@ -27,3 +27,24 @@ it, and `cpu-profile` does not check that the two images match. Before attributi
 samples to a particular MAIN, verify that the selected image matches the bytes
 installed in NOR (starting at offset `0x50000`), or prepare a matching disposable
 state. Record the exact image, state, QEMU, profiler, and sample identities.
+
+## QEMU plugins
+
+`tools/cpu-profile/plugins/` holds TCG plugins for instruction-level counts:
+`exception_cost.c` counts instructions executed per active Cortex-M exception,
+and `sai1_rx_profile.c` counts L6 MAIN functions seen in eDMA IRQ 15 samples.
+Default QEMU builds disable plugin support, so build one that keeps it, then
+compile the plugin against the staged plugin header:
+
+```sh
+cargo run --offline --locked -p qemu-build -- --plugins
+cc -shared -fPIC -Wl,-undefined,dynamic_lookup \
+  -I emulator/qemu/build-source/include/plugins $(pkg-config --cflags glib-2.0) \
+  -o /tmp/exception_cost.dylib tools/cpu-profile/plugins/exception_cost.c
+```
+
+On Linux, drop `-Wl,-undefined,dynamic_lookup` and name the output `.so`. Set
+`L6_QEMU_PLUGIN` to the compiled plugin when starting the emulator; the engine
+passes it to MAIN with `-plugin`, and the plugin reports on stderr, which lands
+in `engine.stderr`. A build without plugin support stops at startup with
+`plugin interface not enabled in this build`.
