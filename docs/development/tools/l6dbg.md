@@ -36,6 +36,7 @@ the action’s fields are strict; unknown fields fail parsing.
 | --- | --- | --- |
 | `wait` | `guest_ms` | Wait for the requested guest time (`1..600000` ms). |
 | `press` | `target`, optional `hold_ms` (default `50`) | Press GPIO target `0..53`; hold is `1..60000` ms. |
+| `button` | `target`, `pressed` | Hold (`true`) or release (`false`) target `0..53` across subsequent steps. A release requires an earlier hold in the same recipe; a hold may remain active until the guest exits. |
 | `encoder` | `channel`, `steps` | One-based channel (L6 `1..6`, L6max `1..8`); signed steps `-1000..1000`, excluding zero. |
 | `snapshot` | `name` | Save guest time, indicator rows/rings, and display text/image observations. |
 | `trace` | `name`, `contains`, optional `limit` (default `100`) | Record up to `limit` matching trace lines; `contains` is a nonempty substring. |

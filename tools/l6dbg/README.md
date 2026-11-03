@@ -27,6 +27,8 @@ Actions are executed in order:
 - `wait`: wait for `guest_ms`, bounded by the recipe's wall timeout.
 - `press`: press a model-specific input `target`, optionally with `hold_ms`;
   see the [control map](../../docs/emulator/controls.md) for target IDs.
+- `button`: hold (`pressed = true`) or release (`pressed = false`) a target
+  across steps, for controls such as the L6max MASTER/SUB-MIX switch.
 - `encoder`: turn a one-based `channel` by signed `steps`.
 - `snapshot`: record indicator rows, physical rings and a 64×32 ASCII display
   file. `display_available` distinguishes a retained frame from a blank

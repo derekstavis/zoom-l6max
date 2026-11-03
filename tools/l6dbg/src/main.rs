@@ -41,6 +41,10 @@ enum Step {
         #[serde(default = "hold")]
         hold_ms: u32,
     },
+    Button {
+        target: u32,
+        pressed: bool,
+    },
     Encoder {
         channel: usize,
         steps: i32,
@@ -102,7 +106,9 @@ impl Recipe {
             );
         }
         let mut names = BTreeSet::new();
+        let mut held_targets = BTreeSet::new();
         for step in &recipe.step {
+            validate_input(step, &recipe.model, &mut held_targets)?;
             if let Step::Snapshot { name }
             | Step::Memory { name, .. }
             | Step::MemoryWrite { name, .. }
@@ -114,22 +120,6 @@ impl Recipe {
                 }
             }
             match step {
-                Step::Wait { guest_ms } if *guest_ms == 0 || *guest_ms > 600_000 => {
-                    return Err("wait must be 1..600000 guest milliseconds".into());
-                }
-                Step::Press { target, hold_ms }
-                    if *target >= 54 || *hold_ms == 0 || *hold_ms > 60_000 =>
-                {
-                    return Err("invalid input target or hold".into());
-                }
-                Step::Encoder { channel, steps }
-                    if *channel == 0
-                        || *channel > if recipe.model == "l6" { 6 } else { 8 }
-                        || *steps == 0
-                        || steps.unsigned_abs() > 1000 =>
-                {
-                    return Err("invalid encoder channel or steps".into());
-                }
                 Step::Memory {
                     name,
                     address,
@@ -206,6 +196,40 @@ impl Recipe {
         }
         Ok(recipe)
     }
+}
+fn validate_input(step: &Step, model: &str, held: &mut BTreeSet<u32>) -> Result<(), String> {
+    match step {
+        Step::Wait { guest_ms } if *guest_ms == 0 || *guest_ms > 600_000 => {
+            Err("wait must be 1..600000 guest milliseconds".into())
+        }
+        Step::Press { target, hold_ms } if *target >= 54 || *hold_ms == 0 || *hold_ms > 60_000 => {
+            Err("invalid input target or hold".into())
+        }
+        Step::Button { target, pressed } => validate_button(held, *target, *pressed),
+        Step::Encoder { channel, steps }
+            if *channel == 0
+                || *channel > if model == "l6" { 6 } else { 8 }
+                || *steps == 0
+                || steps.unsigned_abs() > 1000 =>
+        {
+            Err("invalid encoder channel or steps".into())
+        }
+        _ => Ok(()),
+    }
+}
+fn validate_button(held: &mut BTreeSet<u32>, target: u32, pressed: bool) -> Result<(), String> {
+    if target >= 54 {
+        return Err("invalid input target".into());
+    }
+    let changed = if pressed {
+        held.insert(target)
+    } else {
+        held.remove(&target)
+    };
+    if !changed {
+        return Err("input target is already in that state".into());
+    }
+    Ok(())
 }
 fn validate_name(name: &str) -> Result<(), String> {
     if name.is_empty()
@@ -339,6 +363,16 @@ fn run(recipe_path: &Path, options: Options) -> Result<Value, String> {
                     inputs.tap(*target, *hold_ms).map_err(|e| e.to_string())?;
                     wait(&guest, hold_ms.saturating_add(100), deadline)?;
                     json!({"action":"press","target":target,"hold_ms":hold_ms})
+                }
+                Step::Button { target, pressed } => {
+                    if *pressed {
+                        inputs.down(*target, 50)
+                    } else {
+                        inputs.up(*target)
+                    }
+                    .map_err(|e| e.to_string())?;
+                    wait(&guest, 200, deadline)?;
+                    json!({"action":"button","target":target,"pressed":pressed})
                 }
                 Step::Encoder { channel, steps } => {
                     inputs
@@ -552,5 +586,17 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn held_inputs_require_valid_order_and_targets() {
+        let header = "version=1\nmodel='l6max'\n";
+        let down = "[[step]]\naction='button'\ntarget=47\npressed=true\n";
+        let up = "[[step]]\naction='button'\ntarget=47\npressed=false\n";
+        assert!(Recipe::parse(&format!("{header}{down}{up}")).is_ok());
+        assert!(Recipe::parse(&format!("{header}{down}")).is_ok());
+        assert!(Recipe::parse(&format!("{header}{up}")).is_err());
+        assert!(Recipe::parse(&format!("{header}{down}{down}")).is_err());
+        assert!(Recipe::parse(&format!("{header}{}", down.replace("47", "54"))).is_err());
     }
 }
