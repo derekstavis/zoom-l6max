@@ -35,6 +35,7 @@ the action’s fields are strict; unknown fields fail parsing.
 | `action` | Fields | Result |
 | --- | --- | --- |
 | `wait` | `guest_ms` | Wait for the requested guest time (`1..600000` ms). |
+| `audio-input-transport` | `command`, optional `position_ms` | Play, pause, stop or seek prepared audio input; waits for the emulator's acknowledgement. `command` is `play`, `pause`, `stop`, or `seek`. A nonnegative `position_ms` is allowed only for seek. |
 | `press` | `target`, optional `hold_ms` (default `50`) | Press GPIO target `0..53`; hold is `1..60000` ms. |
 | `button` | `target`, `pressed` | Hold (`true`) or release (`false`) target `0..53` across subsequent steps. A release requires an earlier hold in the same recipe; a hold may remain active until the guest exits. |
 | `encoder` | `channel`, `steps` | One-based channel (L6 `1..6`, L6max `1..8`); signed steps `-1000..1000`, excluding zero. |
@@ -42,6 +43,11 @@ the action’s fields are strict; unknown fields fail parsing.
 | `trace` | `name`, `contains`, optional `limit` (default `100`) | Record up to `limit` matching trace lines; `contains` is a nonempty substring. |
 | `memory` | `name`, `address`, `length` | Read MAIN memory; requires `main_sha256`, length `1..4096`, and a non-overflowing address range. |
 | `memory-write` | `name`, `address`, `bytes` | Write `1..256` bytes to MAIN RAM (`0x80000000..0x82000000`), verify the readback, and report both values. Requires `main_sha256` and `--gdb-socket`; use only with a disposable guest. |
+
+The transport controls prepared channel files in `L6_AUDIO_INPUT_DIR`, or in
+the engine's default audio-input directory. Prepare them using the emulator's
+audio-input workflow; the transport does not create or assign files. See
+[audio input](../../emulator/audio.md#input) for the file and routing model.
 
 Observation names (`snapshot`, `trace`, `memory`, `memory-write`) must be unique and contain
 only letters, digits, `_`, and `-`. Recipe output includes `diagnostic.json`,
