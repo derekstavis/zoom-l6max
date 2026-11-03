@@ -271,6 +271,16 @@ panel application. Guest-requested chip resets remain local to that chip.
 The emulator executes firmware on two modeled processors. CPU use depends on
 the selected model, firmware activity and timing mode.
 
+MAIN's firmware never idles, so its single TCG thread stays busy and its
+margin over real time is what other host processes can take before audio
+output falls behind. Most of that thread runs translated firmware, the DSP's
+floating-point helpers and the SAI eDMA service. The eDMA service reads and
+writes transfer descriptors directly in register storage instead of through
+MMIO dispatch. The DSP multiplies many zero samples on silent channels; the
+QEMU softfloat patch returns those exact zero products without leaving the
+hardfloat path. The panel paces itself against wall time and sleeps for the
+rest of each interval.
+
 ## Validation
 
 Use the [test driver](../development/testing.md) for headless and GPUI
