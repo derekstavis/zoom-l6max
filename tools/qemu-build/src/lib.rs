@@ -476,6 +476,11 @@ pub fn build(request: &Request) -> Result<PathBuf, String> {
     }
     if optimizing {
         configure.arg("--enable-lto");
+        // LTO archives hold LLVM bitcode. An older Xcode's ar cannot index
+        // it, leaving lld unable to find archive members, so use llvm@21's.
+        if cfg!(target_os = "macos") && env::var_os("AR").is_none() {
+            configure.env("AR", "/opt/homebrew/opt/llvm@21/bin/llvm-ar");
+        }
     }
     if !cflags.is_empty() {
         configure
