@@ -348,6 +348,7 @@ fn resolve_qemu(root: &Path, build: bool, requested: Option<&Path>) -> Result<Pa
             repository: root.to_owned(),
             source: None,
             minimal: false,
+            plugins: false,
         })?;
     }
     if !binary.is_file() {

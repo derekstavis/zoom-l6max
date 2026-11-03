@@ -176,6 +176,8 @@ pub struct Request {
     pub repository: PathBuf,
     pub source: Option<PathBuf>,
     pub minimal: bool,
+    /// Keep TCG plugin support, which costs CPU even with no plugin loaded.
+    pub plugins: bool,
 }
 
 /// Where a default build leaves the binary.
@@ -285,6 +287,9 @@ pub fn build(request: &Request) -> Result<PathBuf, String> {
         "--disable-werror",
         "--enable-fdt=auto",
     ]);
+    if !request.plugins {
+        configure.arg("--disable-plugins");
+    }
     // CI bundles need TCG and the board's peripherals, without unrelated
     // optional host services discovered from the runner's installed libraries.
     if minimal {

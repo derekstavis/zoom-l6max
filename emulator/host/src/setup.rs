@@ -149,6 +149,7 @@ impl Options {
                     repository: root.to_path_buf(),
                     source: None,
                     minimal: false,
+                    plugins: false,
                 }) {
                     eprintln!("Rebuilding QEMU failed ({error}); using the existing build.");
                 }
@@ -163,6 +164,7 @@ impl Options {
                         repository: root.to_path_buf(),
                         source: None,
                         minimal: false,
+                        plugins: false,
                     })
                     .map_err(|e| format!("could not build QEMU: {e}"))?,
                 );
