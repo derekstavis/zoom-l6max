@@ -132,7 +132,8 @@ combine them:
 cargo run -p l6max-gui -- --patch knob-dialog --patch midi-sync
 ```
 
-Patches apply to the stock 1.10 package. A saved device keeps its settings. Its
+A run given `--firmware-dir` or `--firmware-package` ignores the configured patches;
+only `--patch` applies to it. Patches apply to the stock 1.10 package. A saved device keeps its settings. Its
 application changes when the selection does, and an SD card update is replaced
 at the next start while any patch is selected.
 

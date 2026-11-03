@@ -27,10 +27,14 @@ Actions are executed in order:
 - `wait`: wait for `guest_ms`, bounded by the recipe's wall timeout.
 - `press`: press a model-specific input `target`, optionally with `hold_ms`;
   see the [control map](../../docs/emulator/controls.md) for target IDs.
+- `button`: hold (`pressed = true`) or release (`pressed = false`) a target
+  across steps, for controls such as the L6max MASTER/SUB-MIX switch.
 - `encoder`: turn a one-based `channel` by signed `steps`.
-- `snapshot`: record indicator rows, physical rings and a 64×32 ASCII display
-  file. `display_available` distinguishes a retained frame from a blank
-  fallback when no frame has arrived; L6 has no screen.
+- `snapshot`: record indicator rows, physical rings, a 64×32 ASCII preview,
+  and the full packed 128×64 display frame when available. `display_available`
+  distinguishes a retained frame from a blank fallback when no frame has
+  arrived; L6 has no screen. The [reference](../../docs/development/tools/l6dbg.md)
+  describes the raw layout and PNG conversion.
 - `trace`: capture the last matching trace lines; `limit` bounds their count
   and only the last 2 MiB of the active trace is searched.
 - `memory`: capture up to 4096 bytes from MAIN. This requires `main_sha256` in
