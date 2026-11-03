@@ -276,7 +276,9 @@ margin over real time is what other host processes can take before audio
 output falls behind. Most of that thread runs translated firmware, the DSP's
 floating-point helpers and the SAI eDMA service. The eDMA service reads and
 writes transfer descriptors directly in register storage instead of through
-MMIO dispatch. The DSP multiplies many zero samples on silent channels; the
+MMIO dispatch, skips channels without an enabled request before reading their
+DMAMUX routing, and moves samples to and from the SAI data registers directly
+unless `L6_AUDIO_TRACE` is recording those accesses. The DSP multiplies many zero samples on silent channels; the
 QEMU softfloat patch returns those exact zero products without leaving the
 hardfloat path. The panel paces itself against wall time and sleeps for the
 rest of each interval.
