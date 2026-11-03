@@ -1,13 +1,16 @@
-//! `cargo run -p qemu-build -- [--minimal] [QEMU_SOURCE]`: print the built binary path.
+//! `cargo run -p qemu-build -- [--minimal] [--plugins] [QEMU_SOURCE]`: print the built binary path.
 use qemu_build::{Request, build_locked};
 use std::{env, path::PathBuf, process::ExitCode};
 
 fn run() -> Result<(), String> {
     let mut source = None;
     let mut minimal = false;
+    let mut plugins = false;
     for arg in env::args_os().skip(1) {
         if arg == "--minimal" {
             minimal = true;
+        } else if arg == "--plugins" {
+            plugins = true;
         } else if !arg.to_string_lossy().starts_with('-') && source.is_none() {
             source = Some(PathBuf::from(arg));
         } else {
@@ -19,6 +22,7 @@ fn run() -> Result<(), String> {
         repository: repository.canonicalize().map_err(|e| e.to_string())?,
         source,
         minimal,
+        plugins,
     })?;
     println!("{}", binary.display());
     Ok(())
