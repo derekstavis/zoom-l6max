@@ -70,6 +70,7 @@ sets it to 0.
 | `battery_type`, `midi_channel`, `auto_power_off` | Global settings (L6max also has `setup_required`) |
 | `midi_cc_number[3]`, `sound_pad_midi_note[0]` | One element of an array field |
 | `mixer.current.efx_type`, `mixer.scene-0.efx_param[4]` | A field of one mixer block |
+| `mixer.current.efx_return_submix`, `mixer.current.efx_return_mix_minus` | L6max 1.10 effect-return switches, 0 or 1 |
 | `mixer.current.channel[2].mute` | A per-channel record field |
 
 L6max mixer blocks are `scene-0` through `scene-3`, `current` (the live mixer),

@@ -404,6 +404,28 @@ mod tests {
     }
 
     #[test]
+    fn l6max_effect_return_fields_are_independent_and_bounded() {
+        let mut settings = Settings::defaults(&catalog());
+        let submix = "mixer.current.efx_return_submix";
+        let mix_minus = "mixer.current.efx_return_mix_minus";
+        assert_eq!(settings.get(submix).unwrap(), FieldValue::Int(0));
+        assert_eq!(settings.get(mix_minus).unwrap(), FieldValue::Int(0));
+        settings.set(submix, &FieldValue::Int(1)).unwrap();
+        assert_eq!(settings.get(mix_minus).unwrap(), FieldValue::Int(0));
+        settings.set(mix_minus, &FieldValue::Int(1)).unwrap();
+        assert_eq!(
+            &settings.payload()[4 * 0x25a + 0x159..4 * 0x25a + 0x15b],
+            &[1, 1]
+        );
+        assert!(settings.set(submix, &FieldValue::Int(2)).is_err());
+        assert!(settings.set(mix_minus, &FieldValue::Int(-1)).is_err());
+        assert_eq!(
+            settings.get("mixer.scene-0.efx_return_submix").unwrap(),
+            FieldValue::Int(0)
+        );
+    }
+
+    #[test]
     fn out_of_range_and_unknown_paths_are_rejected() {
         let mut settings = Settings::defaults(&catalog());
         assert!(settings.set("battery_type", &FieldValue::Int(3)).is_err());
