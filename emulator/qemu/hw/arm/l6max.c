@@ -2691,6 +2691,51 @@ static bool l6_edma_as_write(void *opaque, uint32_t address,
                                buffer, size) == MEMTX_OK;
 }
 
+/* eDMA moves audio between RAM and the SAI data registers. Without an audio
+ * trace, which records those register accesses, service the data registers
+ * directly instead of dispatching each word through MMIO. */
+static L6Sai *l6_edma_sai_data(L6ChipState *s, uint32_t address,
+                               hwaddr *reg_offset)
+{
+    if (s->audio_trace || address < 0x40000000) {
+        return NULL;
+    }
+    L6Sai *sai = l6_sai_at(s, address - 0x40000000, reg_offset);
+    if (sai && ((*reg_offset >= L6_SAI_TDR0 &&
+                 *reg_offset < L6_SAI_TDR0 + 4 * L6_SAI_CHANNELS) ||
+                (*reg_offset >= L6_SAI_RDR0 &&
+                 *reg_offset < L6_SAI_RDR0 + 4 * L6_SAI_CHANNELS))) {
+        return sai;
+    }
+    return NULL;
+}
+
+static bool l6_edma_transfer_read(void *opaque, uint32_t address,
+                                  void *buffer, size_t size)
+{
+    L6ChipState *s = opaque;
+    hwaddr reg_offset;
+    L6Sai *sai = size == 4 ? l6_edma_sai_data(s, address, &reg_offset) : NULL;
+    if (sai) {
+        stl_le_p(buffer, l6_sai_read(sai, reg_offset, 4));
+        return true;
+    }
+    return l6_edma_as_read(CPU(s->armv7m.cpu)->as, address, buffer, size);
+}
+
+static bool l6_edma_transfer_write(void *opaque, uint32_t address,
+                                   const void *buffer, size_t size)
+{
+    L6ChipState *s = opaque;
+    hwaddr reg_offset;
+    L6Sai *sai = size == 4 ? l6_edma_sai_data(s, address, &reg_offset) : NULL;
+    if (sai) {
+        l6_sai_write(sai, reg_offset, ldl_le_p(buffer), 4);
+        return true;
+    }
+    return l6_edma_as_write(CPU(s->armv7m.cpu)->as, address, buffer, size);
+}
+
 static uint32_t l6_edma_register(L6ChipState *s, hwaddr offset)
 {
     return GPOINTER_TO_UINT(g_hash_table_lookup(s->registers,
@@ -2754,10 +2799,14 @@ static bool l6_edma_service_request(L6ChipState *s, uint8_t request)
     }
 
     for (unsigned channel = 0; channel < 32; channel++) {
+        /* Few channels have requests enabled; skip the rest before
+         * looking up their DMAMUX routing. */
+        if (!(s->edma_erq & (1u << channel))) {
+            continue;
+        }
         hwaddr mux_offset = 0x0ec000 + channel * 4;
         uint32_t mux = l6_edma_register(s, mux_offset);
-        if (!(mux & (1u << 31)) || (mux & 0x7f) != request ||
-            !(s->edma_erq & (1u << channel))) {
+        if (!(mux & (1u << 31)) || (mux & 0x7f) != request) {
             continue;
         }
 
@@ -2821,7 +2870,7 @@ static bool l6_edma_service_request(L6ChipState *s, uint8_t request)
                 }
             }
             L6EdmaMinorResult result = l6_edma_transfer_minor(
-                &tcd, l6_edma_as_read, l6_edma_as_write, as);
+                &tcd, l6_edma_transfer_read, l6_edma_transfer_write, s);
             if (result == L6_EDMA_MINOR_ERROR) {
                 qemu_log_mask(LOG_UNIMP,
                               "l6 eDMA unsupported request source=%u channel=%u TCD=%08x/%08x nbytes=%u citer=%04x attr=%04x\n",
