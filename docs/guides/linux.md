@@ -27,7 +27,8 @@ sudo apt install clang build-essential pkg-config ninja-build python3 \
 ```
 
 `qemu-build` compiles QEMU with `clang` on Linux, as on macOS; set `CC` and
-`CXX` to choose a versioned Clang such as `clang-21`.
+`CXX` to choose a versioned Clang such as `clang-21`. Optimized builds also need
+`lld`; see [optimized builds](../development/tools/qemu-build.md#optimized-builds).
 
 Also needed, as on macOS: Rust through rustup (`rust-toolchain.toml` selects
 the toolchain), the pinned QEMU submodule, and a locally obtained stock 1.10

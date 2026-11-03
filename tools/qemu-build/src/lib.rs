@@ -178,6 +178,104 @@ pub struct Request {
     pub minimal: bool,
     /// Keep TCG plugin support, which costs CPU even with no plugin loaded.
     pub plugins: bool,
+    pub optimization: Optimization,
+}
+
+/// How QEMU is compiled.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Optimization {
+    /// The platform compiler without LTO, for quick local rebuilds.
+    Standard,
+    /// LTO with this platform's checked-in profile, built with [`PGO_CLANG_VERSION`].
+    Pgo,
+    /// LTO with profile instrumentation, in its own build directory, for training.
+    Instrumented,
+}
+
+/// The Clang that trained the checked-in profiles. Profile matching depends on
+/// the compiler, so optimized builds require exactly this version.
+pub const PGO_CLANG_VERSION: &str = "21.1.8";
+
+/// Where an instrumented build leaves the binary.
+pub const INSTRUMENTED_BUILD_DIR: &str = "build-pgo-instrumented";
+
+/// The checked-in profile name for this host, when one is maintained.
+pub fn pgo_platform() -> Option<&'static str> {
+    match (env::consts::OS, env::consts::ARCH) {
+        ("macos", "aarch64") => Some("macos-arm64"),
+        ("linux", "x86_64") => Some("linux-x86_64"),
+        _ => None,
+    }
+}
+
+/// The compressed profile for this host, whether or not it exists yet.
+pub fn pgo_profile(repository: &Path) -> Option<PathBuf> {
+    pgo_platform().map(|platform| {
+        repository
+            .join("emulator/qemu/pgo")
+            .join(format!("{platform}.profdata.gz"))
+    })
+}
+
+/// C and C++ compilers. Linux always uses Clang; macOS uses Homebrew's
+/// `llvm@21` for optimized builds so both platforms match the profiles.
+fn clang(optimizing: bool) -> Option<(String, String)> {
+    let default = if cfg!(target_os = "linux") {
+        Some(("clang", "clang++"))
+    } else if cfg!(target_os = "macos") && optimizing {
+        Some((
+            "/opt/homebrew/opt/llvm@21/bin/clang",
+            "/opt/homebrew/opt/llvm@21/bin/clang++",
+        ))
+    } else {
+        None
+    };
+    default.map(|(cc, cxx)| {
+        (
+            env::var("CC").unwrap_or_else(|_| cc.into()),
+            env::var("CXX").unwrap_or_else(|_| cxx.into()),
+        )
+    })
+}
+
+/// The LLD linker for LTO builds, overridable with `LLD`.
+fn lld() -> String {
+    env::var("LLD").unwrap_or_else(|_| {
+        if cfg!(target_os = "macos") {
+            "/opt/homebrew/opt/lld@21/bin/ld64.lld".into()
+        } else {
+            "lld".into()
+        }
+    })
+}
+
+/// `llvm-profdata` from the same LLVM, overridable with `LLVM_PROFDATA`.
+pub fn llvm_profdata() -> String {
+    env::var("LLVM_PROFDATA").unwrap_or_else(|_| {
+        if cfg!(target_os = "macos") {
+            "/opt/homebrew/opt/llvm@21/bin/llvm-profdata".into()
+        } else {
+            "llvm-profdata".into()
+        }
+    })
+}
+
+fn require_pgo_clang(cc: &str) -> Result<(), String> {
+    let output = Command::new(cc)
+        .arg("--version")
+        .output()
+        .map_err(|error| {
+            format!("could not run {cc} ({error}); optimized builds need Clang {PGO_CLANG_VERSION}")
+        })?;
+    let version = String::from_utf8_lossy(&output.stdout);
+    if version.contains(&format!("clang version {PGO_CLANG_VERSION}")) {
+        Ok(())
+    } else {
+        Err(format!(
+            "optimized builds need Clang {PGO_CLANG_VERSION}, which trained the profiles; {cc} reports {}",
+            version.lines().next().unwrap_or("no version")
+        ))
+    }
 }
 
 /// Where a default build leaves the binary.
@@ -275,8 +373,63 @@ pub fn build(request: &Request) -> Result<PathBuf, String> {
             .map_err(|error| format!("cannot append ARM Meson entry: {error}"))?;
     }
 
+    let optimizing = request.optimization != Optimization::Standard;
+    let compilers = clang(optimizing);
+    if optimizing {
+        let (cc, _) = compilers.as_ref().ok_or("optimized builds need Clang")?;
+        require_pgo_clang(cc)?;
+    }
+    // An instrumented build keeps its own directory so the normal binary stays usable.
+    let build_dir = if request.optimization == Optimization::Instrumented {
+        let dir = source.join(INSTRUMENTED_BUILD_DIR);
+        fs::create_dir_all(&dir)
+            .map_err(|error| format!("cannot create {}: {error}", dir.display()))?;
+        dir
+    } else {
+        source.join("build")
+    };
+    let mut cflags = Vec::new();
+    let mut ldflags = Vec::new();
+    match request.optimization {
+        Optimization::Standard => {}
+        Optimization::Pgo => match pgo_profile(&request.repository).filter(|p| p.is_file()) {
+            Some(profile) => {
+                // Configure recreates the build directory, so unpack beside it.
+                let unpacked = source.join("qemu-pgo.profdata");
+                let data = Command::new("gzip")
+                    .arg("-dc")
+                    .arg(&profile)
+                    .output()
+                    .map_err(|error| format!("could not run gzip: {error}"))?;
+                if !data.status.success() {
+                    return Err(format!("could not unpack {}", profile.display()));
+                }
+                fs::write(&unpacked, data.stdout).map_err(|e| e.to_string())?;
+                cflags.push(format!("-fprofile-use={}", unpacked.display()));
+                // Configure's compiler checks run with -Werror, and their test
+                // programs' main() never matches the profile. Stale functions
+                // only lose guidance, so keep the mismatch warnings quiet.
+                cflags.push("-Wno-backend-plugin".into());
+                cflags.push("-Wno-profile-instr-out-of-date".into());
+            }
+            None => eprintln!("qemu-build: no profile for this platform; building with LTO only"),
+        },
+        Optimization::Instrumented => {
+            cflags.push("-fprofile-generate".into());
+            ldflags.push("-fprofile-generate".into());
+        }
+    }
+    if optimizing {
+        ldflags.push(format!("-fuse-ld={}", lld()));
+    }
+
     let mut configure = Command::new(source.join("configure"));
-    configure.current_dir(&source).args([
+    let configure_dir = if request.optimization == Optimization::Instrumented {
+        &build_dir
+    } else {
+        &source
+    };
+    configure.current_dir(configure_dir).args([
         "--target-list=arm-softmmu",
         "--disable-docs",
         "--disable-gtk",
@@ -299,12 +452,38 @@ pub fn build(request: &Request) -> Result<PathBuf, String> {
         }
     }
     // Linux builds use Clang like macOS; CC and CXX select a versioned one.
-    if cfg!(target_os = "linux") {
-        let cc = env::var("CC").unwrap_or_else(|_| "clang".into());
-        let cxx = env::var("CXX").unwrap_or_else(|_| "clang++".into());
+    if let Some((cc, cxx)) = &compilers {
         configure
             .arg(format!("--cc={cc}"))
             .arg(format!("--cxx={cxx}"));
+        if cfg!(target_os = "macos") {
+            configure.arg(format!("--objcc={cc}"));
+        }
+    }
+    // Homebrew's Clang does not find Xcode's SDK on its own.
+    let sdkroot =
+        if cfg!(target_os = "macos") && compilers.is_some() && env::var_os("SDKROOT").is_none() {
+            let sdk = Command::new("xcrun")
+                .arg("--show-sdk-path")
+                .output()
+                .map_err(|error| format!("could not run xcrun: {error}"))?;
+            Some(String::from_utf8_lossy(&sdk.stdout).trim().to_owned())
+        } else {
+            None
+        };
+    if let Some(sdk) = &sdkroot {
+        configure.env("SDKROOT", sdk);
+    }
+    if optimizing {
+        configure.arg("--enable-lto");
+    }
+    if !cflags.is_empty() {
+        configure
+            .arg(format!("--extra-cflags={}", cflags.join(" ")))
+            .arg(format!("--extra-cxxflags={}", cflags.join(" ")));
+    }
+    if !ldflags.is_empty() {
+        configure.arg(format!("--extra-ldflags={}", ldflags.join(" ")));
     }
     if cfg!(target_os = "macos") {
         let mut cflags = env::var("CFLAGS").unwrap_or_default();
@@ -319,15 +498,18 @@ pub fn build(request: &Request) -> Result<PathBuf, String> {
     if !status.success() {
         return Err(format!("QEMU configure exited with {status}"));
     }
-    let status = Command::new("ninja")
-        .current_dir(&source)
-        .args(["-C", "build", "qemu-system-arm"])
+    let mut ninja = Command::new("ninja");
+    ninja.arg("-C").arg(&build_dir).arg("qemu-system-arm");
+    if let Some(sdk) = &sdkroot {
+        ninja.env("SDKROOT", sdk);
+    }
+    let status = ninja
         .status()
         .map_err(|error| format!("could not run Ninja ({error}); install it, for example `brew install ninja` or `apt install ninja-build`"))?;
     if !status.success() {
         return Err(format!("QEMU build exited with {status}"));
     }
-    Ok(source.join("build/qemu-system-arm"))
+    Ok(build_dir.join("qemu-system-arm"))
 }
 
 #[cfg(test)]
