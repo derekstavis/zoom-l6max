@@ -204,8 +204,6 @@ typedef struct L6BoardProfile {
     uint32_t panel_reset_gpio_mask;
     hwaddr high_ram_base;
     size_t high_ram_size;
-    hwaddr audio_queue_write_offset;
-    hwaddr audio_queue_read_offset;
     hwaddr sai_bases[2]; /* Offsets within the MAIN peripheral window. */
     unsigned sai_count;
     unsigned audio_output_left_slot;
@@ -243,9 +241,6 @@ static const L6BoardProfile L6_PROFILE = {
     .panel_reset_gpio_mask = 1u << 29,
     .high_ram_base = 0x801f0000,
     .high_ram_size = 0x10000,
-    /* L6's callback staging indices are in SRAM at 0x2000bb0c/bb10. */
-    .audio_queue_write_offset = 0xbb0c,
-    .audio_queue_read_offset = 0xbb10,
     .sai_bases = { 0x384000, 0x38c000 },
     .sai_count = 2,
     .audio_output_left_slot = 0,
@@ -285,9 +280,6 @@ static const L6BoardProfile L6MAX_PROFILE = {
     .panel_boot_gpio_mask = 1u << 29,
     .panel_reset_gpio_base = 0x400c0000,
     .panel_reset_gpio_mask = 1u << 1,
-    /* Preserve the established L6max callback-ring layout. */
-    .audio_queue_write_offset = 0x7d08,
-    .audio_queue_read_offset = 0x7d0c,
     .sai_bases = { 0x384000 },
     .sai_count = 1,
     /* L6max SAI1 uses an eight-slot frame. Slots 2-3 follow the MASTER knob,
@@ -488,7 +480,6 @@ typedef struct L6ChipState {
     unsigned panel_key_count;
     L6MainKey main_keys[L6_MAX_PANEL_KEYS];
     unsigned main_key_count;
-    bool service_audio_queue;
     bool service_audio_profile_ramp_ack;
     bool service_audio_dsp_ack;
     int input_fd;
@@ -1968,15 +1959,6 @@ static void l6_main_audio_service_tick(void *opaque)
              * though normal profiles now advance the SAI/eDMA callback. */
             stl_le_p(main_high_ram + 0x8cd4, 0);
         }
-    }
-    if (s->service_audio_queue) {
-        /* Diagnostic stand-in for the absent audio transfer consumer. The
-         * firmware's 15-slot staging queue otherwise fills during setup.
-         * The index layout differs between firmware models. Acknowledge the
-         * current write index without processing audio data. */
-        uint8_t *sram = memory_region_get_ram_ptr(&s->sram);
-        uint32_t write_index = ldl_le_p(sram + s->profile->audio_queue_write_offset);
-        stl_le_p(sram + s->profile->audio_queue_read_offset, write_index);
     }
 }
 
@@ -4779,8 +4761,6 @@ static void l6_chip_init(MachineState *machine, L6ChipState *s, bool panel,
         s->service_audio_dsp_ack =
             dsp_ack ? g_strcmp0(dsp_ack, "0") != 0
                     : (bringup_ack ? master_ack : s->profile->audio_dsp_wait_ack);
-        s->service_audio_queue = g_strcmp0(g_getenv("L6_SERVICE_AUDIO_QUEUE"),
-                                             "1") == 0;
         const char *keys = g_getenv("L6_MAIN_KEYS");
         if (keys) {
             g_auto(GStrv) entries = g_strsplit(keys, ",", -1);
