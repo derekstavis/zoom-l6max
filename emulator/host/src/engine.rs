@@ -86,6 +86,36 @@ mod timing_tests {
     }
 
     #[test]
+    fn explicit_firmware_ignores_configured_patches() {
+        let directory = std::env::temp_dir().join(format!("l6-explicit-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let config = directory.join("config.toml");
+        std::fs::write(
+            &config,
+            "version = 1\n[emulator.l6max]\npatches = [\"midi-sync\"]\n",
+        )
+        .unwrap();
+        let parse = |extra: &[&str]| {
+            let mut args = vec!["--config".into(), config.clone().into_os_string()];
+            args.extend(extra.iter().map(Into::into));
+            Options::parse_args(args).unwrap()
+        };
+        let selected = |options: Options| options.selected_patches(l6fw::Model::L6max);
+        assert!(selected(parse(&["--firmware-dir", "/explicit"])).is_empty());
+        assert!(selected(parse(&["--firmware-package", "/explicit.bin"])).is_empty());
+        assert_eq!(
+            selected(parse(&[
+                "--firmware-dir",
+                "/explicit",
+                "--patch",
+                "knob-dialog"
+            ])),
+            ["knob-dialog"]
+        );
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn legacy_ui_smoke_flag_directs_to_the_supervised_driver() {
         let error = match Options::parse_args(["--ui-input-smoke".into()]) {
             Ok(_) => panic!("legacy UI smoke flag unexpectedly parsed"),
@@ -116,7 +146,8 @@ impl Options {
     }
 
     /// Runs that manage their own inputs, such as tests and packaged apps, turn
-    /// off auto setup and never read the working directory's configuration.
+    /// off auto setup and never read the working directory's configuration. A run
+    /// given its firmware runs that firmware, without the configured patches.
     fn apply_config(
         &mut self,
         file: Option<PathBuf>,
@@ -135,7 +166,9 @@ impl Options {
         }
         let config = crate::config::Config::load(&file)?;
         let default_directory = workspace.join("unpacked");
-        if self.firmware_package.is_none() && self.firmware_dir == default_directory {
+        if self.firmware_package.is_some() || self.firmware_dir != default_directory {
+            self.patches.get_or_insert_default();
+        } else {
             let package = match self.model.or(config.selected_model()) {
                 Some(model) => config.firmware(model),
                 None => config
