@@ -46,7 +46,8 @@ jobs:
           sudo xcode-select --switch /Applications/Xcode_26.3.app
           xcodebuild -downloadComponent MetalToolchain
           xcrun --sdk macosx metal --version
-          brew install dtc glib ninja pixman pkg-config python@3.14
+          # Optimized QEMU builds use the same LLVM release as Linux and the profiles.
+          brew install dtc glib ninja pixman pkg-config python@3.14 llvm@21 lld@21
           rustup show active-toolchain
       # Published builds always start clean.
       - id: rust-cache
@@ -83,7 +84,7 @@ jobs:
       - name: Build custom QEMU
         run: |
           export PYTHON="$(brew --prefix python@3.14)/bin/python3.14"
-          cargo run --locked -p qemu-build -- --minimal
+          cargo run --locked -p qemu-build -- --minimal --optimized
       - name: Test panel flash and timer MMIO
         run: python3 emulator/qemu/tests/panel-qtest.py emulator/qemu/build-source/build/qemu-system-arm
       - name: Package and verify app
@@ -178,7 +179,8 @@ jobs:
         env:
           CC: clang-21
           CXX: clang++-21
-        run: cargo run --locked -p qemu-build -- --minimal
+          LLD: /usr/bin/ld.lld-21
+        run: cargo run --locked -p qemu-build -- --minimal --optimized
       - name: Fetch pinned AppImage tools
         run: |
           curl -fsSL --retry 3 -o "$RUNNER_TEMP/appimagetool" "$APPIMAGETOOL_URL"
