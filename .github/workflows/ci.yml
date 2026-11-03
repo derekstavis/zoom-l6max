@@ -148,8 +148,15 @@ jobs:
             # Release builds also publish the Debian sources of bundled libraries.
             sudo sed -i 's/^# deb-src/deb-src/' /etc/apt/sources.list
           fi
+          # QEMU builds with Clang. Jammy's default is too old to read profiles
+          # from current LLVM, so install a pinned release from apt.llvm.org.
+          curl -fsSL --retry 3 https://apt.llvm.org/llvm-snapshot.gpg.key \
+            | sudo gpg --dearmor -o /usr/share/keyrings/llvm.gpg
+          echo "deb [signed-by=/usr/share/keyrings/llvm.gpg] https://apt.llvm.org/jammy/ llvm-toolchain-jammy-21 main" \
+            | sudo tee /etc/apt/sources.list.d/llvm-21.list
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
+            clang-21 lld-21 \
             build-essential pkg-config ninja-build python3 python3-venv python3-pip \
             python3-tomli \
             libglib2.0-dev libpixman-1-dev libfdt-dev libasound2-dev libpulse-dev libfontconfig-dev \
@@ -168,6 +175,9 @@ jobs:
       - name: Test Rust workspace
         run: cargo test --locked --workspace
       - name: Build custom QEMU
+        env:
+          CC: clang-21
+          CXX: clang++-21
         run: cargo run --locked -p qemu-build -- --minimal
       - name: Fetch pinned AppImage tools
         run: |

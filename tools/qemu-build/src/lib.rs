@@ -298,6 +298,14 @@ pub fn build(request: &Request) -> Result<PathBuf, String> {
             configure.arg("--enable-pa");
         }
     }
+    // Linux builds use Clang like macOS; CC and CXX select a versioned one.
+    if cfg!(target_os = "linux") {
+        let cc = env::var("CC").unwrap_or_else(|_| "clang".into());
+        let cxx = env::var("CXX").unwrap_or_else(|_| "clang++".into());
+        configure
+            .arg(format!("--cc={cc}"))
+            .arg(format!("--cxx={cxx}"));
+    }
     if cfg!(target_os = "macos") {
         let mut cflags = env::var("CFLAGS").unwrap_or_default();
         cflags.push_str(" -I/opt/homebrew/include");
