@@ -2720,6 +2720,27 @@ static bool l6_sai_edma_request_active(L6ChipState *s, uint8_t request)
     return false;
 }
 
+/* TCD words are plain register storage with no access side effects, so the
+ * service path reads and writes them directly instead of through MMIO. */
+static void l6_edma_tcd_load(L6ChipState *s, unsigned channel, uint8_t *raw)
+{
+    hwaddr base = 0x0e9000 + channel * L6_EDMA_TCD_BYTES;
+    for (unsigned i = 0; i < L6_EDMA_TCD_BYTES; i += 4) {
+        stl_le_p(raw + i, l6_edma_register(s, base + i));
+    }
+}
+
+static void l6_edma_tcd_store(L6ChipState *s, unsigned channel,
+                              const uint8_t *raw)
+{
+    hwaddr base = 0x0e9000 + channel * L6_EDMA_TCD_BYTES;
+    for (unsigned i = 0; i < L6_EDMA_TCD_BYTES; i += 4) {
+        g_hash_table_insert(s->registers,
+                            GUINT_TO_POINTER(((base + i) >> 2) + 1),
+                            GUINT_TO_POINTER(ldl_le_p(raw + i)));
+    }
+}
+
 /* A DMAMUX request services exactly one RT1041 32-bit-TCD minor loop. The
  * peripheral request is the pacing edge; this routine never drains an entire
  * cyclic audio ring just because ERQ was set. */
@@ -2744,10 +2765,7 @@ static bool l6_edma_service_request(L6ChipState *s, uint8_t request)
                               request == 84 ? 0x4038c020 :
                               request == 19 ? 0x403840a0 : 0x4038c0a0;
         uint8_t raw[L6_EDMA_TCD_BYTES];
-        uint32_t live_tcd = 0x400e9000 + channel * L6_EDMA_TCD_BYTES;
-        if (!l6_edma_as_read(as, live_tcd, raw, sizeof(raw))) {
-            return false;
-        }
+        l6_edma_tcd_load(s, channel, raw);
         L6EdmaTcd tcd;
         l6_edma_tcd_decode(raw, &tcd);
         /* Hardware clears DONE and START when it accepts a channel request. */
@@ -2827,9 +2845,7 @@ static bool l6_edma_service_request(L6ChipState *s, uint8_t request)
                 }
                 l6_edma_tcd_encode(raw, &tcd);
             }
-            if (!l6_edma_as_write(as, live_tcd, raw, sizeof(raw))) {
-                return false;
-            }
+            l6_edma_tcd_store(s, channel, raw);
             if ((result == L6_EDMA_MINOR_HALF &&
                  (tcd.csr & L6_EDMA_TCD_INTHALF)) ||
                 (result == L6_EDMA_MINOR_MAJOR &&
@@ -2841,9 +2857,8 @@ static bool l6_edma_service_request(L6ChipState *s, uint8_t request)
                 !(tcd.csr & L6_EDMA_TCD_ESG)) {
                 break;
             }
-            if (result == L6_EDMA_MINOR_MAJOR &&
-                !l6_edma_as_read(as, live_tcd, raw, sizeof(raw))) {
-                return false;
+            if (result == L6_EDMA_MINOR_MAJOR) {
+                l6_edma_tcd_load(s, channel, raw);
             }
             if (result == L6_EDMA_MINOR_MAJOR) {
                 l6_edma_tcd_decode(raw, &tcd);
