@@ -349,6 +349,7 @@ fn resolve_qemu(root: &Path, build: bool, requested: Option<&Path>) -> Result<Pa
             source: None,
             minimal: false,
             plugins: false,
+            optimization: qemu_build::Optimization::Standard,
         })?;
     }
     if !binary.is_file() {
