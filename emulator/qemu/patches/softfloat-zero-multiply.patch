@@ -1,0 +1,23 @@
+--- a/fpu/softfloat.c
++++ b/fpu/softfloat.c
+@@ -1858,7 +1858,19 @@
+ float32 QEMU_FLATTEN
+ float32_mul(float32 a, float32 b, float_status *s)
+ {
+-    return float32_gen2(a, b, s, hard_f32_mul, soft_f32_mul,
++    union_float32 ua = { .s = a }, ub = { .s = b };
++
++    /*
++     * A zero times a zero or normal is an exact signed zero and raises
++     * no flags, so it needs neither the inexact flag nor the soft path.
++     */
++    float32_input_flush2(&ua.s, &ub.s, s);
++    if ((float32_is_zero(ua.s) || float32_is_zero(ub.s)) &&
++        f32_is_zon2(ua, ub)) {
++        return float32_set_sign(float32_zero,
++                                float32_is_neg(ua.s) ^ float32_is_neg(ub.s));
++    }
++    return float32_gen2(ua.s, ub.s, s, hard_f32_mul, soft_f32_mul,
+                         f32_is_zon2, f32_addsubmul_post);
+ }
+ 
