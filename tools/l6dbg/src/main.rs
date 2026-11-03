@@ -36,6 +36,11 @@ enum Step {
     Wait {
         guest_ms: u32,
     },
+    AudioInputTransport {
+        command: AudioInputCommand,
+        #[serde(default)]
+        position_ms: i32,
+    },
     Press {
         target: u32,
         #[serde(default = "hold")]
@@ -75,6 +80,15 @@ enum Step {
         #[serde(default = "trace_limit")]
         limit: usize,
     },
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum AudioInputCommand {
+    Play,
+    Pause,
+    Stop,
+    Seek,
 }
 fn hold() -> u32 {
     50
@@ -201,6 +215,14 @@ fn validate_input(step: &Step, model: &str, held: &mut BTreeSet<u32>) -> Result<
     match step {
         Step::Wait { guest_ms } if *guest_ms == 0 || *guest_ms > 600_000 => {
             Err("wait must be 1..600000 guest milliseconds".into())
+        }
+        Step::AudioInputTransport {
+            command,
+            position_ms,
+        } if *position_ms < 0
+            || (!matches!(command, AudioInputCommand::Seek) && *position_ms != 0) =>
+        {
+            Err("audio input position must be nonnegative and is only valid for seek".into())
         }
         Step::Press { target, hold_ms } if *target >= 54 || *hold_ms == 0 || *hold_ms > 60_000 => {
             Err("invalid input target or hold".into())
@@ -358,6 +380,43 @@ fn run(recipe_path: &Path, options: Options) -> Result<Value, String> {
                 Step::Wait { guest_ms } => {
                     wait(&guest, *guest_ms, deadline)?;
                     json!({"action":"wait","requested_ms":guest_ms})
+                }
+                Step::AudioInputTransport {
+                    command,
+                    position_ms,
+                } => {
+                    use l6max_host::protocol;
+                    let (name, target) = match command {
+                        AudioInputCommand::Play => ("play", protocol::AUDIO_INPUT_PLAY),
+                        AudioInputCommand::Pause => ("pause", protocol::AUDIO_INPUT_PAUSE),
+                        AudioInputCommand::Stop => ("stop", protocol::AUDIO_INPUT_STOP),
+                        AudioInputCommand::Seek => ("seek", protocol::AUDIO_INPUT_SEEK),
+                    };
+                    let sequence = inputs
+                        .main
+                        .audio_input_transport(target, *position_ms)
+                        .map_err(|error| error.to_string())?;
+                    loop {
+                        if let Some(ack) = inputs
+                            .main
+                            .snapshot()
+                            .last_ack
+                            .filter(|ack| ack.sequence == sequence)
+                        {
+                            if ack.kind != protocol::APPLIED {
+                                return Err(format!(
+                                    "audio input transport rejected: {}",
+                                    ack.value
+                                ));
+                            }
+                            break;
+                        }
+                        if Instant::now() >= deadline {
+                            return Err("audio input transport was not acknowledged".into());
+                        }
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                    json!({"action":"audio-input-transport","command":name,"position_ms":position_ms,"sequence":sequence})
                 }
                 Step::Press { target, hold_ms } => {
                     inputs.tap(*target, *hold_ms).map_err(|e| e.to_string())?;
@@ -562,6 +621,18 @@ fn execute() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::Recipe;
+
+    #[test]
+    fn audio_input_transport_validates_commands_and_positions() {
+        let header = "version=1\nmodel='l6max'\n[[step]]\naction='audio-input-transport'\n";
+        for command in ["play", "pause", "stop", "seek"] {
+            assert!(Recipe::parse(&format!("{header}command='{command}'\n")).is_ok());
+        }
+        assert!(Recipe::parse(&format!("{header}command='seek'\nposition_ms=120\n")).is_ok());
+        assert!(Recipe::parse(&format!("{header}command='seek'\nposition_ms=-1\n")).is_err());
+        assert!(Recipe::parse(&format!("{header}command='play'\nposition_ms=1\n")).is_err());
+        assert!(Recipe::parse(&format!("{header}command='rewind'\n")).is_err());
+    }
 
     #[test]
     fn address_sensitive_observations_require_a_revision_guard() {

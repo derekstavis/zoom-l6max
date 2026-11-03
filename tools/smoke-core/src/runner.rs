@@ -725,7 +725,7 @@ impl Runner {
                         return self.dispatch(
                             Command::HoldDown {
                                 target,
-                                duration_ms: duration_ms + 1000,
+                                duration_ms,
                             },
                             obs,
                         );
@@ -1326,7 +1326,7 @@ mod tests {
             runner.advance(sample(0), now).unwrap(),
             Progress::Dispatch(Command::HoldDown {
                 target: 53,
-                duration_ms: 5000
+                duration_ms: 4000
             })
         ));
         let mut release = sample(4000);
