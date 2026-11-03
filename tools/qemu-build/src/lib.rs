@@ -101,6 +101,13 @@ fn apply_patches(source: &Path, repository: &Path) -> Result<(), String> {
         "icount-deadline-notify.patch",
         "accel/tcg/tcg-accel-ops-icount.c",
         &["icount_timers_stay_on_vcpu"],
+    )?;
+    apply_patch(
+        source,
+        repository,
+        "softfloat-zero-multiply.patch",
+        "fpu/softfloat.c",
+        &["A zero times a zero or normal"],
     )
 }
 
