@@ -22,6 +22,13 @@ establish sample fidelity. Sound-pad and recorder playback require a prepared
 state and card. See [testing](../development/testing.md) and
 [current status](../development/current-status.md).
 
+Mixer controls reach the audio path through a 16-slot ring. A control handler
+stores a destination, a word count and up to 16 words in the next slot and
+advances the write index. Before each mixer callback, the audio task copies every
+pending slot to its destination and advances the read index, so a change never
+lands in the middle of a block. The EQ controls' filter coefficients arrive this
+way on both models. The emulator leaves the ring to the firmware.
+
 ## Output fidelity
 
 The `l6-sound-pad-waveform` and `l6max-sound-pad-waveform` cases compare captured

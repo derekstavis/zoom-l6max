@@ -16,7 +16,6 @@ struct Options {
     logs: Option<PathBuf>,
     sd_image: Option<PathBuf>,
     trace_sd: bool,
-    service_audio_queue: bool,
     panel_keys: Vec<String>,
     main_keys: Vec<String>,
     probes: Vec<(u32, usize, bool)>,
@@ -227,7 +226,6 @@ fn parse_options() -> Result<Options, String> {
                     .map_err(|_| "invalid --seconds")?
             }
             "--trace-sd" => options.trace_sd = true,
-            "--service-audio-queue" => options.service_audio_queue = true,
             "--panel-key" => options.panel_keys.push(value(&mut args, "--panel-key")?),
             "--main-key" => options.main_keys.push(value(&mut args, "--main-key")?),
             "--panel-probe" => options
@@ -392,9 +390,6 @@ fn spawn_guest(
             .collect::<Result<Vec<_>, &str>>()
             .map_err(str::to_owned)?;
         command.env("L6_MAIN_KEYS", ids.join(","));
-    }
-    if name == "main" && options.service_audio_queue {
-        command.env("L6_SERVICE_AUDIO_QUEUE", "1");
     }
     if name == "main" && options.trace_sd {
         command.args(["-trace", "sdhci_*"]);
