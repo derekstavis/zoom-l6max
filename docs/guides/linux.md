@@ -14,17 +14,20 @@ Ubuntu; the build was exercised on Ubuntu 26.04 x86_64.
 
 | Purpose | Debian/Ubuntu packages |
 | --- | --- |
-| QEMU build and PulseAudio output | `build-essential pkg-config ninja-build python3 libglib2.0-dev libpixman-1-dev libfdt-dev libpulse-dev` |
+| QEMU build and PulseAudio output | `clang build-essential pkg-config ninja-build python3 libglib2.0-dev libpixman-1-dev libfdt-dev libpulse-dev` |
 | ALSA MIDI bridge (needed to compile `l6max-host`) | `libasound2-dev` |
 | Native UI build (GPUI Wayland backend: fonts, keyboard) | `libfontconfig-dev libxkbcommon-dev` |
 | Native UI at run time (GPUI loads these dynamically) | `libwayland-client0 libxkbcommon0 libfontconfig1 libvulkan1`, plus a Vulkan driver such as `mesa-vulkan-drivers` |
 | MIDI inspection | `alsa-utils` (`aconnect`, `amidi`) |
 
 ```sh
-sudo apt install build-essential pkg-config ninja-build python3 \
+sudo apt install clang build-essential pkg-config ninja-build python3 \
   libglib2.0-dev libpixman-1-dev libfdt-dev libasound2-dev libpulse-dev \
   libfontconfig-dev libxkbcommon-dev alsa-utils
 ```
+
+`qemu-build` compiles QEMU with `clang` on Linux, as on macOS; set `CC` and
+`CXX` to choose a versioned Clang such as `clang-21`.
 
 Also needed, as on macOS: Rust through rustup (`rust-toolchain.toml` selects
 the toolchain), the pinned QEMU submodule, and a locally obtained stock 1.10
