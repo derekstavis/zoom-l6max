@@ -394,8 +394,16 @@ fn run(recipe_path: &Path, options: Options) -> Result<Value, String> {
                         panel.display_ascii(),
                     )
                     .map_err(|e| e.to_string())?;
+                    let display_raw = if display_available {
+                        let filename = format!("{name}.oled");
+                        fs::write(options.logs.join(&filename), panel.display)
+                            .map_err(|e| e.to_string())?;
+                        Some(filename)
+                    } else {
+                        None
+                    };
                     let visible = if actual_model == "l6" { 6 } else { 8 };
-                    json!({"action":"snapshot","name":name,"indicators":status.indicators,"indicator_levels":status.indicator_levels,"ring_levels":&l6max_host::indicators::ring_levels(status.indicator_levels)[..visible],"rings":&rings(status.indicators)[..visible],"display_available":display_available,"display_ascii":format!("{name}.txt")})
+                    json!({"action":"snapshot","name":name,"indicators":status.indicators,"indicator_levels":status.indicator_levels,"ring_levels":&l6max_host::indicators::ring_levels(status.indicator_levels)[..visible],"rings":&rings(status.indicators)[..visible],"display_available":display_available,"display_ascii":format!("{name}.txt"),"display_raw":display_raw})
                 }
                 Step::Memory {
                     name,

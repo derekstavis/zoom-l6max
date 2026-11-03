@@ -38,7 +38,7 @@ the action’s fields are strict; unknown fields fail parsing.
 | `press` | `target`, optional `hold_ms` (default `50`) | Press GPIO target `0..53`; hold is `1..60000` ms. |
 | `button` | `target`, `pressed` | Hold (`true`) or release (`false`) target `0..53` across subsequent steps. A release requires an earlier hold in the same recipe; a hold may remain active until the guest exits. |
 | `encoder` | `channel`, `steps` | One-based channel (L6 `1..6`, L6max `1..8`); signed steps `-1000..1000`, excluding zero. |
-| `snapshot` | `name` | Save guest time, indicator rows/rings, and display text/image observations. |
+| `snapshot` | `name` | Save guest time, indicator rows/rings, a compact display preview and the full display frame when available. |
 | `trace` | `name`, `contains`, optional `limit` (default `100`) | Record up to `limit` matching trace lines; `contains` is a nonempty substring. |
 | `memory` | `name`, `address`, `length` | Read MAIN memory; requires `main_sha256`, length `1..4096`, and a non-overflowing address range. |
 | `memory-write` | `name`, `address`, `bytes` | Write `1..256` bytes to MAIN RAM (`0x80000000..0x82000000`), verify the readback, and report both values. Requires `main_sha256` and `--gdb-socket`; use only with a disposable guest. |
@@ -46,6 +46,33 @@ the action’s fields are strict; unknown fields fail parsing.
 Observation names (`snapshot`, `trace`, `memory`, `memory-write`) must be unique and contain
 only letters, digits, `_`, and `-`. Recipe output includes `diagnostic.json`,
 per-observation artifacts, and raw QEMU logs in the new log directory.
+For an available display, `display_raw` names a 1,024-byte `.oled` file with
+the same native 128×64 packed frame used by `PanelData`; it is null when no
+display frame has been published. The existing `.txt` file remains a 64×32
+preview, and a retained static frame is valid. Pixel `(x, y)` is bit
+`(63 - y) % 8` of byte `((63 - y) / 8) * 128 + x`, for zero-based screen
+coordinates. The raw file is a diagnostic observation, not a timing or
+physical-display qualification.
+
+For example, with Python and Pillow installed, convert a raw frame to a PNG:
+
+```sh
+python3 - /path/to/first.oled /tmp/first.png <<'PY'
+from pathlib import Path
+from PIL import Image
+import sys
+
+frame = Path(sys.argv[1]).read_bytes()
+if len(frame) != 1024:
+    raise ValueError("expected a 1,024-byte OLED frame")
+image = Image.new("L", (128, 64))
+for y in range(64):
+    for x in range(128):
+        bit = (frame[((63 - y) // 8) * 128 + x] >> ((63 - y) % 8)) & 1
+        image.putpixel((x, y), 255 * bit)
+image.save(sys.argv[2])
+PY
+```
 
 `memory-write` is intended for controlled firmware-input probes such as a PWM
 level sweep when rotary timing would add unrelated variation. Keep writes
