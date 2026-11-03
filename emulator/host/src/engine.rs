@@ -470,10 +470,6 @@ impl Engine {
             .env_remove("L6_MODEL")
             .env("L6_DISPLAY_FD", display_fd.to_string())
             .env_remove("L6_EXTERNAL_RAM_FD")
-            .env(
-                "L6_SERVICE_AUDIO_QUEUE",
-                env::var("L6_SERVICE_AUDIO_QUEUE").unwrap_or_else(|_| "1".into()),
-            )
             .env_remove("L6_BUTTON_CONTROL_FILE")
             .env_remove("L6_EXTERNAL_RAM_FILE")
             .env_remove("L6_PANEL_KEYS")

@@ -11,7 +11,7 @@ cargo run --offline --locked -p qemu-run -- \
 ```
 
 Optional flags are `--firmware-dir DIR`, `--audio-device SPEC`, `--seconds N`,
-`--logs DIR`, `--sd-image FILE`, `--trace-sd`, `--service-audio-queue`,
+`--logs DIR`, `--sd-image FILE`, `--trace-sd`,
 repeatable `--button NAME:START_MS:END_MS`, `--panel-key ROW:COL:START_MS:END_MS`,
 `--main-key NAME:START_MS:END_MS`, `--panel-probe ADDRESS:SIZE`, and
 `--probe ADDRESS:SIZE`. Addresses and sizes accept decimal or `0x` hexadecimal

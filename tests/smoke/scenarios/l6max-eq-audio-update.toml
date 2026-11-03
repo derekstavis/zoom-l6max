@@ -1,0 +1,48 @@
+version = 1
+name = "l6max-eq-audio-update"
+models = ["l6max"]
+backends = ["headless"]
+state = "setup-complete"
+card = "empty"
+main_sha256 = "980d92272c1f84bed200b4d2f83575202f6a00082c928d99b9e8b53af8d44461"
+
+[[step]]
+action = "include"
+path = "fragments/prepared-home.toml"
+
+[[step]]
+action = "select-mode"
+mode = "eq-high"
+guest_timeout_ms = 30000
+
+# The mixer starts at neutral; the audio coefficient is the identity filter.
+[[step]]
+action = "expect-memory"
+address = 0x8045ff86
+bytes = [64]
+
+[[step]]
+action = "expect-memory"
+address = 0x20015588
+bytes = [0, 0, 128, 63]
+
+[[step]]
+action = "encoder"
+channel = 1
+steps = -20
+
+[[step]]
+action = "delay"
+guest_ms = 3000
+
+# The firmware's audio task applies this coefficient from its deferred update
+# ring, between audio blocks. These bytes are specific to 1.10.
+[[step]]
+action = "expect-memory"
+address = 0x8045ff86
+bytes = [0]
+
+[[step]]
+action = "expect-memory"
+address = 0x20015588
+bytes = [250, 40, 135, 62, 72, 212, 94, 189, 199, 88, 74, 63]
