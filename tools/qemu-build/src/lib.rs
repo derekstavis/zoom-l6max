@@ -276,7 +276,7 @@ pub fn build(request: &Request) -> Result<PathBuf, String> {
         "--disable-vnc",
         "--disable-tools",
         "--disable-werror",
-        "--enable-fdt=system",
+        "--enable-fdt=auto",
     ]);
     // CI bundles need TCG and the board's peripherals, without unrelated
     // optional host services discovered from the runner's installed libraries.
