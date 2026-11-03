@@ -1,0 +1,6 @@
+# Written by `qemu-build --train-pgo`.
+clang = "21.1.8"
+source = "260cac63afdf4de8697072ea39e03e836c5ca452"
+cases = ["l6max-audio-input", "l6max-eq-audio-update", "l6-audio-input"]
+idle_seconds = 60
+profiles = 5

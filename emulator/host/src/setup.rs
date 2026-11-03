@@ -5,7 +5,7 @@
 //! packaged apps (`Options::auto_setup == false`), which carry their own QEMU and
 //! import firmware through the UI.
 use crate::{engine::Options, paths::repository_root};
-use qemu_build::{Request, build_locked, can_build, default_binary, is_stale};
+use qemu_build::{Optimization, Request, build_locked, can_build, default_binary, is_stale};
 use sha2::{Digest, Sha256};
 use std::{
     fs,
@@ -150,6 +150,7 @@ impl Options {
                     source: None,
                     minimal: false,
                     plugins: false,
+                    optimization: Optimization::Standard,
                 }) {
                     eprintln!("Rebuilding QEMU failed ({error}); using the existing build.");
                 }
@@ -165,6 +166,7 @@ impl Options {
                         source: None,
                         minimal: false,
                         plugins: false,
+                        optimization: Optimization::Standard,
                     })
                     .map_err(|e| format!("could not build QEMU: {e}"))?,
                 );
