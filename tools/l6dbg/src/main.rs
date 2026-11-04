@@ -2,6 +2,7 @@
 mod input;
 mod midi;
 mod popup_trigger;
+mod usb;
 use l6max_diagnostics::gdb::Gdb;
 use l6max_host::{engine::Options, headless::Headless, indicators::rings, panel::PanelData};
 use serde::Deserialize;
@@ -42,12 +43,18 @@ enum Step {
         position_ms: i32,
     },
     Press {
-        target: u32,
+        #[serde(default)]
+        target: Option<u32>,
+        #[serde(default)]
+        control: Option<String>,
         #[serde(default = "hold")]
         hold_ms: u32,
     },
     Button {
-        target: u32,
+        #[serde(default)]
+        target: Option<u32>,
+        #[serde(default)]
+        control: Option<String>,
         pressed: bool,
     },
     Encoder {
@@ -80,6 +87,24 @@ enum Step {
         #[serde(default = "trace_limit")]
         limit: usize,
     },
+    UsbDescriptors {
+        name: String,
+        #[serde(default = "usb_timeout_ms")]
+        guest_timeout_ms: u32,
+    },
+    UsbControl {
+        name: String,
+        setup: [u8; 8],
+    },
+    UsbMidi {
+        name: String,
+        #[serde(default)]
+        cable: u8,
+        #[serde(default)]
+        send: Vec<u8>,
+        #[serde(default = "listen_ms")]
+        listen_ms: u32,
+    },
 }
 
 #[derive(Deserialize)]
@@ -99,6 +124,12 @@ fn trace_limit() -> usize {
 fn call_timeout_ms() -> u32 {
     2_000
 }
+fn usb_timeout_ms() -> u32 {
+    60_000
+}
+fn listen_ms() -> u32 {
+    1_000
+}
 
 impl Recipe {
     fn load(path: &Path) -> Result<Self, String> {
@@ -106,7 +137,7 @@ impl Recipe {
         Self::parse(&text)
     }
     fn parse(text: &str) -> Result<Self, String> {
-        let recipe: Self = toml::from_str(&text).map_err(|e| e.to_string())?;
+        let mut recipe: Self = toml::from_str(&text).map_err(|e| e.to_string())?;
         if recipe.version != 1
             || !["l6", "l6max"].contains(&recipe.model.as_str())
             || recipe.step.is_empty()
@@ -119,6 +150,25 @@ impl Recipe {
                     .into(),
             );
         }
+        let model = match recipe.model.as_str() {
+            "l6" => l6fw::Model::L6,
+            _ => l6fw::Model::L6max,
+        };
+        for step in &mut recipe.step {
+            if let Step::Press {
+                target, control, ..
+            }
+            | Step::Button {
+                target, control, ..
+            } = step
+            {
+                *target = Some(match (*target, control.as_deref()) {
+                    (Some(target), None) => target,
+                    (None, Some(control)) => l6max_host::controls::control_target(model, control)?,
+                    _ => return Err("input steps need exactly one of target or control".into()),
+                });
+            }
+        }
         let mut names = BTreeSet::new();
         let mut held_targets = BTreeSet::new();
         for step in &recipe.step {
@@ -127,7 +177,10 @@ impl Recipe {
             | Step::Memory { name, .. }
             | Step::MemoryWrite { name, .. }
             | Step::FirmwareCall { name, .. }
-            | Step::Trace { name, .. } = step
+            | Step::Trace { name, .. }
+            | Step::UsbDescriptors { name, .. }
+            | Step::UsbControl { name, .. }
+            | Step::UsbMidi { name, .. } = step
             {
                 if !names.insert(name) {
                     return Err("observation names must be unique".into());
@@ -195,6 +248,36 @@ impl Recipe {
                     }
                 }
                 Step::Snapshot { name } => validate_name(name)?,
+                Step::UsbDescriptors {
+                    name,
+                    guest_timeout_ms,
+                } => {
+                    validate_name(name)?;
+                    if *guest_timeout_ms == 0 || *guest_timeout_ms > 600_000 {
+                        return Err(
+                            "usb-descriptors timeout must be 1..600000 guest milliseconds".into(),
+                        );
+                    }
+                }
+                Step::UsbControl { name, setup } => {
+                    validate_name(name)?;
+                    if setup[0] & 0x80 == 0 && (setup[6] != 0 || setup[7] != 0) {
+                        return Err(
+                            "usb-control supports IN requests and OUT requests without data".into(),
+                        );
+                    }
+                }
+                Step::UsbMidi {
+                    name,
+                    cable,
+                    send,
+                    listen_ms,
+                } => {
+                    validate_name(name)?;
+                    if *cable > 15 || send.len() > 4096 || *listen_ms > 60_000 {
+                        return Err("usb-midi needs cable 0..15, at most 4096 bytes and listen_ms up to 60000".into());
+                    }
+                }
                 Step::Trace {
                     name,
                     contains,
@@ -224,10 +307,18 @@ fn validate_input(step: &Step, model: &str, held: &mut BTreeSet<u32>) -> Result<
         {
             Err("audio input position must be nonnegative and is only valid for seek".into())
         }
-        Step::Press { target, hold_ms } if *target >= 54 || *hold_ms == 0 || *hold_ms > 60_000 => {
+        Step::Press {
+            target: Some(target),
+            hold_ms,
+            ..
+        } if *target >= 54 || *hold_ms == 0 || *hold_ms > 60_000 => {
             Err("invalid input target or hold".into())
         }
-        Step::Button { target, pressed } => validate_button(held, *target, *pressed),
+        Step::Button {
+            target: Some(target),
+            pressed,
+            ..
+        } => validate_button(held, *target, *pressed),
         Step::Encoder { channel, steps }
             if *channel == 0
                 || *channel > if model == "l6" { 6 } else { 8 }
@@ -306,6 +397,90 @@ fn wait(guest: &Headless, ms: u32, deadline: Instant) -> Result<(), String> {
     }
     Ok(())
 }
+/// Enumerate the device once the firmware's controller runs, then read every
+/// string it references plus the optional descriptors a host may request.
+fn usb_descriptors(
+    guest: &Headless,
+    options: &Options,
+    name: &str,
+    guest_timeout_ms: u32,
+    deadline: Instant,
+) -> Result<(Value, l6max_host::usb::Configuration), String> {
+    let usb = guest.engine.usb.as_ref().ok_or("USB backend unavailable")?;
+    usb.connect(true).map_err(|e| e.to_string())?;
+    let start = guest.guest_ms();
+    while !usb.controller_running().map_err(|e| e.to_string())? {
+        if Instant::now() >= deadline || guest.guest_ms().wrapping_sub(start) > guest_timeout_ms {
+            return Err("USB device controller did not start".into());
+        }
+        wait(guest, 25, deadline)?;
+    }
+    let (device, config, configuration) = usb
+        .enumerate_with_descriptors()
+        .map_err(|e| e.to_string())?;
+    fs::write(options.logs.join(format!("{name}-device.bin")), &device)
+        .map_err(|e| e.to_string())?;
+    fs::write(options.logs.join(format!("{name}-config.bin")), &config)
+        .map_err(|e| e.to_string())?;
+    let decoded_device = usb::device(&device)?;
+    let decoded = usb::configuration(&config)?;
+    let mut indices: BTreeSet<u8> = decoded["strings"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|v| v.as_u64().map(|v| v as u8))
+        .collect();
+    indices.extend(
+        [14, 15, 16]
+            .iter()
+            .map(|&offset| device[offset])
+            .filter(|&index| index != 0),
+    );
+    let request = |setup: [u8; 8]| match usb.control(setup) {
+        Ok(data) => json!({"bytes":data}),
+        Err(error) => json!({"error":error.to_string()}),
+    };
+    let languages = request([0x80, 6, 0, 3, 0, 0, 0xff, 0]);
+    let language = languages["bytes"]
+        .as_array()
+        .filter(|bytes| bytes.len() >= 4)
+        .map(|bytes| {
+            [
+                bytes[2].as_u64().unwrap() as u8,
+                bytes[3].as_u64().unwrap() as u8,
+            ]
+        })
+        .unwrap_or([0x09, 0x04]);
+    let strings: serde_json::Map<String, Value> = indices
+        .iter()
+        .map(|&index| {
+            let setup = [0x80, 6, index, 3, language[0], language[1], 0xff, 0];
+            let value = match usb.control(setup) {
+                Ok(bytes) => usb::string(&bytes)
+                    .map(Value::from)
+                    .unwrap_or_else(|e| json!({"error":e})),
+                Err(error) => json!({"error":error.to_string()}),
+            };
+            (index.to_string(), value)
+        })
+        .collect();
+    Ok((
+        json!({
+            "action":"usb-descriptors",
+            "name":name,
+            "device":decoded_device,
+            "configuration":decoded,
+            "languages":languages,
+            "strings":strings,
+            "device_qualifier":request([0x80, 6, 0, 6, 0, 0, 10, 0]),
+            "other_speed_configuration":request([0x80, 6, 0, 7, 0, 0, 0xff, 0]),
+            "bos":request([0x80, 6, 0, 0x0f, 0, 0, 0xff, 0]),
+            "device_file":format!("{name}-device.bin"),
+            "configuration_file":format!("{name}-config.bin"),
+        }),
+        configuration,
+    ))
+}
 fn connect_gdb(path: &Path, deadline: Instant) -> Result<Gdb, String> {
     let mut last_error = None;
     while Instant::now() < deadline {
@@ -370,6 +545,7 @@ fn run(recipe_path: &Path, options: Options) -> Result<Value, String> {
         }
     }
     let mut events = Vec::new();
+    let mut midi = None;
     let outcome = (|| -> Result<(), String> {
         for (index, step) in recipe.step.iter().enumerate() {
             if Instant::now() >= deadline {
@@ -418,12 +594,20 @@ fn run(recipe_path: &Path, options: Options) -> Result<Value, String> {
                     }
                     json!({"action":"audio-input-transport","command":name,"position_ms":position_ms,"sequence":sequence})
                 }
-                Step::Press { target, hold_ms } => {
+                Step::Press {
+                    target: Some(target),
+                    hold_ms,
+                    ..
+                } => {
                     inputs.tap(*target, *hold_ms).map_err(|e| e.to_string())?;
                     wait(&guest, hold_ms.saturating_add(100), deadline)?;
                     json!({"action":"press","target":target,"hold_ms":hold_ms})
                 }
-                Step::Button { target, pressed } => {
+                Step::Button {
+                    target: Some(target),
+                    pressed,
+                    ..
+                } => {
                     if *pressed {
                         inputs.down(*target, 50)
                     } else {
@@ -517,6 +701,65 @@ fn run(recipe_path: &Path, options: Options) -> Result<Value, String> {
                     let stop = call_result?;
                     resume_result?;
                     json!({"action":"firmware-call","name":name,"address":format!("{address:#010x}"),"args":args,"stop":stop})
+                }
+                Step::Press { target: None, .. } | Step::Button { target: None, .. } => {
+                    unreachable!("recipe parsing resolves input targets")
+                }
+                Step::UsbDescriptors {
+                    name,
+                    guest_timeout_ms,
+                } => {
+                    let (evidence, configuration) =
+                        usb_descriptors(&guest, &options, name, *guest_timeout_ms, deadline)?;
+                    midi = configuration.midi;
+                    evidence
+                }
+                Step::UsbMidi {
+                    name,
+                    cable,
+                    send,
+                    listen_ms,
+                } => {
+                    let usb = guest.engine.usb.as_ref().ok_or("USB backend unavailable")?;
+                    let endpoints =
+                        midi.ok_or("usb-midi needs a preceding usb-descriptors step")?;
+                    let packets = l6max_host::usb_midi::Encoder::default().push(*cable, send);
+                    if !packets.is_empty() {
+                        usb.send(endpoints.output, &packets)
+                            .map_err(|e| e.to_string())?;
+                    }
+                    let start = guest.guest_ms();
+                    let mut received = Vec::new();
+                    // Mode setters restart the firmware's USB device; the
+                    // detach ends the listening window.
+                    let mut detached = false;
+                    while guest.guest_ms().wrapping_sub(start) < *listen_ms {
+                        match usb.try_receive(endpoints.input, 16384) {
+                            Ok(bytes) => received.extend(bytes),
+                            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                                wait(&guest, 5, deadline)?
+                            }
+                            Err(e) if e.raw_os_error() == Some(libc::ENODEV) => {
+                                detached = true;
+                                break;
+                            }
+                            Err(e) => return Err(e.to_string()),
+                        }
+                    }
+                    let messages: Vec<_> = l6max_host::usb_midi::decode(&received)
+                        .map_err(|e| e.to_string())?
+                        .into_iter()
+                        .map(|(cable, bytes)| json!({"cable":cable,"bytes":bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()}))
+                        .collect();
+                    json!({"action":"usb-midi","name":name,"cable":cable,"sent":send.len(),"received":messages,"detached":detached})
+                }
+                Step::UsbControl { name, setup } => {
+                    let usb = guest.engine.usb.as_ref().ok_or("USB backend unavailable")?;
+                    let (data, error) = match usb.control(*setup) {
+                        Ok(data) => (Some(data), None),
+                        Err(error) => (None, Some(error.to_string())),
+                    };
+                    json!({"action":"usb-control","name":name,"setup":setup,"data":data,"error":error})
                 }
                 Step::Trace {
                     name,
@@ -677,5 +920,54 @@ mod tests {
         assert!(Recipe::parse(&format!("{header}{up}")).is_err());
         assert!(Recipe::parse(&format!("{header}{down}{down}")).is_err());
         assert!(Recipe::parse(&format!("{header}{}", down.replace("47", "54"))).is_err());
+    }
+
+    #[test]
+    fn inputs_accept_semantic_control_names() {
+        let header = "version=1\nmodel='l6max'\n[[step]]\naction='press'\n";
+        assert!(Recipe::parse(&format!("{header}control='recorder.confirm'\n")).is_ok());
+        assert!(Recipe::parse(&format!("{header}control='no-such-control'\n")).is_err());
+        assert!(Recipe::parse(&format!("{header}target=3\ncontrol='recorder.confirm'\n")).is_err());
+        assert!(Recipe::parse(header).is_err());
+        let held = "version=1\nmodel='l6max'\n[[step]]\naction='button'\ncontrol='recorder.menu'\npressed=true\n[[step]]\naction='button'\ntarget=0\npressed=false\n";
+        assert!(Recipe::parse(held).is_ok());
+    }
+
+    #[test]
+    fn usb_steps_validate_requests() {
+        let header = "version=1\nmodel='l6max'\n[[step]]\n";
+        assert!(
+            Recipe::parse(&format!(
+                "{header}action='usb-descriptors'\nname='normal'\n"
+            ))
+            .is_ok()
+        );
+        assert!(
+            Recipe::parse(&format!(
+                "{header}action='usb-descriptors'\nname='normal'\nguest_timeout_ms=0\n"
+            ))
+            .is_err()
+        );
+        assert!(
+            Recipe::parse(&format!(
+                "{header}action='usb-control'\nname='q'\nsetup=[128,6,0,6,0,0,10,0]\n"
+            ))
+            .is_ok()
+        );
+        assert!(
+            Recipe::parse(&format!(
+                "{header}action='usb-control'\nname='q'\nsetup=[0,9,1,0,0,0,1,0]\n"
+            ))
+            .is_err()
+        );
+        assert!(
+            Recipe::parse(&format!(
+                "{header}action='usb-midi'\nname='id'\ncable=2\nsend=[240,126,0,6,1,247]\n"
+            ))
+            .is_ok()
+        );
+        assert!(
+            Recipe::parse(&format!("{header}action='usb-midi'\nname='id'\ncable=16\n")).is_err()
+        );
     }
 }
