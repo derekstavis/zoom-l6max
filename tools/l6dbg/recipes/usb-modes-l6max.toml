@@ -1,0 +1,87 @@
+# USB descriptors in each firmware USB mode: normal, audio interface mode
+# (editor setter 18) and SD card reader mode (editor setter 09).
+version = 1
+model = "l6max"
+wall_timeout_s = 900
+
+# First boot: confirm setup twice, as the tooling's USB scenario does.
+[[step]]
+action = "wait"
+guest_ms = 15000
+
+[[step]]
+action = "snapshot"
+name = "boot"
+
+[[step]]
+action = "press"
+control = "recorder.confirm"
+
+[[step]]
+action = "wait"
+guest_ms = 2000
+
+[[step]]
+action = "press"
+control = "recorder.confirm"
+
+[[step]]
+action = "wait"
+guest_ms = 5000
+
+[[step]]
+action = "snapshot"
+name = "home"
+
+[[step]]
+action = "usb-descriptors"
+name = "normal"
+
+# Editor session on cable 2: identity, then the global dump moves to state 2.
+[[step]]
+action = "usb-midi"
+name = "identity"
+cable = 2
+send = [0xf0, 0x7e, 0x00, 0x06, 0x01, 0xf7]
+
+[[step]]
+action = "usb-midi"
+name = "global-dump"
+cable = 2
+send = [0xf0, 0x52, 0x00, 0x00, 0x2b, 0xf7]
+listen_ms = 2000
+
+[[step]]
+action = "usb-midi"
+name = "audio-if-mode"
+cable = 2
+send = [0xf0, 0x52, 0x00, 0x00, 0x31, 0x18, 0x01, 0xf7]
+listen_ms = 3000
+
+[[step]]
+action = "usb-descriptors"
+name = "audio-if"
+
+[[step]]
+action = "usb-midi"
+name = "identity-2"
+cable = 2
+send = [0xf0, 0x7e, 0x00, 0x06, 0x01, 0xf7]
+
+[[step]]
+action = "usb-midi"
+name = "global-dump-2"
+cable = 2
+send = [0xf0, 0x52, 0x00, 0x00, 0x2b, 0xf7]
+listen_ms = 2000
+
+[[step]]
+action = "usb-midi"
+name = "card-reader-mode"
+cable = 2
+send = [0xf0, 0x52, 0x00, 0x00, 0x31, 0x09, 0x01, 0xf7]
+listen_ms = 3000
+
+[[step]]
+action = "usb-descriptors"
+name = "card-reader"

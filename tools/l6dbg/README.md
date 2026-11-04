@@ -4,7 +4,7 @@ The maintained user and agent reference is
 [`docs/development/tools/l6dbg.md`](../../docs/development/tools/l6dbg.md). It
 documents all recipe fields and focused subcommands (`input`, `midi`,
 and `popup-trigger`). This directory contains the checked-in
-example recipe and its implementation.
+example recipe, observation recipes in `recipes/` and the implementation.
 
 `l6dbg` runs a headless emulator and records observations from a TOML
 recipe. It is intended for investigating behavior; its successful exit means
