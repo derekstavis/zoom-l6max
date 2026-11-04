@@ -12,6 +12,13 @@ cargo run --offline --locked -p l6dbg -- tools/l6dbg/example.toml \
   --firmware-dir /path/to/unpacked-firmware --logs /tmp/l6-diagnostic
 ```
 
+Checked-in recipes in `tools/l6dbg/recipes/` record black-box observations
+that documentation cites, such as
+[`usb-modes-l6max.toml`](../../../tools/l6dbg/recipes/usb-modes-l6max.toml)
+for the [L6max USB modes](../../emulator/usb.md#l6max-usb-modes). A
+first-boot recipe confirms setup with two `recorder.confirm` presses before
+USB starts.
+
 Use `--volatile` or a disposable `--state-dir`. The guest can modify persistent
 state. `--logs` must name a new directory so previous evidence is preserved.
 Additional host engine options, such as `--sd-image` and
