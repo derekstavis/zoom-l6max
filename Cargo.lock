@@ -2904,6 +2904,7 @@ dependencies = [
  "l6fw",
  "l6max-diagnostics",
  "l6max-host",
+ "libc",
  "serde",
  "serde_json",
  "sha2",
