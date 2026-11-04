@@ -37,12 +37,49 @@ Create only the files the patch needs. A change to existing instructions may
 not need a compiled payload or linker script. Keep patch-specific bindings and
 trampolines with that patch: their addresses depend on the target firmware.
 
+## Heap headroom
+
+Both 1.10 MAIN images run a FreeRTOS heap_4 allocator: 511,984 usable bytes on
+L6 and 511,992 on L6max. Emulator observations, from a setup-complete state:
+
+| Model | Firmware and activity | Free | Lowest free | Allocations | Frees |
+| --- | --- | --- | --- | --- | --- |
+| L6 | Stock: idle, recording a take, playing it back | 163,104 | 163,104 | 203 → 205 | 1 → 3 |
+| L6 | midi-sync: idle, recording, playback | 163,104 | 163,104 | 203 → 205 | 1 → 3 |
+| L6 | midi-sync with encoder turns, recording and playback (`l6-patch-heap`) | 163,104 | 163,104 | 205 | 3 |
+| L6max | Stock: idle, recording a take, playing it back | 160,008 | 160,008 | 197 | 0 |
+| L6max | Stock after switching to the USB card reader | 157,568 | 157,568 | — | — |
+| L6max | All three patches: idle, recording, playback | 159,960 | 159,960 | 198 | 0 |
+| L6max | All three patches with knob popups, recording and playback (`l6max-patch-heap`) | 159,960 | 158,160 | 199 | 1 |
+
+L6 allocates and frees one block each when recording starts and when playback
+starts; L6max allocates only at start-up in these runs. A patch that allocates
+from this heap shares it with the firmware, so measure its lowest point while
+the patch is busy:
+
+- `l6dbg`'s `heap` step reports the counters at any point in a recipe.
+  [`heap-load-l6.toml`](../tools/l6dbg/recipes/heap-load-l6.toml) and
+  [`heap-load-l6max.toml`](../tools/l6dbg/recipes/heap-load-l6max.toml) take
+  them at idle, while recording and during playback; add `--patch NAME` to
+  measure a patch.
+- `l6test`'s `expect-heap` step fails a scenario whose lowest point falls below
+  `minimum_free`. The `l6-patch-heap` and `l6max-patch-heap` cases run every
+  patch for their model together and require 128 KiB to stay free; extend
+  them, or add a case, for a patch that allocates.
+
+Both read the counters only after checking that the model's `pvPortMalloc` and
+`vPortFree` match their 1.10 code in guest memory (L6 `0x8006de78` and
+`0x80073f48`, L6max `0x80085478` and `0x8008e588`), so they work on any patched
+image that leaves the allocator alone. Sound-pad playback and card-reader
+transfers have not been measured.
+
 ## Adding a patch
 
 1. Create `patches/<patch-name>/` and describe its purpose, supported input
    firmware hash, changed code/data, build command, and validation commands.
 2. Put payload code in `src/` and placement rules in `linker/`. Document space
-   limits and any RAM allocation or persistence behavior.
+   limits and any RAM allocation or persistence behavior. Check heap use as
+   described in [heap headroom](#heap-headroom).
 3. Add a Rust builder crate under `tools/<patch-builder>/` (or explicitly
    extend an existing builder). Validate the input hash and displaced-region hashes,
    reject overlapping or out-of-slot writes, and require a new output directory.

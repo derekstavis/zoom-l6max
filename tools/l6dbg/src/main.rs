@@ -74,6 +74,9 @@ enum Step {
         address: u32,
         bytes: Vec<u8>,
     },
+    Heap {
+        name: String,
+    },
     FirmwareCall {
         name: String,
         address: u32,
@@ -176,6 +179,7 @@ impl Recipe {
             if let Step::Snapshot { name }
             | Step::Memory { name, .. }
             | Step::MemoryWrite { name, .. }
+            | Step::Heap { name }
             | Step::FirmwareCall { name, .. }
             | Step::Trace { name, .. }
             | Step::UsbDescriptors { name, .. }
@@ -248,6 +252,7 @@ impl Recipe {
                     }
                 }
                 Step::Snapshot { name } => validate_name(name)?,
+                Step::Heap { name } => validate_name(name)?,
                 Step::UsbDescriptors {
                     name,
                     guest_timeout_ms,
@@ -503,7 +508,8 @@ fn connect_gdb(path: &Path, deadline: Instant) -> Result<Gdb, String> {
 fn run(recipe_path: &Path, options: Options) -> Result<Value, String> {
     let recipe = Recipe::load(recipe_path)?;
     let main = main_image(&options)?;
-    let actual_model = match l6fw::model_from_main(&main)? {
+    let firmware_model = l6fw::model_from_main(&main)?;
+    let actual_model = match firmware_model {
         l6fw::Model::L6 => "l6",
         l6fw::Model::L6max => "l6max",
     };
@@ -657,6 +663,10 @@ fn run(recipe_path: &Path, options: Options) -> Result<Value, String> {
                         .read_memory(0, *address, *length)
                         .map_err(|e| e.to_string())?;
                     json!({"action":"memory","name":name,"address":format!("{address:#010x}"),"bytes":data})
+                }
+                Step::Heap { name } => {
+                    let heap = l6max_host::heap::read(&guest.engine.management[0], firmware_model)?;
+                    json!({"action":"heap","name":name,"heap":heap,"peak_used":heap.peak_used()})
                 }
                 Step::MemoryWrite {
                     name,
@@ -943,6 +953,15 @@ mod tests {
         assert!(Recipe::parse(header).is_err());
         let held = "version=1\nmodel='l6max'\n[[step]]\naction='button'\ncontrol='recorder.menu'\npressed=true\n[[step]]\naction='button'\ntarget=0\npressed=false\n";
         assert!(Recipe::parse(held).is_ok());
+    }
+
+    #[test]
+    fn heap_needs_no_hash_on_either_model() {
+        for model in ["l6", "l6max"] {
+            let recipe =
+                format!("version=1\nmodel='{model}'\n[[step]]\naction='heap'\nname='idle'\n");
+            assert!(Recipe::parse(&recipe).is_ok());
+        }
     }
 
     #[test]

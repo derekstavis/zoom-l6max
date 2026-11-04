@@ -222,6 +222,9 @@ pub enum Action {
         address: u32,
         bytes: Vec<u8>,
     },
+    ExpectHeap {
+        minimum_free: u32,
+    },
     HoldChord {
         controls: Vec<String>,
         duration_ms: u32,
@@ -741,6 +744,15 @@ impl Scenario {
                     }
                 }
             }
+            if let Action::ExpectHeap { minimum_free } = &step.action {
+                if *minimum_free == 0
+                    || [l6fw::Model::L6, l6fw::Model::L6max]
+                        .iter()
+                        .any(|&model| *minimum_free > l6max_host::heap::size(model))
+                {
+                    return Err("expect-heap minimum_free must be positive and fit the heap".into());
+                }
+            }
             if let Action::ExpectMemory { address, bytes } = &step.action {
                 if bytes.is_empty()
                     || bytes.len() > 4096
@@ -838,6 +850,7 @@ impl Scenario {
                 | Action::L6maxUiPadAssignment { .. }
                 | Action::SoundPadPlayback { .. }
                 | Action::ExpectMemory { .. }
+                | Action::ExpectHeap { .. }
                 | Action::HoldChord { .. }
                 | Action::AudioCallbacks
                 | Action::KnobDialog
