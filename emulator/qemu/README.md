@@ -13,8 +13,10 @@ leaving the upstream submodule clean.
 
 QEMU overlays under patches/ are applied to the staged source during builds.
 The CoreAudio underrun fix, sub-millisecond poll timeouts, a hardfloat
-shortcut for single-precision multiplies by zero, and whole-block SD multi-block
-transfers are maintained there, keeping the pinned upstream submodule pristine.
+shortcut for single-precision multiplies by zero, whole-block SD multi-block
+transfers, and SD multi-block writes collected into one drive write while the
+drive's write cache is on are maintained there, keeping the pinned upstream
+submodule pristine.
 
 - [Board build, model coverage, and diagnostics](../../docs/emulator/board.md)
 - [Control and LED wiring](../../docs/emulator/controls.md)

@@ -115,6 +115,13 @@ fn apply_patches(source: &Path, repository: &Path) -> Result<(), String> {
         "sd-multiblock-transfer.patch",
         "hw/sd/sd.c",
         &["Take what fits in the current block"],
+    )?;
+    apply_patch(
+        source,
+        repository,
+        "sd-write-coalescing.patch",
+        "hw/sd/sd.c",
+        &["sd_blk_write_multiple"],
     )
 }
 
