@@ -6,7 +6,8 @@
 
 `.github/workflows/ci.yml` runs for pull requests, pushes to `main`, and manual
 dispatch. It also provides the reusable checks used by the release workflow.
-The Apple silicon `macos-15` runner uses Xcode 26.3 and the repository's pinned
+The Apple silicon `macos-26` runner uses Xcode 26.3, a macOS 15.0 deployment
+target and the repository's pinned
 Rust toolchain. Official GitHub actions are pinned to commit IDs.
 
 - Rust formatting, all-target workspace checks, and workspace unit tests, including
