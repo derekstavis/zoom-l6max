@@ -36,20 +36,24 @@ the action’s fields are strict; unknown fields fail parsing.
 | --- | --- | --- |
 | `wait` | `guest_ms` | Wait for the requested guest time (`1..600000` ms). |
 | `audio-input-transport` | `command`, optional `position_ms` | Play, pause, stop or seek prepared audio input; waits for the emulator's acknowledgement. `command` is `play`, `pause`, `stop`, or `seek`. A nonnegative `position_ms` is allowed only for seek. |
-| `press` | `target`, optional `hold_ms` (default `50`) | Press GPIO target `0..53`; hold is `1..60000` ms. |
-| `button` | `target`, `pressed` | Hold (`true`) or release (`false`) target `0..53` across subsequent steps. A release requires an earlier hold in the same recipe; a hold may remain active until the guest exits. |
+| `press` | `target` or `control`, optional `hold_ms` (default `50`) | Press GPIO target `0..53`, or the semantic control name scenarios use, such as `recorder.confirm`; hold is `1..60000` ms. |
+| `button` | `target` or `control`, `pressed` | Hold (`true`) or release (`false`) the input across subsequent steps. A release requires an earlier hold in the same recipe; a hold may remain active until the guest exits. |
 | `encoder` | `channel`, `steps` | One-based channel (L6 `1..6`, L6max `1..8`); signed steps `-1000..1000`, excluding zero. |
 | `snapshot` | `name` | Save guest time, indicator rows/rings, a compact display preview and the full display frame when available. |
 | `trace` | `name`, `contains`, optional `limit` (default `100`) | Record up to `limit` matching trace lines; `contains` is a nonempty substring. |
 | `memory` | `name`, `address`, `length` | Read MAIN memory; requires `main_sha256`, length `1..4096`, and a non-overflowing address range. |
 | `memory-write` | `name`, `address`, `bytes` | Write `1..256` bytes to MAIN RAM (`0x80000000..0x82000000`), verify the readback, and report both values. Requires `main_sha256` and `--gdb-socket`; use only with a disposable guest. |
+| `usb-descriptors` | `name`, optional `guest_timeout_ms` (default `60000`) | Wait for the firmware's USB controller, enumerate and configure the device, then read every referenced string plus the device qualifier, other-speed configuration and BOS descriptors. Saves `NAME-device.bin` and `NAME-config.bin` and reports every descriptor decoded, with the endpoint numbers used in each direction. Optional descriptors the device stalls are reported as errors. |
+| `usb-control` | `name`, `setup` | Send one 8-byte control request, IN or OUT without a data stage, and report the data or the error, such as a stall. |
+| `usb-midi` | `name`, optional `cable` (default `0`), `send` bytes, `listen_ms` (default `1000`) | Send MIDI bytes as USB MIDI packets on the configured MIDI OUT endpoint, then collect device-to-host messages for up to `listen_ms` guest milliseconds. A device detach, such as a firmware USB mode change, ends the window and reports `detached`. Needs an earlier `usb-descriptors` step. |
 
 The transport controls prepared channel files in `L6_AUDIO_INPUT_DIR`, or in
 the engine's default audio-input directory. Prepare them using the emulator's
 audio-input workflow; the transport does not create or assign files. See
 [audio input](../../emulator/audio.md#input) for the file and routing model.
 
-Observation names (`snapshot`, `trace`, `memory`, `memory-write`) must be unique and contain
+Observation names (`snapshot`, `trace`, `memory`, `memory-write` and the USB
+actions) must be unique and contain
 only letters, digits, `_`, and `-`. Recipe output includes `diagnostic.json`,
 per-observation artifacts, and raw QEMU logs in the new log directory.
 For an available display, `display_raw` names a 1,024-byte `.oled` file with
