@@ -65,6 +65,9 @@ pub enum Operation {
         address: u32,
         bytes: Vec<u8>,
     },
+    ExpectHeap {
+        minimum_free: u32,
+    },
     HoldChord {
         targets: Vec<u32>,
         duration_ms: u32,
@@ -3433,6 +3436,18 @@ impl State {
                     .into());
                 }
                 Ok(json!({"address":format!("{address:#010x}"),"bytes":actual}))
+            }
+            Operation::ExpectHeap { minimum_free } => {
+                let heap =
+                    l6max_host::heap::read(&session.engine.management[0], session.engine.model())?;
+                if heap.minimum_ever_free < minimum_free {
+                    return Err(format!(
+                        "heap fell to {} free bytes, below the required {minimum_free}: {heap:?}",
+                        heap.minimum_ever_free
+                    )
+                    .into());
+                }
+                Ok(json!({"heap":heap,"peak_used":heap.peak_used()}))
             }
             Operation::HoldChord {
                 targets,

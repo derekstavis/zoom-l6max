@@ -1,0 +1,91 @@
+version = 1
+name = "l6-patch-heap"
+models = ["l6"]
+backends = ["headless"]
+state = "setup-complete"
+patches = ["midi-sync"]
+card = "empty"
+
+# The L6 patch through encoder turns, a recorded take and its playback. The
+# heap's lowest point must leave 128 KiB free.
+[[step]]
+action = "wait"
+until = "boot-ready"
+guest_timeout_ms = 600000
+wall_timeout_s = 1800
+
+[[step]]
+action = "encoder"
+channel = 1
+steps = 4
+
+[[step]]
+action = "delay"
+guest_ms = 1000
+guest_timeout_ms = 5000
+wall_timeout_s = 60
+
+[[step]]
+action = "encoder"
+channel = 6
+steps = -4
+
+[[step]]
+action = "delay"
+guest_ms = 3000
+guest_timeout_ms = 10000
+wall_timeout_s = 120
+
+# Record starts and stops a take.
+[[step]]
+action = "press"
+control = "rec-record"
+guest_timeout_ms = 30000
+wall_timeout_s = 60
+
+[[step]]
+action = "expect-card-entry"
+path = "RECORDER"
+wall_timeout_s = 60
+
+[[step]]
+action = "delay"
+guest_ms = 10000
+guest_timeout_ms = 30000
+wall_timeout_s = 300
+
+[[step]]
+action = "press"
+control = "rec-record"
+guest_timeout_ms = 30000
+wall_timeout_s = 60
+
+[[step]]
+action = "delay"
+guest_ms = 3000
+guest_timeout_ms = 10000
+wall_timeout_s = 120
+
+[[step]]
+action = "press"
+control = "play"
+
+[[step]]
+action = "delay"
+guest_ms = 5000
+guest_timeout_ms = 15000
+wall_timeout_s = 300
+
+[[step]]
+action = "press"
+control = "play"
+
+[[step]]
+action = "delay"
+guest_ms = 2000
+guest_timeout_ms = 10000
+wall_timeout_s = 120
+
+[[step]]
+action = "expect-heap"
+minimum_free = 131072

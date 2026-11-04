@@ -471,6 +471,11 @@ impl Runner {
                         bytes,
                     }));
                 }
+                Action::ExpectHeap { minimum_free } => {
+                    return Ok(Progress::Device(devices::Operation::ExpectHeap {
+                        minimum_free,
+                    }));
+                }
                 Action::HoldChord {
                     controls,
                     duration_ms,
