@@ -63,11 +63,7 @@ impl RenderOnce for Button {
             on_press,
             on_release,
         } = self;
-        let face = if symbol.as_deref() == Some("record") {
-            0xd5d8dc
-        } else {
-            lit_color.unwrap_or(0xd5d8dc)
-        };
+        let face = lit_color.unwrap_or(0xd5d8dc);
         let control = div()
             .relative()
             .flex()
@@ -120,7 +116,7 @@ impl RenderOnce for Button {
                     .w(px(h * 0.43))
                     .h(px(h * 0.43))
                     .rounded_full()
-                    .bg(rgb(lit_color.unwrap_or(0xcd1930))),
+                    .bg(rgb(0xcd1930)),
             ),
             Some("usb") if !label.is_empty() => content
                 .flex_col()

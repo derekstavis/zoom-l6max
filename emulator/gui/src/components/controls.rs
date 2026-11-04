@@ -180,3 +180,8 @@ fn circle(window: &mut Window, center: Point<Pixels>, radius: f32, color: u32) {
 pub fn led(size: f32, color: Option<u32>) -> impl gpui::IntoElement {
     super::indicator_led::IndicatorLed::new(size, color)
 }
+
+/// A lamp color at sampled PWM brightness; see `indicator_led::lit`.
+pub fn lit(on: u32, level: u8) -> Option<u32> {
+    super::indicator_led::lit(on, level)
+}

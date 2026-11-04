@@ -231,6 +231,30 @@ pub fn leds(rows: [u32; 8]) -> [bool; 72] {
     LED_PINS.map(|(row, column)| rows[row] & (1 << (column ^ 7)) != 0)
 }
 
+/// Sampled red and green duty of each channel SIGNAL lamp. Both models use
+/// the same matrix positions; L6 uses the first six. Green duty steps up with
+/// input level; red lights for full-scale input and turns green off.
+pub fn signal_levels(levels: [[u8; 24]; 8]) -> [[u8; 2]; 8] {
+    std::array::from_fn(|channel| {
+        [44, 52].map(|index| {
+            let (row, column) = LED_PINS[index + channel];
+            levels[row][(column ^ 7) as usize]
+        })
+    })
+}
+
+/// L6max logical LED of the Play/Stop lamp, lit during playback.
+pub const L6MAX_PLAY_LED: usize = 31;
+
+/// L6max logical LED of the Bounce lamp.
+pub const L6MAX_BOUNCE_LED: usize = 32;
+
+/// The L6max Record lamp is MAIN GPIO1 bit 28, driven low while recording.
+/// A zero latch means MAIN has not configured GPIO1 yet.
+pub fn l6max_record_led(main_gpio: [u32; 5]) -> bool {
+    main_gpio[0] != 0 && main_gpio[0] & (1 << 28) == 0
+}
+
 /// L6 MASTER meter segments in bottom-to-top order, as observed in the
 /// panel's 16-bit shift register. Unlike the L6max matrix, these columns
 /// occupy the upper byte of the sampled latch.
@@ -325,6 +349,17 @@ pub fn l6_record_led(rows: [u32; 8]) -> bool {
     rows[1] & (1 << 10) != 0
 }
 
+/// L6 Play/Stop lamp, observed during recorder playback.
+pub fn l6_play_led(rows: [u32; 8]) -> bool {
+    rows[7] & (1 << 9) != 0
+}
+
+/// L6 TAP lamp, which blinks at the delay tempo while Delay or Echo is
+/// selected.
+pub fn l6_tap_led(rows: [u32; 8]) -> bool {
+    rows[0] & (1 << 13) != 0
+}
+
 #[cfg(test)]
 mod l6_tests {
     use super::*;
@@ -394,6 +429,42 @@ mod l6_tests {
             assert_eq!(l6_scene_leds(rows), expected);
         }
         assert_eq!(l6_scene_leds([0; 8]), [false; 3]);
+    }
+
+    #[test]
+    fn signal_lamps_read_red_and_green_duty_per_channel() {
+        let mut levels = [[0; 24]; 8];
+        levels[0][6] = 65; // Channel 1 red, as a clipping L6 input sampled.
+        levels[2][7] = 17; // Channel 3 green at a quiet input.
+        let signal = signal_levels(levels);
+        assert_eq!(signal[0], [65, 0]);
+        assert_eq!(signal[2], [0, 17]);
+        assert!(signal[3..].iter().all(|lamp| *lamp == [0, 0]));
+    }
+
+    #[test]
+    fn l6max_record_lamp_is_active_low_main_gpio1_bit_28() {
+        assert!(!l6max_record_led([0; 5]));
+        assert!(!l6max_record_led([0x1000_0004, 0, 0, 0, 0]));
+        assert!(l6max_record_led([0x0000_0004, 0, 0, 0, 0]));
+    }
+
+    #[test]
+    fn l6_play_lamp_uses_its_measured_matrix_bit() {
+        let mut rows = [0; 8];
+        assert!(!l6_play_led(rows));
+        rows[7] = 1 << 9;
+        assert!(l6_play_led(rows));
+    }
+
+    #[test]
+    fn l6_tap_lamp_is_separate_from_the_effect_lamps() {
+        let mut rows = [0; 8];
+        rows[0] = 1 << 13;
+        assert!(l6_tap_led(rows));
+        assert_eq!(l6_effect_leds(rows), [false; 5]);
+        rows[0] = 1 << 12;
+        assert!(!l6_tap_led(rows));
     }
 
     #[test]

@@ -76,6 +76,8 @@ struct Snapshot {
     indicator_levels: Vec<Vec<u8>>,
     switches: Vec<bool>,
     analog: Vec<u16>,
+    #[serde(default)]
+    main_gpio: [u32; 5],
     powered: bool,
     display: Vec<u8>,
 }
@@ -130,6 +132,7 @@ pub fn render(args: &[String]) -> Result<(), String> {
             indicator_levels,
             switches,
             analog,
+            main_gpio: snapshot.main_gpio,
             powered: snapshot.powered,
             display,
         }
@@ -145,6 +148,7 @@ pub fn render(args: &[String]) -> Result<(), String> {
             indicator_levels: [[0; 24]; 8],
             switches: [false; 54],
             analog: [512; 5],
+            main_gpio: [0; 5],
             powered,
             display: [0; 1024],
         }

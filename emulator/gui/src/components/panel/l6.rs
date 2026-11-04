@@ -59,6 +59,8 @@ pub fn panel(
     let effect_leds = indicators::l6_effect_leds(rows);
     let mode_leds = indicators::l6_mode_leds(rows);
     let scene_leds = indicators::l6_scene_leds(rows);
+    let signal = indicators::signal_levels(indicator_levels)
+        .map(|lamp| lamp.map(|measured| normalize_pwm(measured, SIGNAL_FULL_SCALE)));
     let mut panel = div()
         .relative()
         .size_full()
@@ -230,7 +232,7 @@ pub fn panel(
             .child(at_local(
                 Region::centered(center, 322.0, 11.0, 11.0),
                 s,
-                controls::led(11.0 * s, None),
+                controls::led(11.0 * s, super::l6max::signal_color(signal[index])),
             ))
             .child(at_local(
                 layout.knobs[index],
@@ -520,7 +522,14 @@ pub fn panel(
             ],
             s,
         ))
-        .child(button_at(layout, 48, s, "TAP", None, None));
+        .child(button_at(
+            layout,
+            48,
+            s,
+            "TAP",
+            None,
+            indicators::l6_tap_led(rows).then_some(0xf59a52),
+        ));
     panel = panel.child(super::effects::effects_legend(
         s,
         [
@@ -564,7 +573,7 @@ pub fn panel(
             s,
             "COMP",
             None,
-            button_leds[10].then_some(0xf59a52),
+            button_leds[10].then_some(0x60c873),
         ))
         .child(button_column(
             layout,
@@ -581,14 +590,17 @@ pub fn panel(
             s,
             "",
             Some("record"),
-            Some(if indicators::l6_record_led(rows) {
-                0xef3646
-            } else {
-                0x542b30
-            }),
+            indicators::l6_record_led(rows).then_some(0xef6d66),
         ))
         .child(label_local_sized(1064.0, 388.0, 92.0, "RECORDER", s, 10.5))
-        .child(button_at(layout, 4, s, "", Some("play-stop"), None));
+        .child(button_at(
+            layout,
+            4,
+            s,
+            "",
+            Some("play-stop"),
+            indicators::l6_play_led(rows).then_some(0x60c873),
+        ));
     for (y, h) in [(239.0, 23.0), (290.0, 23.0)] {
         panel = panel.child(at_local(
             Region::centered(1110.0, y + h / 2.0, 1.5, h),
@@ -642,8 +654,16 @@ const RING_FULL_SCALE: [[u8; 9]; 6] = [
     [60, 60, 60, 60, 60, 61, 61, 62, 30],
 ];
 
+// Full-scale SIGNAL duty sampled on L6 1.10 with full-scale and clipping tone
+// inputs; quieter tones sampled 17 and 32.
+const SIGNAL_FULL_SCALE: u8 = 65;
+
 fn normalize_ring_pwm(ring: usize, segment: usize, measured: u8) -> u8 {
-    let full_scale = u16::from(RING_FULL_SCALE[ring][segment]);
+    normalize_pwm(measured, RING_FULL_SCALE[ring][segment])
+}
+
+fn normalize_pwm(measured: u8, full_scale: u8) -> u8 {
+    let full_scale = u16::from(full_scale);
     ((u16::from(measured) * 255 + full_scale / 2) / full_scale).min(255) as u8
 }
 

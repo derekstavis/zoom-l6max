@@ -107,6 +107,7 @@ pub fn panel(
             indicator_levels,
             data.switches,
             data.analog,
+            data.main_gpio,
             interactions,
         ),
     }
