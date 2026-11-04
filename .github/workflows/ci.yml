@@ -27,7 +27,7 @@ concurrency:
 jobs:
   macos:
     name: macOS checks and app bundle
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 90
     env:
       CARGO_INCREMENTAL: '0'
