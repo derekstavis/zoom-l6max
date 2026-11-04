@@ -101,7 +101,7 @@ card-reader mode), stays unmarked.
 | `expect-analog` | `channel`, `value` | Check a control's analog value |
 | `expect-powered` | `powered` | Check the current power state |
 | `expect-memory` | `address`, `bytes` | Compare MAIN memory bytes under the scenario's firmware hash guard |
-| `expect-heap` | `minimum_free` | L6max only; require the FreeRTOS heap's lowest free byte count since boot to be at least `minimum_free` (`1..512000`). Needs no hash guard and works on patched images; see [heap headroom](../../patches/README.md#heap-headroom) |
+| `expect-heap` | `minimum_free` | Require the FreeRTOS heap's lowest free byte count since boot to be at least `minimum_free`, which must fit the heap. Needs no hash guard and works on patched images; see [heap headroom](../../patches/README.md#heap-headroom) |
 | `panel-event` | `target`, `column`, `row`, `event` | Inject a panel-controller event for focused event-path scenarios |
 
 Boot steps explicitly allow a longer ceiling for slow L6 TCG. Assertion

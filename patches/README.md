@@ -39,33 +39,39 @@ trampolines with that patch: their addresses depend on the target firmware.
 
 ## Heap headroom
 
-The L6max 1.10 MAIN runs a FreeRTOS heap_4 allocator over 512,000 bytes. In
-the runs below the stock firmware allocates only at start-up and never frees.
-Emulator observations, from a setup-complete state:
+Both 1.10 MAIN images run a FreeRTOS heap_4 allocator: 511,984 usable bytes on
+L6 and 511,992 on L6max. Emulator observations, from a setup-complete state:
 
-| Firmware and activity | Free | Lowest free | Allocations | Frees |
-| --- | --- | --- | --- | --- |
-| Stock 1.10: idle, recording a take, playing it back | 160,008 | 160,008 | 197 | 0 |
-| Stock 1.10 after switching to the USB card reader | 157,568 | 157,568 | — | — |
-| All three L6max patches: idle, recording, playback | 159,960 | 159,960 | 198 | 0 |
-| All three L6max patches with knob popups, recording and playback (`l6max-patch-heap`) | 159,960 | 158,160 | 199 | 1 |
+| Model | Firmware and activity | Free | Lowest free | Allocations | Frees |
+| --- | --- | --- | --- | --- | --- |
+| L6 | Stock: idle, recording a take, playing it back | 163,104 | 163,104 | 203 → 205 | 1 → 3 |
+| L6 | midi-sync: idle, recording, playback | 163,104 | 163,104 | 203 → 205 | 1 → 3 |
+| L6 | midi-sync with encoder turns, recording and playback (`l6-patch-heap`) | 163,104 | 163,104 | 205 | 3 |
+| L6max | Stock: idle, recording a take, playing it back | 160,008 | 160,008 | 197 | 0 |
+| L6max | Stock after switching to the USB card reader | 157,568 | 157,568 | — | — |
+| L6max | All three patches: idle, recording, playback | 159,960 | 159,960 | 198 | 0 |
+| L6max | All three patches with knob popups, recording and playback (`l6max-patch-heap`) | 159,960 | 158,160 | 199 | 1 |
 
-A patch that allocates from this heap shares it with the firmware, so measure
-its lowest point while the patch is busy:
+L6 allocates and frees one block each when recording starts and when playback
+starts; L6max allocates only at start-up in these runs. A patch that allocates
+from this heap shares it with the firmware, so measure its lowest point while
+the patch is busy:
 
 - `l6dbg`'s `heap` step reports the counters at any point in a recipe.
-  [`heap-load-l6max.toml`](../tools/l6dbg/recipes/heap-load-l6max.toml) takes
+  [`heap-load-l6.toml`](../tools/l6dbg/recipes/heap-load-l6.toml) and
+  [`heap-load-l6max.toml`](../tools/l6dbg/recipes/heap-load-l6max.toml) take
   them at idle, while recording and during playback; add `--patch NAME` to
   measure a patch.
 - `l6test`'s `expect-heap` step fails a scenario whose lowest point falls below
-  `minimum_free`. The `l6max-patch-heap` case runs every L6max patch together
-  and requires 128 KiB to stay free; extend it, or add a case, for a patch
-  that allocates.
+  `minimum_free`. The `l6-patch-heap` and `l6max-patch-heap` cases run every
+  patch for their model together and require 128 KiB to stay free; extend
+  them, or add a case, for a patch that allocates.
 
-Both read the counters only after checking that `pvPortMalloc` (`0x80085478`)
-and `vPortFree` (`0x8008e588`) match their 1.10 code in guest memory, so they
-work on any patched image that leaves the allocator alone. The L6 heap is not
-mapped. Sound-pad playback and card-reader transfers have not been measured.
+Both read the counters only after checking that the model's `pvPortMalloc` and
+`vPortFree` match their 1.10 code in guest memory (L6 `0x8006de78` and
+`0x80073f48`, L6max `0x80085478` and `0x8008e588`), so they work on any patched
+image that leaves the allocator alone. Sound-pad playback and card-reader
+transfers have not been measured.
 
 ## Adding a patch
 

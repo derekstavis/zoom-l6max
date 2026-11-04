@@ -1,0 +1,82 @@
+# L6 FreeRTOS heap counters at idle, while recording a 20-second take and
+# while it plays back. Run with a setup-complete --state-dir copy and a card the
+# firmware accepts for recording, and add --patch to measure patched firmware.
+version = 1
+model = "l6"
+wall_timeout_s = 1800
+
+[[step]]
+action = "wait"
+guest_ms = 40000
+
+[[step]]
+action = "wait"
+guest_ms = 8000
+
+[[step]]
+action = "heap"
+name = "idle-heap"
+
+[[step]]
+action = "wait"
+guest_ms = 2000
+
+[[step]]
+action = "heap"
+name = "settled-heap"
+
+[[step]]
+action = "press"
+control = "rec-record"
+
+[[step]]
+action = "wait"
+guest_ms = 20000
+
+[[step]]
+action = "snapshot"
+name = "recording"
+
+[[step]]
+action = "heap"
+name = "recording-heap"
+
+[[step]]
+action = "press"
+control = "rec-record"
+
+[[step]]
+action = "wait"
+guest_ms = 5000
+
+[[step]]
+action = "heap"
+name = "stopped-heap"
+
+[[step]]
+action = "press"
+control = "play"
+
+[[step]]
+action = "wait"
+guest_ms = 15000
+
+[[step]]
+action = "snapshot"
+name = "playing"
+
+[[step]]
+action = "heap"
+name = "playing-heap"
+
+[[step]]
+action = "press"
+control = "play"
+
+[[step]]
+action = "wait"
+guest_ms = 3000
+
+[[step]]
+action = "heap"
+name = "end-heap"

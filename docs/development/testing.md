@@ -296,8 +296,8 @@ Use the local configuration above and the scenario catalog for prerequisites.
 
 Patch, factory, and update cases need explicit local configuration and matching
 firmware. Use `knob-dialog`, `popup-concurrency`, `patched-update`,
-`firmware-update`, and `wasm-patch` as appropriate. `l6max-patch-heap` checks
-heap headroom with every L6max patch applied.
+`firmware-update`, and `wasm-patch` as appropriate. `l6-patch-heap` and
+`l6max-patch-heap` check heap headroom with every patch for the model applied.
 
 ## Power, storage, and USB
 

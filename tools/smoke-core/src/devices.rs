@@ -3438,7 +3438,8 @@ impl State {
                 Ok(json!({"address":format!("{address:#010x}"),"bytes":actual}))
             }
             Operation::ExpectHeap { minimum_free } => {
-                let heap = l6max_host::heap::read_l6max(&session.engine.management[0])?;
+                let heap =
+                    l6max_host::heap::read(&session.engine.management[0], session.engine.model())?;
                 if heap.minimum_ever_free < minimum_free {
                     return Err(format!(
                         "heap fell to {} free bytes, below the required {minimum_free}: {heap:?}",

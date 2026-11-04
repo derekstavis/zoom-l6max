@@ -745,13 +745,12 @@ impl Scenario {
                 }
             }
             if let Action::ExpectHeap { minimum_free } = &step.action {
-                if *minimum_free == 0 || *minimum_free > l6max_host::heap::L6MAX_HEAP_BYTES {
-                    return Err("expect-heap minimum_free must be 1..512000 bytes".into());
-                }
-                if value.models.as_slice() != ["l6max"]
-                    || step.models.iter().any(|model| model != "l6max")
+                if *minimum_free == 0
+                    || [l6fw::Model::L6, l6fw::Model::L6max]
+                        .iter()
+                        .any(|&model| *minimum_free > l6max_host::heap::size(model))
                 {
-                    return Err("expect-heap scenarios must be scoped to L6max".into());
+                    return Err("expect-heap minimum_free must be positive and fit the heap".into());
                 }
             }
             if let Action::ExpectMemory { address, bytes } = &step.action {

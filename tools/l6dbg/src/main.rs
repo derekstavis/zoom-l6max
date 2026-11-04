@@ -252,12 +252,7 @@ impl Recipe {
                     }
                 }
                 Step::Snapshot { name } => validate_name(name)?,
-                Step::Heap { name } => {
-                    validate_name(name)?;
-                    if recipe.model != "l6max" {
-                        return Err("heap counters are available only for L6max".into());
-                    }
-                }
+                Step::Heap { name } => validate_name(name)?,
                 Step::UsbDescriptors {
                     name,
                     guest_timeout_ms,
@@ -513,7 +508,8 @@ fn connect_gdb(path: &Path, deadline: Instant) -> Result<Gdb, String> {
 fn run(recipe_path: &Path, options: Options) -> Result<Value, String> {
     let recipe = Recipe::load(recipe_path)?;
     let main = main_image(&options)?;
-    let actual_model = match l6fw::model_from_main(&main)? {
+    let firmware_model = l6fw::model_from_main(&main)?;
+    let actual_model = match firmware_model {
         l6fw::Model::L6 => "l6",
         l6fw::Model::L6max => "l6max",
     };
@@ -669,7 +665,7 @@ fn run(recipe_path: &Path, options: Options) -> Result<Value, String> {
                     json!({"action":"memory","name":name,"address":format!("{address:#010x}"),"bytes":data})
                 }
                 Step::Heap { name } => {
-                    let heap = l6max_host::heap::read_l6max(&guest.engine.management[0])?;
+                    let heap = l6max_host::heap::read(&guest.engine.management[0], firmware_model)?;
                     json!({"action":"heap","name":name,"heap":heap,"peak_used":heap.peak_used()})
                 }
                 Step::MemoryWrite {
@@ -960,10 +956,12 @@ mod tests {
     }
 
     #[test]
-    fn heap_needs_no_hash_but_only_runs_on_l6max() {
-        let step = "[[step]]\naction='heap'\nname='idle'\n";
-        assert!(Recipe::parse(&format!("version=1\nmodel='l6max'\n{step}")).is_ok());
-        assert!(Recipe::parse(&format!("version=1\nmodel='l6'\n{step}")).is_err());
+    fn heap_needs_no_hash_on_either_model() {
+        for model in ["l6", "l6max"] {
+            let recipe =
+                format!("version=1\nmodel='{model}'\n[[step]]\naction='heap'\nname='idle'\n");
+            assert!(Recipe::parse(&recipe).is_ok());
+        }
     }
 
     #[test]
