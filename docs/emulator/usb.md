@@ -134,6 +134,45 @@ ring from `0x1` to `0x3`. L6max retains its CC 81 encoder mapping and its ring
 changes from `0x1` to `0x1ff`. These are QEMU results; physical USB behavior
 has not been tested.
 
+### L6max USB modes
+
+L6max 1.10 presents three USB identities, captured through the emulator with
+the [`usb-modes-l6max.toml`](../../tools/l6dbg/recipes/usb-modes-l6max.toml)
+`l6dbg` recipe. All use VID `1686`, USB 2.00, one configuration and device
+class `EF/02/01` (interface association). The device stalls the device
+qualifier, other-speed configuration and BOS requests, so it describes
+high-speed operation only. Each mode change restarts the device and the host
+enumerates it again.
+
+| Mode | Entered by | PID | Configuration | Interfaces |
+| --- | --- | --- | --- | --- |
+| Normal | Boot | `08f5` | 507 bytes | 5 |
+| Audio interface mode | [Editor](../firmware/protocols/editor-midi.md#parameter-change) `usbAudioIFMode` (`18`) = 1 | `08f3` | 499 bytes | 5 |
+| SD card reader | Editor `sdCardReaderMode` (`09`) = 1 | `08f2` | 522 bytes | 6 |
+
+The recipe enters card reader mode from audio interface mode, so that capture
+carries the two-channel audio formats. The recorder menu's USB File Transfer
+also adds the mass-storage interface; its identity was not captured
+separately.
+
+| Interface | Function | Endpoints |
+| --- | --- | --- |
+| 0 | USB Audio 2.0 control (association of interfaces 0–2) | — |
+| 1 | Playback; alternates 1 (24-bit) and 2 (32-bit) | `02` OUT isochronous; `82` IN isochronous feedback, 4 bytes, interval 4 |
+| 2 | Record; alternates 1 and 2 | `81` IN isochronous |
+| 3 | Audio control for MIDI (association of interfaces 3–4) | — |
+| 4 | MIDI streaming, three cables each way | `03` OUT bulk 512, `84` IN bulk 512 |
+| 5 | Mass storage, bulk-only SCSI (card reader only) | `06` OUT bulk 512, `85` IN bulk 512 |
+
+| Mode | Playback `02` per microframe | Record `81` per microframe | Channels |
+| --- | --- | --- | --- |
+| Normal | 112 bytes | 392 bytes | 4 out, 14 in, 4-byte subslots |
+| Audio interface mode | 56 bytes | 56 bytes | 2 out, 2 in |
+
+Endpoint numbers IN 1, 2, 4 and OUT 2, 3 are used in every mode, plus IN 5
+and OUT 6 as a card reader. IN 3, 6, 7 and OUT 1, 4, 5, 7 are unused in every
+mode. The RT1040 controller provides endpoint numbers 0–7 in each direction.
+
 ## Native MIDI
 
 Run the native app with `--usb` to expose three CoreMIDI source/destination
@@ -263,7 +302,9 @@ captured screens are excluded from Git.
 
 - Finder/OS USB disk mounting is not implemented; host file access uses
   `l6fs usb`.
-- USB audio streaming is not modeled. The mixer MIDI control port is
+- USB audio streaming is not modeled. After a host selects the L6max audio
+  alternate settings without sending isochronous data, Record does not start
+  a take. The mixer MIDI control port is
   verified; complete L6 Editor compatibility is unverified. The physical
   MIDI IN/OUT (DIN/TRS) jacks are modeled, including the receive/transmit
   interrupt (see above); whether firmware applies mixer Control Change

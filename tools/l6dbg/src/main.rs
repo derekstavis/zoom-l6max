@@ -878,6 +878,18 @@ mod tests {
     }
 
     #[test]
+    fn checked_in_recipes_parse() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut paths = vec![dir.join("example.toml")];
+        for entry in std::fs::read_dir(dir.join("recipes")).unwrap() {
+            paths.push(entry.unwrap().path());
+        }
+        for path in paths {
+            Recipe::load(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        }
+    }
+
+    #[test]
     fn address_sensitive_observations_require_a_revision_guard() {
         let base = "version=1\nmodel='l6'\n[[step]]\naction='memory'\nname='test'\naddress=536870912\nlength=4\n";
         assert!(Recipe::parse(base).err().unwrap().contains("SHA-256"));
