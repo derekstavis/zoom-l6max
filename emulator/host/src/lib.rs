@@ -6,6 +6,7 @@ pub mod din_midi;
 pub mod display;
 pub mod engine;
 pub mod firmware_patches;
+pub mod heap;
 pub mod input;
 pub mod protocol;
 pub mod qmp;

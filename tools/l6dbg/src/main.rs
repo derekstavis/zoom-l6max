@@ -74,6 +74,9 @@ enum Step {
         address: u32,
         bytes: Vec<u8>,
     },
+    Heap {
+        name: String,
+    },
     FirmwareCall {
         name: String,
         address: u32,
@@ -176,6 +179,7 @@ impl Recipe {
             if let Step::Snapshot { name }
             | Step::Memory { name, .. }
             | Step::MemoryWrite { name, .. }
+            | Step::Heap { name }
             | Step::FirmwareCall { name, .. }
             | Step::Trace { name, .. }
             | Step::UsbDescriptors { name, .. }
@@ -248,6 +252,12 @@ impl Recipe {
                     }
                 }
                 Step::Snapshot { name } => validate_name(name)?,
+                Step::Heap { name } => {
+                    validate_name(name)?;
+                    if recipe.model != "l6max" {
+                        return Err("heap counters are available only for L6max".into());
+                    }
+                }
                 Step::UsbDescriptors {
                     name,
                     guest_timeout_ms,
@@ -658,6 +668,10 @@ fn run(recipe_path: &Path, options: Options) -> Result<Value, String> {
                         .map_err(|e| e.to_string())?;
                     json!({"action":"memory","name":name,"address":format!("{address:#010x}"),"bytes":data})
                 }
+                Step::Heap { name } => {
+                    let heap = l6max_host::heap::read_l6max(&guest.engine.management[0])?;
+                    json!({"action":"heap","name":name,"heap":heap,"peak_used":heap.peak_used()})
+                }
                 Step::MemoryWrite {
                     name,
                     address,
@@ -943,6 +957,13 @@ mod tests {
         assert!(Recipe::parse(header).is_err());
         let held = "version=1\nmodel='l6max'\n[[step]]\naction='button'\ncontrol='recorder.menu'\npressed=true\n[[step]]\naction='button'\ntarget=0\npressed=false\n";
         assert!(Recipe::parse(held).is_ok());
+    }
+
+    #[test]
+    fn heap_needs_no_hash_but_only_runs_on_l6max() {
+        let step = "[[step]]\naction='heap'\nname='idle'\n";
+        assert!(Recipe::parse(&format!("version=1\nmodel='l6max'\n{step}")).is_ok());
+        assert!(Recipe::parse(&format!("version=1\nmodel='l6'\n{step}")).is_err());
     }
 
     #[test]

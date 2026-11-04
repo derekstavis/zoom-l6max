@@ -37,12 +37,43 @@ Create only the files the patch needs. A change to existing instructions may
 not need a compiled payload or linker script. Keep patch-specific bindings and
 trampolines with that patch: their addresses depend on the target firmware.
 
+## Heap headroom
+
+The L6max 1.10 MAIN runs a FreeRTOS heap_4 allocator over 512,000 bytes. In
+the runs below the stock firmware allocates only at start-up and never frees.
+Emulator observations, from a setup-complete state:
+
+| Firmware and activity | Free | Lowest free | Allocations | Frees |
+| --- | --- | --- | --- | --- |
+| Stock 1.10: idle, recording a take, playing it back | 160,008 | 160,008 | 197 | 0 |
+| Stock 1.10 after switching to the USB card reader | 157,568 | 157,568 | — | — |
+| All three L6max patches: idle, recording, playback | 159,960 | 159,960 | 198 | 0 |
+| All three L6max patches with knob popups, recording and playback (`l6max-patch-heap`) | 159,960 | 158,160 | 199 | 1 |
+
+A patch that allocates from this heap shares it with the firmware, so measure
+its lowest point while the patch is busy:
+
+- `l6dbg`'s `heap` step reports the counters at any point in a recipe.
+  [`heap-load-l6max.toml`](../tools/l6dbg/recipes/heap-load-l6max.toml) takes
+  them at idle, while recording and during playback; add `--patch NAME` to
+  measure a patch.
+- `l6test`'s `expect-heap` step fails a scenario whose lowest point falls below
+  `minimum_free`. The `l6max-patch-heap` case runs every L6max patch together
+  and requires 128 KiB to stay free; extend it, or add a case, for a patch
+  that allocates.
+
+Both read the counters only after checking that `pvPortMalloc` (`0x80085478`)
+and `vPortFree` (`0x8008e588`) match their 1.10 code in guest memory, so they
+work on any patched image that leaves the allocator alone. The L6 heap is not
+mapped. Sound-pad playback and card-reader transfers have not been measured.
+
 ## Adding a patch
 
 1. Create `patches/<patch-name>/` and describe its purpose, supported input
    firmware hash, changed code/data, build command, and validation commands.
 2. Put payload code in `src/` and placement rules in `linker/`. Document space
-   limits and any RAM allocation or persistence behavior.
+   limits and any RAM allocation or persistence behavior. Check heap use as
+   described in [heap headroom](#heap-headroom).
 3. Add a Rust builder crate under `tools/<patch-builder>/` (or explicitly
    extend an existing builder). Validate the input hash and displaced-region hashes,
    reject overlapping or out-of-slot writes, and require a new output directory.
