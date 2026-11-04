@@ -15,7 +15,10 @@ cargo run --offline --locked -p l6dbg -- tools/l6dbg/example.toml \
 Checked-in recipes in `tools/l6dbg/recipes/` record black-box observations
 that documentation cites, such as
 [`usb-modes-l6max.toml`](../../../tools/l6dbg/recipes/usb-modes-l6max.toml)
-for the [L6max USB modes](../../emulator/usb.md#l6max-usb-modes). A
+for the [L6max USB modes](../../emulator/usb.md#l6max-usb-modes) and
+[`heap-load-l6.toml`](../../../tools/l6dbg/recipes/heap-load-l6.toml) and
+[`heap-load-l6max.toml`](../../../tools/l6dbg/recipes/heap-load-l6max.toml)
+for [heap headroom](../../../patches/README.md#heap-headroom). A
 first-boot recipe confirms setup with two `recorder.confirm` presses before
 USB starts.
 
@@ -50,6 +53,7 @@ the action’s fields are strict; unknown fields fail parsing.
 | `trace` | `name`, `contains`, optional `limit` (default `100`) | Record up to `limit` matching trace lines; `contains` is a nonempty substring. |
 | `memory` | `name`, `address`, `length` | Read MAIN memory; requires `main_sha256`, length `1..4096`, and a non-overflowing address range. |
 | `memory-write` | `name`, `address`, `bytes` | Write `1..256` bytes to MAIN RAM (`0x80000000..0x82000000`), verify the readback, and report both values. Requires `main_sha256` and `--gdb-socket`; use only with a disposable guest. |
+| `heap` | `name` | Report the FreeRTOS heap's usable size, free bytes, lowest free bytes since boot, and allocation and free counts, on L6 or L6max 1.10. Needs no `main_sha256`: it checks the model's 1.10 allocator code in guest memory instead, so it also runs on patched firmware selected with `--patch`. |
 | `usb-descriptors` | `name`, optional `guest_timeout_ms` (default `60000`) | Wait for the firmware's USB controller, enumerate and configure the device, then read every referenced string plus the device qualifier, other-speed configuration and BOS descriptors. Saves `NAME-device.bin` and `NAME-config.bin` and reports every descriptor decoded, with the endpoint numbers used in each direction. Optional descriptors the device stalls are reported as errors. |
 | `usb-control` | `name`, `setup` | Send one 8-byte control request, IN or OUT without a data stage, and report the data or the error, such as a stall. |
 | `usb-midi` | `name`, optional `cable` (default `0`), `send` bytes, `listen_ms` (default `1000`) | Send MIDI bytes as USB MIDI packets on the configured MIDI OUT endpoint, then collect device-to-host messages for up to `listen_ms` guest milliseconds. A device detach, such as a firmware USB mode change, ends the window and reports `detached`. Needs an earlier `usb-descriptors` step. |
@@ -59,8 +63,8 @@ the engine's default audio-input directory. Prepare them using the emulator's
 audio-input workflow; the transport does not create or assign files. See
 [audio input](../../emulator/audio.md#input) for the file and routing model.
 
-Observation names (`snapshot`, `trace`, `memory`, `memory-write` and the USB
-actions) must be unique and contain
+Observation names (`snapshot`, `trace`, `memory`, `memory-write`, `heap` and
+the USB actions) must be unique and contain
 only letters, digits, `_`, and `-`. Recipe output includes `diagnostic.json`,
 per-observation artifacts, and raw QEMU logs in the new log directory.
 For an available display, `display_raw` names a 1,024-byte `.oled` file with
