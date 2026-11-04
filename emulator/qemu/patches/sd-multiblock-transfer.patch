@@ -1,0 +1,56 @@
+--- a/hw/sd/sd.c
++++ b/hw/sd/sd.c
+@@ -2696,10 +2696,10 @@
+ 
+     case 25:  /* CMD25:  WRITE_MULTIPLE_BLOCK */
+         /*
+-         * Only read one byte at a time. We will be called again with the
+-         * remaining.
++         * Take what fits in the current block. We will be called again with
++         * the remaining.
+          */
+-        length = 1;
++        length = MIN(length, sd->blk_len - sd->data_offset);
+ 
+         if (sd->data_offset == 0) {
+             /* Start of the block - let's check the address is valid */
+@@ -2714,7 +2714,8 @@
+                 }
+             }
+         }
+-        sd->data[sd->data_offset++] = value[0];
++        memcpy(sd->data + sd->data_offset, value, length);
++        sd->data_offset += length;
+         if (sd->data_offset >= sd->blk_len) {
+             /* TODO: Check CRC before committing */
+             sd->state = sd_programming_state;
+@@ -2852,15 +2853,15 @@
+ 
+     case 18:  /* CMD18:  READ_MULTIPLE_BLOCK */
+         /*
+-         * We will only read one byte at a time. We will be called again with
+-         * the remaining buffer.
++         * Copy what remains of the current block. We will be called again
++         * with the remaining buffer.
+          */
+-        length = 1;
++        length = MIN(length, io_len - sd->data_offset);
+ 
+         if (sd->data_offset == 0) {
+             if (!address_in_range(sd, "READ_MULTIPLE_BLOCK",
+                                   sd->data_start, io_len)) {
+-                *value = dummy_byte;
++                memset(value, dummy_byte, length);
+                 return length;
+             }
+             partition_access = sd->ext_csd[EXT_CSD_PART_CONFIG]
+@@ -2871,7 +2872,8 @@
+                 sd_blk_read(sd, sd->data_start, io_len);
+             }
+         }
+-        *value = sd->data[sd->data_offset++];
++        memcpy(value, sd->data + sd->data_offset, length);
++        sd->data_offset += length;
+ 
+         if (sd->data_offset >= io_len) {
+             sd->data_start += io_len;

@@ -108,6 +108,13 @@ fn apply_patches(source: &Path, repository: &Path) -> Result<(), String> {
         "softfloat-zero-multiply.patch",
         "fpu/softfloat.c",
         &["A zero times a zero or normal"],
+    )?;
+    apply_patch(
+        source,
+        repository,
+        "sd-multiblock-transfer.patch",
+        "hw/sd/sd.c",
+        &["Take what fits in the current block"],
     )
 }
 
