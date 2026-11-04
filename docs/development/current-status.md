@@ -11,11 +11,14 @@ The L6 and L6max MASTER meters use model-specific panel outputs. The stereo
 sound-pad scenarios check that each meter responds independently at multiple
 levels, using a saved one-shot assignment and no USB setup. Encoder rings use
 sampled PWM duty, normalized to their observed full-scale endpoints. The panel
-sampler integrates pin activity over approximately 33 ms of guest time.
+sampler integrates pin activity over the last brightness cycle of the LED scan
+(32 frames) and sends changed levels every 5 ms of guest time.
 
-The L6max green SIGNAL indicators have a graded PWM path. Sound-pad and TAP
-lamps can blink; scan-window samples of a binary lamp do not establish a
-separate brightness control. Physical LED brightness, meter calibration,
+The L6 and L6max green SIGNAL indicators have a graded PWM path, and the GUI
+shows them at their sampled brightness; red SIGNAL is a binary clip state. See
+[controls and indicators](../emulator/controls.md#indicator-matrix). Sound-pad
+and TAP lamps can blink; scan-window samples of a binary lamp do not establish
+a separate brightness control. Physical LED brightness, meter calibration,
 analog audio behavior, and physical jack routing remain unverified.
 
 ## Known limits

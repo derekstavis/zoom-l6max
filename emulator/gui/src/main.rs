@@ -1624,9 +1624,29 @@ fn main() {
         if run_tick {
             cx.spawn(async move |cx| {
                 loop {
-                    cx.background_executor()
-                        .timer(Duration::from_nanos(16_666_667))
-                        .await;
+                    // Tick once per display frame. macOS coalesces short
+                    // timers to about 24 Hz, which shows a fast lamp blink,
+                    // such as TAP's Noise Reduction speed-up, as uneven. A
+                    // hidden window gets no frames, so a slow timer keeps
+                    // the tick running.
+                    let frame = next_frame::Signal::default();
+                    let fired = frame.clone();
+                    if view
+                        .update(cx, |_, window, _| {
+                            window.on_next_frame(move |_, _| fired.fire());
+                        })
+                        .is_err()
+                    {
+                        break;
+                    }
+                    let fallback = frame.clone();
+                    let timer = cx.background_executor().timer(Duration::from_millis(50));
+                    cx.background_spawn(async move {
+                        timer.await;
+                        fallback.fire();
+                    })
+                    .detach();
+                    frame.await;
                     if view
                         .update(cx, |panel, window, cx| {
                             if panel.window_model != panel.model {
@@ -1637,7 +1657,7 @@ fn main() {
                                 // that it lays out for the new size straight away.
                                 lock_window_shape(window, width, height);
                                 window.resize(size(px(width), px(height)));
-                                panel.window_settling_frames = 30;
+                                panel.window_settling_frames = 60;
                                 window.set_window_title(&format!(
                                     "{} Emulator",
                                     model_name(panel.model)
@@ -1787,5 +1807,39 @@ mod startup_key_tests {
 
         let l6max_layout = Layout::for_model(l6fw::Model::L6max);
         assert!(startup_key_targets(l6fw::Model::L6max, &l6max_layout, &pressed).is_empty());
+    }
+}
+
+/// Completes once the window has drawn its next frame.
+mod next_frame {
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::sync::{Arc, Mutex};
+    use std::task::{Context, Poll, Waker};
+
+    #[derive(Clone, Default)]
+    pub struct Signal(Arc<Mutex<(bool, Option<Waker>)>>);
+
+    impl Signal {
+        pub fn fire(&self) {
+            let mut state = self.0.lock().unwrap_or_else(|error| error.into_inner());
+            state.0 = true;
+            if let Some(waker) = state.1.take() {
+                waker.wake();
+            }
+        }
+    }
+
+    impl Future for Signal {
+        type Output = ();
+        fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+            let mut state = self.0.lock().unwrap_or_else(|error| error.into_inner());
+            if state.0 {
+                Poll::Ready(())
+            } else {
+                state.1 = Some(cx.waker().clone());
+                Poll::Pending
+            }
+        }
     }
 }

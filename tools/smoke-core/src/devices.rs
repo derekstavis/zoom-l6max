@@ -1275,8 +1275,9 @@ fn run_l6max_channel_signal_pwm(
         .inputs
         .as_ref()
         .ok_or("headless panel input missing")?;
-    // Recovered LevelMeterLed thresholds at 0x800a6984 and 0x800a69b4.
-    // Its first four signal outputs and final four outputs use separate scales.
+    // SIGNAL 1-4 and 5-8 respond on separate scales, each in five brightness
+    // steps. Each stimulus sits well inside one observed step, away from the
+    // levels where a lamp changes step.
     let sweeps: [(
         &str,
         std::ops::Range<usize>,
@@ -1288,10 +1289,10 @@ fn run_l6max_channel_signal_pwm(
             0..4,
             0..4,
             [
-                1_500_000.0,
-                2_000_000.0,
-                3_000_000.0,
-                4_000_000.0,
+                1_600_000.0,
+                2_250_000.0,
+                3_200_000.0,
+                4_550_000.0,
                 8_000_000.0,
             ],
         ),
@@ -1300,10 +1301,10 @@ fn run_l6max_channel_signal_pwm(
             4..12,
             4..8,
             [
-                8_000_000.0,
-                12_000_000.0,
-                16_000_000.0,
-                24_000_000.0,
+                9_000_000.0,
+                12_800_000.0,
+                18_000_000.0,
+                25_500_000.0,
                 40_000_000.0,
             ],
         ),
@@ -1313,13 +1314,42 @@ fn run_l6max_channel_signal_pwm(
     let mut sweep_evidence = Vec::new();
     let mut failures = Vec::new();
 
-    for (sweep_index, (name, accumulator_range, output_range, levels)) in
-        sweeps.into_iter().enumerate()
-    {
-        if sweep_index > 0 {
-            // The worker retains falling-level state between scans. Drain the
-            // previous accumulator band before measuring this independent
-            // band, so its samples cannot contain the prior sweep's LEDs.
+    // The SIGNAL lamps start following these values a second or two after
+    // the mixer is ready. Hold the first band high until SIGNAL 1 lights, so
+    // the sweep cannot start before the lamps respond.
+    let mut warm_up = Vec::with_capacity(12 * 4);
+    for channel in 0..12 {
+        let value: f32 = if channel < 4 { 8_000_000.0 } else { 0.0 };
+        warm_up.extend_from_slice(&value.to_le_bytes());
+    }
+    let warm_up_start = inputs.panel.snapshot().guest_ms;
+    let mut last_seed = None;
+    loop {
+        let panel = session.poll().map_err(|error| error.to_string())?;
+        let guest_ms = inputs.panel.snapshot().guest_ms;
+        let (row, column) = l6max_host::indicators::LED_PINS[52];
+        if panel.indicator_levels[row][(column ^ 7) as usize] != 0 {
+            break;
+        }
+        if guest_ms.wrapping_sub(warm_up_start) >= 10_000 || Instant::now() >= deadline {
+            return Err("SIGNAL 1 did not light within 10 guest seconds".into());
+        }
+        if last_seed.is_none_or(|seed: u32| guest_ms.wrapping_sub(seed) >= 40) {
+            qmp.stop().map_err(|error| error.to_string())?;
+            debugger
+                .write(0x2001_50e0, &warm_up)
+                .map_err(|error| error.to_string())?;
+            qmp.resume().map_err(|error| error.to_string())?;
+            last_seed = Some(guest_ms);
+        }
+        thread::sleep(Duration::from_millis(1));
+    }
+
+    for (name, accumulator_range, output_range, levels) in sweeps {
+        {
+            // A lit band takes a moment to fall after its values drop. Drain
+            // the first band, lit by the warm-up or the previous sweep, before
+            // measuring, so samples cannot contain earlier LEDs.
             let zeroes = vec![0_u8; 12 * 4];
             qmp.stop().map_err(|error| error.to_string())?;
             debugger

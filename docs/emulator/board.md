@@ -365,10 +365,24 @@ outputs and exposes all 192 outputs independently of UART decoding.
 | Transfer completion | TIM14, IRQ 19 | Firmware checks SPI and invokes its completion callback |
 | LED dwell | TIM3, IRQ 16 | Firmware advances the common and PWM phase |
 
-The panel publishes integrated output levels approximately every 33 guest
-milliseconds. Changed levels use message kind `0x8000000a`, grouped by common
-and column; kind `0x80000008` advances guest time even when the LEDs and LCD
-are static. The host derives the current indicator masks and brightness from
+The panel scans the commons in order, one 32-frame brightness cycle at a
+time. Each common gets a fixed output-enable pulse, and a lamp's brightness
+is how many of the 32 frames latch it on. The dimmest ring level is lit in 2
+of them. The emulated outputs give these timings:
+
+| Model | Common | Frame | Brightness cycle |
+| --- | --- | --- | --- |
+| L6 | 66.7 µs | 533.6 µs | 17.07 ms |
+| L6max | 100 µs | 800.4 µs | 25.61 ms |
+
+Each lamp's level is its on-time over the last 32 complete frames, so the
+window covers every frame of the pattern once, whatever its phase, and a
+steady lamp reads the same level at any time. A lamp switched on or off
+reaches its new level one cycle later, so a flash is shown for its on-time
+plus up to one cycle. Levels are checked every 5 guest milliseconds, and
+changed levels use message kind `0x8000000a`, grouped by common and column.
+Kind `0x80000008` advances guest time about every 25 guest milliseconds, even
+when the LEDs and LCD are static. The host derives the current indicator masks and brightness from
 these samples. The model-specific mappings are in
 `emulator/host/src/indicators.rs`.
 
