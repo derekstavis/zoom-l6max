@@ -1,0 +1,172 @@
+--- a/hw/sd/sd.c
++++ b/hw/sd/sd.c
+@@ -50,6 +50,7 @@
+ #include "qemu/log.h"
+ #include "qemu/guest-random.h"
+ #include "qemu/module.h"
++#include "system/runstate.h"
+ #include "sdmmc-internal.h"
+ #include "trace.h"
+ #include "crypto/hmac.h"
+@@ -202,6 +203,11 @@
+         uint8_t key_set;
+         RPMBDataFrame result;
+     } rpmb;
++    /* WRITE_MULTIPLE_BLOCK data not yet written to the drive */
++    uint8_t *pending;
++    uint64_t pending_start;
++    uint32_t pending_len;
++    VMChangeStateEntry *vmstate_entry;
+     QEMUTimer *ocr_power_timer;
+     uint8_t dat_lines;
+     bool cmd_line;
+@@ -209,6 +215,7 @@
+ };
+ 
+ static void sd_realize(DeviceState *dev, Error **errp);
++static void sd_blk_flush_pending(SDState *sd);
+ 
+ static const SDProto sd_proto_spi;
+ static const SDProto sd_proto_emmc;
+@@ -919,6 +926,7 @@
+     uint64_t sect;
+ 
+     trace_sdcard_reset();
++    sd_blk_flush_pending(sd);
+     if (sd->blk) {
+         blk_get_geometry(sd->blk, &sect);
+     } else {
+@@ -976,6 +984,7 @@
+     bool inserted = sd_get_inserted(sd);
+     bool readonly = sd_get_readonly(sd);
+ 
++    sd_blk_flush_pending(sd);
+     if (inserted) {
+         trace_sdcard_inserted(readonly);
+         sd_reset(dev);
+@@ -1060,6 +1069,13 @@
+     },
+ };
+ 
++static int sd_vmstate_pre_save(void *opaque)
++{
++    sd_blk_flush_pending(opaque);
++
++    return 0;
++}
++
+ static int sd_vmstate_pre_load(void *opaque)
+ {
+     SDState *sd = opaque;
+@@ -1078,6 +1094,7 @@
+     .version_id = 2,
+     .minimum_version_id = 2,
+     .pre_load = sd_vmstate_pre_load,
++    .pre_save = sd_vmstate_pre_save,
+     .fields = (const VMStateField[]) {
+         VMSTATE_UNUSED(4),
+         VMSTATE_INT32(state, SDState),
+@@ -1131,6 +1148,56 @@
+     }
+ }
+ 
++#define SD_PENDING_SIZE (256 * KiB)
++
++static void sd_blk_flush_pending(SDState *sd)
++{
++    if (!sd->pending_len) {
++        return;
++    }
++    if (!sd->blk || blk_pwrite(sd->blk, sd->pending_start, sd->pending_len,
++                               sd->pending, 0) < 0) {
++        fprintf(stderr, "sd_blk_write: write error on host side\n");
++    }
++    sd->pending_len = 0;
++}
++
++/*
++ * With the drive's write cache enabled, WRITE_MULTIPLE_BLOCK collects
++ * contiguous blocks and writes them together when the transfer ends, when
++ * the next command arrives, or when the VM stops. Every read goes through a
++ * command first, so the guest never sees stale data. Without the write
++ * cache, each block is written as it arrives.
++ */
++static void sd_blk_write_multiple(SDState *sd, uint64_t addr, uint32_t len)
++{
++    if (!sd->pending || !blk_enable_write_cache(sd->blk)) {
++        sd_blk_flush_pending(sd);
++        sd_blk_write(sd, addr, len);
++        return;
++    }
++
++    trace_sdcard_write_block(addr, len);
++    addr += sd_part_offset(sd);
++    if (sd->pending_len &&
++        (addr != sd->pending_start + sd->pending_len ||
++         sd->pending_len + len > SD_PENDING_SIZE)) {
++        sd_blk_flush_pending(sd);
++    }
++    if (!sd->pending_len) {
++        sd->pending_start = addr;
++    }
++    memcpy(sd->pending + sd->pending_len, sd->data, len);
++    sd->pending_len += len;
++}
++
++static void sd_vm_state_change(void *opaque, bool running, RunState state)
++{
++    if (!running) {
++        sd_blk_flush_pending(opaque);
++    }
++}
++
+ static bool rpmb_calc_hmac(SDState *sd, const RPMBDataFrame *frame,
+                            unsigned int num_blocks, uint8_t *mac)
+ {
+@@ -2497,6 +2564,8 @@
+         return 0;
+     }
+ 
++    sd_blk_flush_pending(sd);
++
+     if (sd->state == sd_inactive_state) {
+         rtype = sd_illegal;
+         goto send_response;
+@@ -2724,7 +2793,7 @@
+             if (partition_access == EXT_CSD_PART_CONFIG_ACC_RPMB) {
+                 emmc_rpmb_blk_write(sd, sd->data_start, sd->data_offset);
+             } else {
+-                sd_blk_write(sd, sd->data_start, sd->data_offset);
++                sd_blk_write_multiple(sd, sd->data_start, sd->data_offset);
+             }
+             sd->blk_written++;
+             sd->data_start += sd->blk_len;
+@@ -2735,6 +2804,7 @@
+             if (sd->multi_blk_cnt != 0) {
+                 if (--sd->multi_blk_cnt == 0) {
+                     /* Stop! */
++                    sd_blk_flush_pending(sd);
+                     sd->state = sd_transfer_state;
+                     break;
+                 }
+@@ -3075,6 +3145,10 @@
+     SDState *sd = SDMMC_COMMON(obj);
+ 
+     timer_free(sd->ocr_power_timer);
++    if (sd->vmstate_entry) {
++        qemu_del_vm_change_state_handler(sd->vmstate_entry);
++    }
++    g_free(sd->pending);
+ }
+ 
+ static void sd_blk_size_error(SDState *sd, int64_t blk_size,
+@@ -3153,6 +3227,9 @@
+             return;
+         }
+         blk_set_dev_ops(sd->blk, &sd_block_ops, sd);
++        sd->pending = g_malloc(SD_PENDING_SIZE);
++        sd->vmstate_entry =
++            qemu_add_vm_change_state_handler(sd_vm_state_change, sd);
+     }
+     if (!QEMU_IS_ALIGNED(sd->boot_part_size, 128 * KiB) ||
+         sd->boot_part_size > 255 * 128 * KiB) {
