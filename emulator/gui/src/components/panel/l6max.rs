@@ -29,19 +29,92 @@ const SCREWS: [(f32, f32); 8] = [
 // proportional below each measured endpoint.
 const RING_FULL_SCALE_BY_ROW: [u8; 8] = [41, 42, 41, 41, 41, 41, 40, 41];
 
+/// A sampled duty on `row` as a brightness, 255 at that row's full scale.
+fn normalize(row: usize, measured: u8) -> u8 {
+    let full_scale = u16::from(RING_FULL_SCALE_BY_ROW[row]);
+    ((u16::from(measured) * 255 + full_scale / 2) / full_scale).min(255) as u8
+}
+
 fn ring_brightness(indicator_levels: [[u8; 24]; 8]) -> [[u8; 9]; 8] {
     indicators::RING_PINS.map(|pins| {
-        pins.map(|(row, column)| {
-            let measured = u16::from(indicator_levels[row][(column ^ 7) as usize]);
-            let full_scale = u16::from(RING_FULL_SCALE_BY_ROW[row]);
-            ((measured * 255 + full_scale / 2) / full_scale).min(255) as u8
-        })
+        pins.map(|(row, column)| normalize(row, indicator_levels[row][(column ^ 7) as usize]))
     })
+}
+
+/// Whether on/off lamp `index` (a logical LED) is lit. Its sampled level ramps over one
+/// brightness cycle when it switches, so half scale marks each edge one half
+/// cycle late. A flash keeps its length, and a blink faster than the cycle,
+/// such as TAP's Noise Reduction speed-up, still alternates.
+fn led_lit(indicator_levels: [[u8; 24]; 8], index: usize) -> bool {
+    let (row, column) = indicators::LED_PINS[index];
+    let lit = normalize(row, indicator_levels[row][(column ^ 7) as usize]) >= 128;
+    trace_lamp(index, lit);
+    lit
+}
+
+/// With `L6_LAMP_TRACE` set, log each change of a button lamp as drawn, with
+/// host milliseconds since the first drawn panel, to compare lamp timing with
+/// recordings of the device.
+fn trace_lamp(index: usize, lit: bool) {
+    use std::sync::{Mutex, OnceLock};
+    static TRACE: OnceLock<Option<Mutex<(std::time::Instant, [bool; 72])>>> = OnceLock::new();
+    let Some(state) = TRACE.get_or_init(|| {
+        std::env::var_os("L6_LAMP_TRACE")
+            .map(|_| Mutex::new((std::time::Instant::now(), [false; 72])))
+    }) else {
+        return;
+    };
+    let mut state = state.lock().unwrap_or_else(|error| error.into_inner());
+    if state.1[index] != lit {
+        state.1[index] = lit;
+        let host_ms = state.0.elapsed().as_secs_f64() * 1000.0;
+        let wall_us = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |since| since.as_micros());
+        tracing::info!(
+            event = "lamp",
+            led = index,
+            lit,
+            host_ms,
+            wall_us,
+            "lamp changed"
+        );
+    }
+}
+
+/// SIGNAL red and green brightness, normalized like the rings: both share
+/// the row scan and reach the same full-scale duty.
+fn signal_brightness(indicator_levels: [[u8; 24]; 8]) -> [[u8; 2]; 8] {
+    let signal = indicators::signal_levels(indicator_levels);
+    std::array::from_fn(|channel| signal[channel].map(|measured| normalize(channel, measured)))
+}
+
+/// Red shows clipping and replaces green, which shows the input level.
+pub(super) fn signal_color([red, green]: [u8; 2]) -> Option<u32> {
+    if red >= green {
+        controls::lit(0xef4040, red)
+    } else {
+        controls::lit(0x76db52, green)
+    }
 }
 
 #[cfg(test)]
 mod pwm_tests {
-    use super::{RING_FULL_SCALE_BY_ROW, ring_brightness};
+    use super::{RING_FULL_SCALE_BY_ROW, ring_brightness, signal_brightness, signal_color};
+
+    #[test]
+    fn signal_lamps_follow_sampled_duty_and_prefer_red() {
+        let mut levels = [[0; 24]; 8];
+        levels[1][7] = 21; // Channel 2 green at half of row 1's full scale.
+        levels[7][6] = 41; // Channel 8 red at full scale.
+        let signal = signal_brightness(levels);
+        assert_eq!(signal[1], [0, 128]);
+        assert_eq!(signal[7], [255, 0]);
+        assert_eq!(signal_color(signal[0]), None);
+        assert_eq!(signal_color(signal[7]), Some(0xef4040));
+        let half = signal_color(signal[1]).unwrap();
+        assert!(half != 0x76db52 && (half >> 8) & 0xff > 0x59);
+    }
 
     #[test]
     fn l6max_full_scale_calibration_matches_each_scanned_row() {
@@ -130,11 +203,20 @@ fn face(id: u32) -> (&'static str, Option<&'static str>, Option<(usize, u32)>) {
         1 => ("", None, None),
         2 => ("", None, None),
         3 => ("", None, None),
-        4 => ("", Some("play-stop"), None),
-        5 => ("", Some("record"), Some((31, 0xef6d66))),
-        6 => ("BOUNCE", None, None),
-        7 => ("Hi-Z", None, Some((8, 0xf59a52))),
-        12 => ("Hi-Z", None, Some((9, 0xf59a52))),
+        4 => (
+            "",
+            Some("play-stop"),
+            Some((indicators::L6MAX_PLAY_LED, 0x60c873)),
+        ),
+        // Record is a MAIN GPIO lamp, outside the panel matrix; see `panel`.
+        5 => ("", Some("record"), None),
+        6 => (
+            "BOUNCE",
+            None,
+            Some((indicators::L6MAX_BOUNCE_LED, 0xf59a52)),
+        ),
+        7 => ("Hi-Z", None, Some((8, 0x60c873))),
+        12 => ("Hi-Z", None, Some((9, 0x60c873))),
         17 => ("48V", None, Some((11, 0xef6d66))),
         32 => ("48V", None, Some((12, 0xef6d66))),
         22 | 27 | 37 | 42 | 29 | 34 | 39 | 44 => (
@@ -163,7 +245,7 @@ fn face(id: u32) -> (&'static str, Option<&'static str>, Option<(usize, u32)>) {
         30 => ("PAN", None, Some((25, 0xf59a52))),
         35 => ("LEVEL", None, Some((26, 0xf59a52))),
         40 => ("SEL", None, None),
-        45 => ("COMP", None, Some((10, 0xf59a52))),
+        45 => ("COMP", None, Some((10, 0x60c873))),
         11 => ("A", None, Some((40, 0xef6d66))),
         16 => ("B", None, Some((41, 0xef6d66))),
         21 => ("C", None, Some((42, 0xef6d66))),
@@ -181,14 +263,16 @@ fn face(id: u32) -> (&'static str, Option<&'static str>, Option<(usize, u32)>) {
 pub fn panel(
     layout: &Layout,
     scale: f32,
-    rows: [u32; 8],
     indicator_levels: [[u8; 24]; 8],
     switches: [bool; 54],
     analog: [u16; 5],
+    main_gpio: [u32; 5],
     interactions: &super::PanelInteractions,
 ) -> Div {
     let s = scale;
-    let leds = indicators::leds(rows);
+    let leds: [bool; 72] = std::array::from_fn(|index| led_lit(indicator_levels, index));
+    let record_led = indicators::l6max_record_led(main_gpio);
+    let signal = signal_brightness(indicator_levels);
     let [left_level, right_level] = indicators::l6max_master_meter_levels(indicator_levels);
     let rings = ring_brightness(indicator_levels);
     let mut panel = div()
@@ -256,16 +340,7 @@ pub fn panel(
             .child(at(
                 Region::centered(x + CHANNEL_WIDTH / 2.0, 342.0, 8.0, 8.0),
                 s,
-                controls::led(
-                    8.0 * s,
-                    if leds[44 + ch] {
-                        Some(0xef4040)
-                    } else if leds[52 + ch] {
-                        Some(0x76db52)
-                    } else {
-                        None
-                    },
-                ),
+                controls::led(8.0 * s, signal_color(signal[ch])),
             ))
             .child(label_sized(
                 x,
@@ -644,7 +719,11 @@ pub fn panel(
                 s,
                 text,
                 icon,
-                indicator.and_then(|(i, c)| leds[i].then_some(c)),
+                if control.id == 5 {
+                    record_led.then_some(0xef6d66)
+                } else {
+                    indicator.and_then(|(i, c)| leds[i].then_some(c))
+                },
                 interactions.button_events(control.id, false),
             )
             .into_any_element()

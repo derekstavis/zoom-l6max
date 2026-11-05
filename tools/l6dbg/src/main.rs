@@ -652,7 +652,7 @@ fn run(recipe_path: &Path, options: Options) -> Result<Value, String> {
                         None
                     };
                     let visible = if actual_model == "l6" { 6 } else { 8 };
-                    json!({"action":"snapshot","name":name,"indicators":status.indicators,"indicator_levels":status.indicator_levels,"ring_levels":&l6max_host::indicators::ring_levels(status.indicator_levels)[..visible],"rings":&rings(status.indicators)[..visible],"display_available":display_available,"display_ascii":format!("{name}.txt"),"display_raw":display_raw})
+                    json!({"action":"snapshot","name":name,"indicators":status.indicators,"main_gpio":inputs.main.snapshot().main_gpio,"indicator_levels":status.indicator_levels,"ring_levels":&l6max_host::indicators::ring_levels(status.indicator_levels)[..visible],"rings":&rings(status.indicators)[..visible],"display_available":display_available,"display_ascii":format!("{name}.txt"),"display_raw":display_raw})
                 }
                 Step::Memory {
                     name,
