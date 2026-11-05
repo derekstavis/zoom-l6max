@@ -11,6 +11,8 @@ pub struct PanelData {
     pub indicator_levels: [[u8; 24]; 8],
     pub switches: [bool; 54],
     pub analog: [u16; 5],
+    /// MAIN GPIO1..5 output latches, which drive lamps outside the panel matrix.
+    pub main_gpio: [u32; 5],
     pub powered: bool,
     /// Packed 128x64 monochrome display bytes in the firmware's native layout.
     pub display: [u8; 1024],
@@ -47,6 +49,7 @@ impl Default for PanelData {
             indicator_levels: [[0; 24]; 8],
             switches: [false; 54],
             analog: [0; 5],
+            main_gpio: [0; 5],
             powered: false,
             display: [0; 1024],
         }
@@ -175,6 +178,7 @@ impl PanelFeed {
             indicator_levels: panel.indicator_levels,
             switches,
             analog: self.inputs.analog_positions(),
+            main_gpio: self.inputs.main.snapshot().main_gpio,
             powered,
             display: self.frame.get(),
         }

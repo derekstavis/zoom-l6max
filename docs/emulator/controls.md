@@ -85,6 +85,19 @@ scenarios check that each meter side responds independently. PWM samples are
 integrated over a guest-time scan window; visual brightness and physical meter
 calibration remain approximate.
 
+Channel SIGNAL lamps use the same sampled positions on both models: red at
+row *n*, bit 6 and green at row *n*, bit 7 for channel *n* + 1; L6 uses rows
+0–5. Green duty rises in steps with input level, and red lights at full-scale
+input and turns green off. With tone inputs, green sampled about 20 and 40 on
+L6max and 17, 32 and 65 on L6, and red about 42 and 65. The renderer shows
+each lamp at its sampled brightness. On L6, mono channels 1–2
+light at lower input levels than stereo channels 3–6.
+
+The L6max Record lamp is not in the panel matrix: MAIN drives GPIO1 bit 28 low
+while recording. Logical LED 31 is the Play/Stop lamp, lit during playback,
+and logical LED 32 drives the Bounce lamp. On L6, Record is row 1, bit 10, Play/Stop is row 7, bit 9, and TAP
+is row 0, bit 13, which blinks while Delay or Echo is selected.
+
 L6 sound-pad playback lamps use these sampled output positions:
 
 | Sound pad | Matrix row | Bit | Mask |
@@ -103,10 +116,10 @@ The L6max logical indicator groups are:
 | 10–16 | COMP, 48V, MONO and USB source selections |
 | 17–26 | HIGH, FREQ, MID, LOW, AUX1, AUX2, EFX, SUB-MIX, PAN, LEVEL |
 | 27–30 | Sound pads 1–4 |
-| 31, 33 | Record, TAP |
+| 31–33 | Play/Stop, Bounce, TAP |
 | 34–39 | Effects selection |
 | 40–43 | Scenes A–D |
-| 44–59 | Channel SIGNAL red and green |
+| 44–51, 52–59 | Channel SIGNAL red, green |
 | 60–71 | MASTER left and right meters |
 | 72–143 | Nine encoder-ring segments per channel |
 
@@ -117,8 +130,9 @@ outputs.
 
 ## Unresolved or incomplete
 
-- L6 Play/Stop and TAP illumination, L6max Bounce illumination, and L6max
-  logical LED 32 do not have verified artwork assignments.
+- On L6max, confirming Quick Bounce from the Bounce menu does not start a
+  bounce in the emulator, so the Bounce lamp has not been observed lighting
+  after a bounce.
 - Physical LED brightness and analog knob travel and taper are not calibrated.
 - Live audio input and analog codec behavior are not modeled. See
   [audio emulation](audio.md) and [current status](../development/current-status.md).

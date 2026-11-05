@@ -180,9 +180,22 @@ lamp off:
 
 The panel uses a serial LED matrix driven by SPI1 and GPIO. The host receives
 sampled LED levels over the panel socket and retains the latest eight rows.
-QEMU integrates pin on-time over a 33 ms virtual-time window. The renderer
+QEMU integrates pin on-time over the last brightness cycle of the LED scan
+(32 frames) and sends changed levels every 5 ms of virtual time. The renderer
 uses model-specific mappings for rings, buttons, effects, scenes, sound pads,
 SIGNAL lamps, and MASTER meters; see [controls and indicators](controls.md).
+
+The window redraws once per display frame, at the display's refresh rate.
+An on/off lamp, such as a button, effect, or scene lamp, is lit while its
+sampled level is at least half its full-scale level. Each switch then shows
+one half cycle late, about 13 ms on L6max and 9 ms on L6, and a flash keeps
+its length. TAP's fastest blink, 25 ms on and 25 ms off, alternates in whole
+display frames: evenly at 120 Hz, as one or two frames at 60 Hz.
+
+Set `L6_LAMP_TRACE=1` to log each button press and release and each change
+of a drawn L6max lamp. Each entry carries the wall clock in
+microseconds (`wall_us`), so a run can be lined up with a recording of the
+device.
 
 Dragging a knob upward or right raises its level; downward or left lowers it.
 The first movement locks the drag axis until release. Scrolling also adjusts
@@ -249,11 +262,12 @@ reads the completed conversion. The board-ID ADC channels are excluded from
 this command.
 
 Channel encoders emit quadrature transitions in guest time. A longer turn can
-queue multiple detents. LED levels are integrated over a 33 ms scan window.
+queue multiple detents. LED levels are integrated over the last brightness
+cycle of the scan.
 
-Panel runtime notifications include a 33 ms virtual-clock heartbeat
-(`0x80000008`). Input tests use it for guest-time waits; timestamps on changed
-LCD frames do not advance while the display is static.
+Panel runtime notifications include a virtual-clock heartbeat about every
+25 ms (`0x80000008`). Input tests use it for guest-time waits; timestamps on
+changed LCD frames do not advance while the display is static.
 
 Panel TIM2 drives input scanning and firmware debounce. QMP pause freezes the chip it
 is sent to and that chip's device timers. Instruction timing is an emulator pacing model rather than a

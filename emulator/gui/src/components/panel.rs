@@ -43,8 +43,16 @@ impl PanelInteractions {
         let down = self.button_down.clone();
         let up = self.button_up.clone();
         ButtonEvents {
-            press: Some(Arc::new(move || down(id, is_switch))),
-            release: (!is_switch).then(|| Arc::new(move || up(id)) as Arc<dyn Fn() + Send + Sync>),
+            press: Some(Arc::new(move || {
+                trace_button(id, true);
+                down(id, is_switch)
+            })),
+            release: (!is_switch).then(|| {
+                Arc::new(move || {
+                    trace_button(id, false);
+                    up(id)
+                }) as Arc<dyn Fn() + Send + Sync>
+            }),
         }
     }
 
@@ -94,7 +102,6 @@ pub fn panel(
         l6fw::Model::L6 => l6::panel(
             layout,
             scale,
-            data.indicators,
             indicator_levels,
             data.analog,
             data.powered,
@@ -103,11 +110,23 @@ pub fn panel(
         l6fw::Model::L6max => l6max::panel(
             layout,
             scale,
-            data.indicators,
             indicator_levels,
             data.switches,
             data.analog,
+            data.main_gpio,
             interactions,
         ),
     }
+}
+
+/// With `L6_LAMP_TRACE` set, log each button press and release with the wall
+/// clock, so lamp timing can be measured from the press that started it.
+fn trace_button(id: u32, pressed: bool) {
+    if std::env::var_os("L6_LAMP_TRACE").is_none() {
+        return;
+    }
+    let wall_us = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_micros());
+    tracing::info!(event = "button", id, pressed, wall_us, "button changed");
 }

@@ -60,14 +60,15 @@
 #define L6_INPUT_MAGIC 0x4c364950u
 #define L6_INPUT_MESSAGE_SIZE 24
 #define L6_INPUT_INDICATOR_LEVELS 0x8000000au
-#define L6_INDICATOR_INTERVAL_NS 33333333
 #define L6_PANEL_PACE_INTERVAL_NS 1000000
 #define L6_PANEL_CONTROL_POWER_OFF 2
 #define L6_PANEL_PACE_MAX_LAG_NS 100000000
 #define L6_INPUT_QUEUE_LIMIT 64
 #define L6_INPUT_TX_LIMIT (64 * 1024)
-/* The dimmest ring segments stay below this; blinking pad LEDs peak far above it. */
-#define L6_INDICATOR_DIM_LEVEL 16
+/* Lamp levels cover the last brightness cycle and are sent when they change,
+ * this often; the virtual-clock heartbeat goes out about once per cycle. */
+#define L6_INDICATOR_PUBLISH_NS 5000000
+#define L6_INDICATOR_HEARTBEAT_NS 25000000
 #define L6_AUDIO_TRACE_WINDOW_FRAMES 64000
 /* 200 ms of output reserve, as a divisor of the sample rate. */
 #define L6_AUDIO_PRIME_DIVISOR 5
@@ -458,6 +459,7 @@ typedef struct L6ChipState {
     QEMUTimer *panel_tim14;
     QEMUTimer *panel_spi_dma;
     QEMUTimer *indicator_timer;
+    int64_t indicator_heartbeat_ns;
     L6Indicators indicators;
     unsigned indicator_log_count;
     QEMUTimer *rom_uart_timer;
@@ -1265,51 +1267,33 @@ static void l6_indicator_tick(void *opaque)
         timer_del(s->indicator_timer);
         return;
     }
-    l6_indicators_advance(indicators, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL));
-    if (!++indicators->generation) {
-        ++indicators->generation;
-    }
-    l6_input_reply(s, 0x80000008u, indicators->generation, 0, 0);
-    for (unsigned row = 0; row < 8; row++) {
-        uint64_t active = indicators->row_active_ns[row];
-        if (active) {
-            for (unsigned bit = 0; bit < 24; bit++) {
-                uint64_t on = MIN(indicators->led_on_ns[row][bit], active);
-                uint8_t level = (on * 255 + active / 2) / active;
-                /* The dimmest segments get too few PWM pulses per window to
-                 * round above zero, and some windows miss them. They recur,
-                 * unlike a stray pulse from a latch update, which stays off.
-                 * Bright windows do not count, so a blinking LED reaches zero. */
-                indicators->pulse_history[row][bit] =
-                    indicators->pulse_history[row][bit] << 1 |
-                    (on != 0 && level <= L6_INDICATOR_DIM_LEVEL);
-                if (level <= 1) {
-                    level = ctpop8(indicators->pulse_history[row][bit]) >= 2;
-                }
-                indicators->levels[row][bit] = level;
-            }
+    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+    l6_indicators_advance(indicators, now);
+    if (now - s->indicator_heartbeat_ns >= L6_INDICATOR_HEARTBEAT_NS) {
+        s->indicator_heartbeat_ns = now;
+        if (!++indicators->generation) {
+            ++indicators->generation;
         }
-        indicators->row_active_ns[row] = 0;
-        memset(indicators->led_on_ns[row], 0,
-               sizeof(indicators->led_on_ns[row]));
+        l6_input_reply(s, 0x80000008u, indicators->generation, 0, 0);
+    }
+    for (unsigned row = 0; row < 8; row++) {
         for (unsigned group = 0; group < 8; group++) {
             unsigned first = group * 3;
-            if (memcmp(&indicators->levels[row][first],
-                       &indicators->published[row][first], 3) == 0) {
+            uint8_t levels[3];
+            for (unsigned index = 0; index < 3; index++) {
+                levels[index] = l6_indicators_level(indicators, row, first + index);
+            }
+            if (memcmp(levels, &indicators->published[row][first], 3) == 0) {
                 continue;
             }
-            uint32_t packed = indicators->levels[row][first] |
-                ((uint32_t)indicators->levels[row][first + 1] << 8) |
-                ((uint32_t)indicators->levels[row][first + 2] << 16);
+            uint32_t packed = levels[0] | ((uint32_t)levels[1] << 8) |
+                ((uint32_t)levels[2] << 16);
             l6_input_reply(s, L6_INPUT_INDICATOR_LEVELS,
                            indicators->generation, row * 8 + group, packed);
-            memcpy(&indicators->published[row][first],
-                   &indicators->levels[row][first], 3);
+            memcpy(&indicators->published[row][first], levels, 3);
         }
     }
-    timer_mod(s->indicator_timer,
-              qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
-                  L6_INDICATOR_INTERVAL_NS);
+    timer_mod(s->indicator_timer, now + L6_INDICATOR_PUBLISH_NS);
 }
 
 extern bool icount_timers_stay_on_vcpu;
@@ -1686,7 +1670,7 @@ static void l6_panel_set_held(L6ChipState *panel, bool held)
     if (!held) {
         timer_mod(panel->indicator_timer,
                   qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
-                      L6_INDICATOR_INTERVAL_NS);
+                      L6_INDICATOR_PUBLISH_NS);
     }
     async_run_on_cpu(CPU(panel->armv7m.cpu), l6_chip_cpu_reset,
                      RUN_ON_CPU_HOST_PTR(panel));
@@ -4755,7 +4739,7 @@ static void l6_chip_init(MachineState *machine, L6ChipState *s, bool panel,
         s->panel_spi_dma = timer_new_ns(QEMU_CLOCK_VIRTUAL, l6_panel_spi_dma_tick, s);
         s->indicator_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, l6_indicator_tick, s);
         timer_mod(s->indicator_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
-                  L6_INDICATOR_INTERVAL_NS);
+                  L6_INDICATOR_PUBLISH_NS);
         if (g_getenv("L6_PANEL_REALTIME")) {
             icount_timers_stay_on_vcpu = true;
             s->panel_pace = timer_new_ns(QEMU_CLOCK_VIRTUAL, l6_panel_pace_tick, s);

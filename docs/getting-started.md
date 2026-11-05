@@ -88,8 +88,8 @@ The L6 firmware also boots. The UI includes verified hit targets for its six
 mutes, MONO and USB source keys, channel modes, COMP, EFX SEL, phantom power,
 scenes, Record, TAP, and four sound pads. Play target 4 drives active-low
 GPIO2.25 and submits runtime event `0x20`; the separately startup-sampled,
-active-low GPIO1.9 input is the Power Switch. Playback and physical Play lamp
-correlation remain unverified. The L6 has no screen, so
+active-low GPIO1.9 input is the Power Switch. The Play/Stop lamp lights during
+recorder playback. The L6 has no screen, so
 first-boot setup and menu navigation remain incomplete, and encoder changes
 have no LCD readback. Some unassigned panel matrix coordinates and downstream
 control effects remain under investigation.

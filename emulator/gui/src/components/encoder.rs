@@ -139,35 +139,7 @@ impl RenderOnce for EncoderWithLeds {
 }
 
 fn ring_color(level: u8) -> u32 {
-    fn srgb_to_linear(channel: u8) -> f64 {
-        let channel = f64::from(channel) / 255.0;
-        if channel <= 0.04045 {
-            channel / 12.92
-        } else {
-            ((channel + 0.055) / 1.055).powf(2.4)
-        }
-    }
-
-    fn linear_to_srgb(channel: f64) -> u8 {
-        let channel = if channel <= 0.0031308 {
-            channel * 12.92
-        } else {
-            1.055 * channel.powf(1.0 / 2.4) - 0.055
-        };
-        (channel.clamp(0.0, 1.0) * 255.0 + 0.5) as u8
-    }
-
-    let blend = |off: u8, on: u8| {
-        let amount = f64::from(level) / 255.0;
-        let off = srgb_to_linear(off);
-        let on = srgb_to_linear(on);
-        linear_to_srgb(off + (on - off) * amount)
-    };
-    let off = 0x56595d;
-    let on = 0xffc266;
-    (u32::from(blend((off >> 16) as u8, (on >> 16) as u8)) << 16)
-        | (u32::from(blend((off >> 8) as u8, (on >> 8) as u8)) << 8)
-        | u32::from(blend(off as u8, on as u8))
+    super::indicator_led::blend(0x56595d, 0xffc266, level)
 }
 
 #[cfg(test)]
