@@ -74,6 +74,7 @@ pub enum Operation {
     },
     AudioCallbacks,
     KnobDialog,
+    MenuCallbackAudit,
     PopupConcurrency,
     FirmwareUpdate,
     WasmPatch,
@@ -1112,6 +1113,462 @@ fn wait_guest_duration(
         thread::sleep(Duration::from_millis(5));
     }
     Ok(())
+}
+
+fn run_menu_callback_audit(
+    session: &Session,
+    options: &Options,
+    guest_timeout_ms: u32,
+    wall_timeout_s: u64,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    const HOME: u32 = 0x8020_0408;
+    const CURRENT_WINDOW: u32 = 0x8020_2610;
+    const USB_TRANSFER: u32 = 0x8020_030c;
+    const CALLBACK_FLAGS: u32 = 0x8020_a584;
+    const CALLBACK_TARGETS: u32 = 0x8020_a59c;
+    const CANDIDATE_SLOTS: [usize; 3] = [0, 2, 5];
+
+    let inputs = session
+        .engine
+        .inputs
+        .as_ref()
+        .ok_or("menu audit needs inputs")?;
+    let qmp = &session.engine.management[0];
+    let deadline = Instant::now() + Duration::from_secs(wall_timeout_s);
+    let start = inputs.panel.snapshot().guest_ms;
+
+    let word = |address: u32| -> Result<u32, Box<dyn std::error::Error>> {
+        Ok(u32::from_le_bytes(
+            qmp.read_memory(0, address, 4)?.try_into().unwrap(),
+        ))
+    };
+    let callback_snapshot = || -> Result<Value, Box<dyn std::error::Error>> {
+        let target_bytes = qmp.read_memory(0, CALLBACK_TARGETS, 24)?;
+        let flag_bytes = qmp.read_memory(0, CALLBACK_FLAGS, 6)?;
+        let targets = target_bytes
+            .chunks_exact(4)
+            .map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()))
+            .collect::<Vec<_>>();
+        let free_slots = CANDIDATE_SLOTS
+            .iter()
+            .map(|&slot| targets[slot] == 0)
+            .collect::<Vec<_>>();
+        if free_slots.iter().any(|free| !free) {
+            let occupied = CANDIDATE_SLOTS
+                .iter()
+                .zip(&free_slots)
+                .filter_map(|(&slot, &free)| (!free).then_some((slot, targets[slot])))
+                .collect::<Vec<_>>();
+            return Err(format!(
+                "stock display callback candidate slot(s) became occupied: {occupied:?}"
+            )
+            .into());
+        }
+        Ok(json!({
+            "targets": targets,
+            "running_flags": flag_bytes,
+            "candidate_slots": CANDIDATE_SLOTS,
+            "candidate_slots_empty": true,
+        }))
+    };
+    let save_screen = |name: &str| -> Result<(), Box<dyn std::error::Error>> {
+        let frame = session.poll()?.display;
+        let image = image::GrayImage::from_fn(128, 64, |x, y| {
+            let index = ((63 - y as usize) / 8) * 128 + x as usize;
+            image::Luma([if frame[index] & (1 << ((63 - y as usize) % 8)) != 0 {
+                255
+            } else {
+                0
+            }])
+        });
+        image::DynamicImage::ImageLuma8(image)
+            .resize(768, 384, image::imageops::FilterType::Nearest)
+            .save(options.logs.join(format!("menu-{name}.png")))?;
+        Ok(())
+    };
+    let tap = |target: u32, main: bool| -> Result<(), Box<dyn std::error::Error>> {
+        let (applied_before, released_before) = if main {
+            let status = inputs.main.snapshot();
+            (status.applied, status.released)
+        } else {
+            let status = inputs.panel.snapshot();
+            (status.applied, status.released)
+        };
+        if main {
+            inputs.main.tap(target, 120)?;
+        } else {
+            inputs.panel.tap(target, 120)?;
+        }
+        loop {
+            session.poll()?;
+            let (applied, released) = if main {
+                let status = inputs.main.snapshot();
+                (status.applied, status.released)
+            } else {
+                let status = inputs.panel.snapshot();
+                (status.applied, status.released)
+            };
+            if applied > applied_before && released > released_before {
+                break;
+            }
+            let elapsed = inputs.panel.snapshot().guest_ms.wrapping_sub(start);
+            if elapsed > guest_timeout_ms || Instant::now() >= deadline {
+                return Err(format!(
+                    "menu input target {target} did not complete before its deadline"
+                )
+                .into());
+            }
+            thread::sleep(Duration::from_millis(3));
+        }
+        wait_guest_duration(session, 1_500, deadline).map_err(std::io::Error::other)?;
+        Ok(())
+    };
+    let observe =
+        |name: &str, screens: &mut Vec<Value>| -> Result<u32, Box<dyn std::error::Error>> {
+            let current = word(CURRENT_WINDOW)?;
+            let callbacks = callback_snapshot()?;
+            save_screen(name)?;
+            screens.push(json!({
+                "screen":name,
+                "screenshot":format!("menu-{name}.png"),
+                "window":format!("{current:#010x}"),
+                "callbacks":callbacks,
+            }));
+            Ok(current)
+        };
+
+    // Match the existing headless recorder setup used by the knob-dialog case.
+    wait_guest(session, start, 40_000, guest_timeout_ms, wall_timeout_s)?;
+    tap(3, false)?;
+    tap(3, false)?;
+    let home = word(CURRENT_WINDOW)?;
+    if home != HOME {
+        return Err(format!("expected recorder home {HOME:#010x}, found {home:#010x}").into());
+    }
+    let mut screens = Vec::new();
+    callback_snapshot()?;
+    save_screen("home")?;
+    screens.push(
+        json!({"screen":"home","screenshot":"menu-home.png","window":format!("{home:#010x}"),"callbacks":callback_snapshot()?}),
+    );
+
+    // The firmware's main menu order, confirmed by its USB File Transfer index
+    // and the Sound Pad assignment path exercised by the existing emulator case.
+    let menus = [
+        ("project", "Project", 0usize),
+        ("recorder-mode", "Recorder Mode", 1),
+        ("sound-pad", "Sound Pad", 2),
+        ("mixer", "Mixer", 3),
+        ("sd-card", "SD Card", 4),
+        ("usb-audio-interface", "USB Audio Interface", 6),
+        ("system", "System", 7),
+        ("help", "Help", 8),
+    ];
+    tap(0, true)?;
+    observe("main-menu", &mut screens)?;
+
+    let mut selected_root_index = 0usize;
+    for (position, (name, _label, target_root_index)) in menus.iter().enumerate() {
+        if position != 0 {
+            // Returning home preserves the selected main-menu item. Reopen the
+            // menu and move to the next intended row.
+            tap(0, true)?;
+            observe("main-menu", &mut screens)?;
+            for _ in selected_root_index..*target_root_index {
+                tap(2, false)?;
+            }
+        }
+        selected_root_index = *target_root_index;
+        tap(3, false)?;
+        wait_guest_duration(session, 3_500, deadline)?;
+        observe(name, &mut screens)?;
+
+        // Browse the populated project list without creating, deleting, or
+        // selecting a project.
+        if *name == "project" {
+            tap(2, false)?;
+            tap(3, false)?;
+            wait_guest_duration(session, 3_500, deadline)?;
+            observe("project-select", &mut screens)?;
+        }
+
+        match *name {
+            "sound-pad" => {
+                // Visit every Sound Pad submenu and inspect Pad 1's choices.
+                // Back out before changing the file, mode, level, or sync state.
+                let routes = [
+                    ("sound-assign", "sound-assign", Some("sound-pad-files")),
+                    (
+                        "play-mode",
+                        "sound-pad-play-mode-pads",
+                        Some("sound-pad1-play-mode"),
+                    ),
+                    ("level", "sound-pad-level-pads", Some("sound-pad1-level")),
+                    (
+                        "midi-clock-sync",
+                        "sound-pad-midi-clock-pads",
+                        Some("sound-pad1-midi-clock"),
+                    ),
+                    ("midi-clock-source", "sound-pad-midi-clock-source", None),
+                ];
+                for (index, (key, page, leaf)) in routes.iter().enumerate() {
+                    if index != 0 {
+                        tap(2, false)?;
+                    }
+                    tap(3, false)?;
+                    wait_guest_duration(session, 3_500, deadline)?;
+                    observe(page, &mut screens)?;
+                    if let Some(leaf) = leaf {
+                        tap(3, false)?;
+                        wait_guest_duration(session, 3_500, deadline)?;
+                        observe(leaf, &mut screens)?;
+                        // Pad 1's page is a child of the selector page, which
+                        // is itself a child of the Sound Pad menu.
+                        tap(0, true)?;
+                    }
+                    if *key != "midi-clock-source" {
+                        tap(0, true)?;
+                    }
+                }
+            }
+            "mixer" => {
+                // Firmware 1.10 exposes these six rows in the Mixer menu. Enter
+                // the default-scene confirmation but never execute it.
+                let routes = [
+                    "mixer-effect-parameter",
+                    "mixer-effect-return",
+                    "mixer-load-default-scene",
+                    "mixer-monitor-point",
+                    "mixer-sub-out-point",
+                    "mixer-control-via-midi",
+                ];
+                for (index, page) in routes.iter().enumerate() {
+                    if index != 0 {
+                        tap(2, false)?;
+                    }
+                    tap(3, false)?;
+                    wait_guest_duration(session, 3_500, deadline)?;
+                    observe(page, &mut screens)?;
+
+                    if *page == "mixer-effect-parameter" {
+                        // Visit every effect type and inspect its parameter list;
+                        // no parameter value is edited.
+                        let effects = ["hall", "room", "spring", "delay", "echo"];
+                        for (effect_index, effect) in effects.iter().enumerate() {
+                            if effect_index != 0 {
+                                tap(2, false)?;
+                            }
+                            tap(3, false)?;
+                            wait_guest_duration(session, 3_500, deadline)?;
+                            observe(&format!("mixer-effect-{effect}"), &mut screens)?;
+                            tap(0, true)?;
+                        }
+                        // Return from the effect type list to the Mixer menu.
+                        tap(0, true)?;
+                    } else if *page == "mixer-effect-return" {
+                        // Effect Return contains two nested pages.
+                        for (child_index, child) in ["sub-mix", "mix-minus"].iter().enumerate() {
+                            if child_index != 0 {
+                                tap(2, false)?;
+                            }
+                            tap(3, false)?;
+                            wait_guest_duration(session, 3_500, deadline)?;
+                            observe(&format!("mixer-effect-return-{child}"), &mut screens)?;
+                            tap(0, true)?;
+                        }
+                        // Return from the Sub-Mix / Mix Minus list to Mixer.
+                        tap(0, true)?;
+                    } else {
+                        tap(0, true)?;
+                    }
+                }
+            }
+            "sd-card" => {
+                // These routes stop at their confirmation screens. In
+                // particular, Format and Full Test are never executed.
+                for (index, page) in [
+                    "sd-card-format-confirm",
+                    "sd-card-quick-test-confirm",
+                    "sd-card-full-test-confirm",
+                ]
+                .iter()
+                .enumerate()
+                {
+                    if index != 0 {
+                        tap(2, false)?;
+                    }
+                    tap(3, false)?;
+                    wait_guest_duration(session, 3_500, deadline)?;
+                    observe(page, &mut screens)?;
+                    tap(0, true)?;
+                }
+            }
+            "usb-audio-interface" => {
+                // Inspect both USB Audio Interface settings, leaving their
+                // current values untouched.
+                for (index, page) in ["usb-audio-mode", "usb-mix-minus", "usb-audio-send-level"]
+                    .iter()
+                    .enumerate()
+                {
+                    if index != 0 {
+                        tap(2, false)?;
+                    }
+                    tap(3, false)?;
+                    wait_guest_duration(session, 3_500, deadline)?;
+                    observe(page, &mut screens)?;
+                    tap(0, true)?;
+                }
+            }
+            "system" => {
+                // Visit the complete System submenu. Reset All Settings is
+                // inspected only at its confirmation screen and never run.
+                let routes = [
+                    "system-date-time",
+                    "system-battery-type",
+                    "system-auto-power-off",
+                    "system-display-brightness",
+                    "system-power-saving",
+                    "system-firmware",
+                    "system-reset-all-confirm",
+                ];
+                for (index, page) in routes.iter().enumerate() {
+                    if index != 0 {
+                        tap(2, false)?;
+                    }
+                    tap(3, false)?;
+                    wait_guest_duration(session, 3_500, deadline)?;
+                    observe(page, &mut screens)?;
+                    tap(0, true)?;
+                }
+            }
+            _ => {}
+        }
+
+        for _ in 0..5 {
+            if word(CURRENT_WINDOW)? == HOME {
+                break;
+            }
+            tap(0, true)?;
+        }
+        let current = word(CURRENT_WINDOW)?;
+        if current != HOME {
+            return Err(
+                format!("Menu did not return home after entering {name}: {current:#010x}").into(),
+            );
+        }
+    }
+
+    // USB File Transfer is a terminal mode: entering it leaves the main menu
+    // instead of returning to Home on Menu. System is visited first, then the
+    // persistent root cursor moves up three times to the USB row.
+    tap(0, true)?;
+    observe("main-menu", &mut screens)?;
+    tap(1, false)?;
+    tap(1, false)?;
+    tap(1, false)?;
+    tap(3, false)?;
+    wait_guest_duration(session, 3_500, deadline)?;
+    let usb_window = observe("usb-file-transfer", &mut screens)?;
+    if usb_window != USB_TRANSFER {
+        return Err(format!(
+            "USB File Transfer did not open its transfer screen: {usb_window:#010x}"
+        )
+        .into());
+    }
+
+    let final_window = word(CURRENT_WINDOW)?;
+    if final_window != USB_TRANSFER {
+        return Err(format!(
+            "menu audit did not remain on USB File Transfer: {final_window:#010x}"
+        )
+        .into());
+    }
+    let result = json!({
+        "navigation_tree": [
+            {"name":"Home","screenshot":"menu-home.png","children":[
+                {"name":"Menu","screenshot":"menu-main-menu.png","children":[
+                    {"name":"Project","screenshot":"menu-project.png","children":[
+                        {"name":"Select project","screenshot":"menu-project-select.png"}
+                    ]},
+                    {"name":"Recorder Mode","screenshot":"menu-recorder-mode.png"},
+                    {"name":"Sound Pad","screenshot":"menu-sound-pad.png","children":[
+                        {"name":"Sound Assign","screenshot":"menu-sound-assign.png","children":[
+                            {"name":"Pad 1 files","screenshot":"menu-sound-pad-files.png"}
+                        ]},
+                        {"name":"Play Mode","screenshot":"menu-sound-pad-play-mode-pads.png","children":[
+                            {"name":"Pad 1 mode choices","screenshot":"menu-sound-pad1-play-mode.png"}
+                        ]},
+                        {"name":"Level","screenshot":"menu-sound-pad-level-pads.png","children":[
+                            {"name":"Pad 1 level","screenshot":"menu-sound-pad1-level.png"}
+                        ]},
+                        {"name":"MIDI Clock Sync","screenshot":"menu-sound-pad-midi-clock-pads.png","children":[
+                            {"name":"Pad 1 sync choices","screenshot":"menu-sound-pad1-midi-clock.png"}
+                        ]},
+                        {"name":"MIDI Clock Source","screenshot":"menu-sound-pad-midi-clock-source.png"}
+                    ]},
+                    {"name":"Mixer","screenshot":"menu-mixer.png","children":[
+                        {"name":"Effect Parameter","screenshot":"menu-mixer-effect-parameter.png","children":[
+                            {"name":"Hall parameters","screenshot":"menu-mixer-effect-hall.png"},
+                            {"name":"Room parameters","screenshot":"menu-mixer-effect-room.png"},
+                            {"name":"Spring parameters","screenshot":"menu-mixer-effect-spring.png"},
+                            {"name":"Delay parameters","screenshot":"menu-mixer-effect-delay.png"},
+                            {"name":"Echo parameters","screenshot":"menu-mixer-effect-echo.png"}
+                        ]},
+                        {"name":"Effect Return","screenshot":"menu-mixer-effect-return.png","children":[
+                            {"name":"Sub-Mix","screenshot":"menu-mixer-effect-return-sub-mix.png"},
+                            {"name":"Mix Minus","screenshot":"menu-mixer-effect-return-mix-minus.png"}
+                        ]},
+                        {"name":"Load Default Scene","screenshot":"menu-mixer-load-default-scene.png"},
+                        {"name":"Monitor Point","screenshot":"menu-mixer-monitor-point.png"},
+                        {"name":"Sub-Out Point","screenshot":"menu-mixer-sub-out-point.png"},
+                        {"name":"Mixer Control via MIDI","screenshot":"menu-mixer-control-via-midi.png"}
+                    ]},
+                    {"name":"SD Card","screenshot":"menu-sd-card.png","children":[
+                        {"name":"Format confirmation","screenshot":"menu-sd-card-format-confirm.png"},
+                        {"name":"Quick Test confirmation","screenshot":"menu-sd-card-quick-test-confirm.png"},
+                        {"name":"Full Test confirmation","screenshot":"menu-sd-card-full-test-confirm.png"}
+                    ]},
+                    {"name":"USB File Transfer","screenshot":"menu-usb-file-transfer.png"},
+                    {"name":"USB Audio Interface","screenshot":"menu-usb-audio-interface.png","children":[
+                        {"name":"Mode choices","screenshot":"menu-usb-audio-mode.png"},
+                        {"name":"USB Mix Minus choices","screenshot":"menu-usb-mix-minus.png"},
+                        {"name":"Send Level","screenshot":"menu-usb-audio-send-level.png"}
+                    ]},
+                    {"name":"System","screenshot":"menu-system.png","children":[
+                        {"name":"Date/Time","screenshot":"menu-system-date-time.png"},
+                        {"name":"Battery Type","screenshot":"menu-system-battery-type.png"},
+                        {"name":"Auto Power Off","screenshot":"menu-system-auto-power-off.png"},
+                        {"name":"Display Brightness","screenshot":"menu-system-display-brightness.png"},
+                        {"name":"Power Saving","screenshot":"menu-system-power-saving.png"},
+                        {"name":"Firmware","screenshot":"menu-system-firmware.png"},
+                        {"name":"Reset All Settings confirmation","screenshot":"menu-system-reset-all-confirm.png"}
+                    ]},
+                    {"name":"Help","screenshot":"menu-help.png"}
+                ]}
+            ]}
+        ],
+        "root_menu_order": [
+            "Project",
+            "Recorder Mode",
+            "Sound Pad",
+            "Mixer",
+            "SD Card",
+            "USB File Transfer",
+            "USB Audio Interface",
+            "System",
+            "Help",
+        ],
+        "visit_order": screens.iter().map(|screen| screen["screen"].clone()).collect::<Vec<_>>(),
+        "screens": screens,
+        "candidate_slots": CANDIDATE_SLOTS,
+        "candidate_slots_empty_on_every_screen": true,
+        "final_window": format!("{final_window:#010x}"),
+    });
+    fs::write(
+        options.logs.join("menu-callback-audit.json"),
+        serde_json::to_vec_pretty(&result)?,
+    )?;
+    Ok(result)
 }
 
 fn run_l6_usb_startup(
@@ -4492,6 +4949,9 @@ impl State {
             }
             Operation::KnobDialog => {
                 run_knob_dialog(session, options, guest_timeout_ms, wall_timeout_s)
+            }
+            Operation::MenuCallbackAudit => {
+                run_menu_callback_audit(session, options, guest_timeout_ms, wall_timeout_s)
             }
             Operation::PopupConcurrency => {
                 run_popup_concurrency(session, options, guest_timeout_ms, wall_timeout_s)

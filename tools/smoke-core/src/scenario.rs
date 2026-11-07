@@ -231,6 +231,7 @@ pub enum Action {
     },
     AudioCallbacks,
     KnobDialog,
+    MenuCallbackAudit,
     PopupConcurrency,
     FirmwareUpdate,
     WasmPatch,
@@ -691,6 +692,12 @@ impl Scenario {
             {
                 return Err("knob-dialog requires L6max scope".into());
             }
+            if matches!(step.action, Action::MenuCallbackAudit)
+                && (value.models.iter().any(|m| m != "l6max")
+                    || step.models.iter().any(|m| m != "l6max"))
+            {
+                return Err("menu-callback-audit requires L6max scope".into());
+            }
             if matches!(step.action, Action::PopupConcurrency)
                 && (value.models.iter().any(|m| m != "l6max")
                     || step.models.iter().any(|m| m != "l6max"))
@@ -854,6 +861,7 @@ impl Scenario {
                 | Action::HoldChord { .. }
                 | Action::AudioCallbacks
                 | Action::KnobDialog
+                | Action::MenuCallbackAudit
                 | Action::PopupConcurrency
                 | Action::FirmwareUpdate
                 | Action::Restart

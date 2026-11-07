@@ -512,6 +512,9 @@ impl Runner {
                 Action::KnobDialog => {
                     return Ok(Progress::Device(devices::Operation::KnobDialog));
                 }
+                Action::MenuCallbackAudit => {
+                    return Ok(Progress::Device(devices::Operation::MenuCallbackAudit));
+                }
                 Action::PopupConcurrency => {
                     return Ok(Progress::Device(devices::Operation::PopupConcurrency));
                 }

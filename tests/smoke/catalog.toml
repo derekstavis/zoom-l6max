@@ -113,6 +113,14 @@ needs_configuration = true
 wall_timeout_s = 2400
 
 [[case]]
+id = "l6max-menu-callback-audit"
+suites = ["full"]
+models = ["l6max"]
+scenario = "scenarios/l6max-menu-callback-audit.toml"
+volatile = true
+wall_timeout_s = 900
+
+[[case]]
 id = "l6-editor-pad-playback"
 suites = ["full"]
 models = ["l6"]

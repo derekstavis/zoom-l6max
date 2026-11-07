@@ -1,0 +1,11 @@
+version = 1
+name = "l6max-menu-callback-audit"
+models = ["l6max"]
+backends = ["headless"]
+state = "setup-complete"
+card = "menu-data"
+
+[[step]]
+action = "menu-callback-audit"
+guest_timeout_ms = 600000
+wall_timeout_s = 900
