@@ -1625,6 +1625,10 @@ checksum = "aedcfb3409746eddb02b9e19ebda1c3394f759a152e48ee875a0844d1b955484"
 [[package]]
 name = "firmware-patch-compile"
 version = "0.1.0"
+dependencies = [
+ "patch-hook-macros",
+ "sha2",
+]
 
 [[package]]
 name = "firmware-patch-core"
@@ -2997,6 +3001,7 @@ dependencies = [
  "firmware-patch-compile",
  "firmware-patch-core",
  "l6fw",
+ "patch-loader-core",
  "serde_json",
  "sha2",
 ]
@@ -3012,6 +3017,7 @@ dependencies = [
  "l6max-host",
  "l6nor",
  "libc",
+ "patch-loader-core",
  "qemu-build",
  "sd-image",
  "serde",
@@ -4032,6 +4038,19 @@ name = "pastey"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "35fb2e5f958ec131621fdd531e9fc186ed768cbe395337403ae56c17a74c68ec"
+
+[[package]]
+name = "patch-hook-macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "patch-loader-core"
+version = "0.1.0"
 
 [[package]]
 name = "pathfinder_geometry"
@@ -5293,6 +5312,7 @@ dependencies = [
  "l6max-diagnostics",
  "l6max-host",
  "libc",
+ "patch-loader-core",
  "sd-image",
  "serde",
  "serde_json",

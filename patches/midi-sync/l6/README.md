@@ -1,8 +1,10 @@
 # L6 MIDI state sync
 
-The L6 1.10 profile for [`midi-sync`](../README.md) uses a separately
-model-specific hook, value getters, channel mapping, and mapped-CC sender. It does
-not reuse the L6max addresses or assume the L6max's 94-setting layout.
+The L6 1.10 profile for [`midi-sync`](../README.md) uses model-specific
+value getters, channel mapping, a mapped-CC sender, and a separate hook guard. It
+does not reuse the L6max addresses or assume the L6max's 94-setting layout.
+Both profiles share the request parser in `../common/sync_request.rs`; value
+lookup and sending stay model-specific.
 
 Send Control Change 127 with value 64 or higher on the configured MIDI
 channel through the L6 Mixer Control port. The hook broadcasts six physical
@@ -16,14 +18,14 @@ other messages fall through to the original handler.
 The supported L6 1.10 MAIN image has SHA-256
 `827c7c5cb2a43cc3a011d4556462b8cb9539242f817ebeed7727d66a36c03799` and loads
 at `0x80001000`. The hook replaces four bytes at `0x8002f490`, the L6
-`MidiControlMsg` handler. Its independent byte guard is in `hooks.tsv`; the
-displaced prologue is read from the user's input image during payload build.
+`MidiControlMsg` handler. Its byte guard and displaced length are in the shared function-hook catalog;
+the displaced prologue is read from the user's input image during payload build.
 
 The hook reads the message at the stock handler's offsets `+4`, `+5`, and `+6`.
 For a sync request it loops over six strips and nine groups, maps each strip
 through `0x80040ae8`, reads the stored value through the L6 getters, and calls
 the L6 mapped-CC sender at `0x80008330`. Values above 127 and invalid mapped
-channels are skipped. `tests/cpu_sim_l6.py` executes the compiled hook and
+channels are skipped. `tests/cpu_sim.py` executes the compiled hook and
 trampoline while stubbing those firmware helpers.
 
 The sender and getter roles are supported by a live QEMU hook test on the
@@ -46,7 +48,7 @@ vector and select this profile automatically.
 ```sh
 cargo run -p l6fw -- unpack /path/to/L6.BIN unpacked-l6
 cargo run -p l6patch -- unpacked-l6 firmware-midi-sync-l6 --patch midi-sync
-python3 patches/midi-sync/tests/cpu_sim_l6.py firmware-midi-sync-l6/main_firmware.bin
+python3 patches/midi-sync/l6/tests/cpu_sim.py firmware-midi-sync-l6/main_firmware.bin
 cargo run -p qemu-run -- --qemu /path/to/qemu-system-arm \
   --firmware-dir firmware-midi-sync-l6 --logs /tmp/l6-midi-sync --seconds 5
 cargo run -p l6test -- run --config config.toml --case l6-midi-sync --model l6

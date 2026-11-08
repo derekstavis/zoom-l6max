@@ -1,0 +1,23 @@
+{
+  "base": "0x8010a920",
+  "hooks": [
+    {
+      "address": "0x80053b28",
+      "length": 4,
+      "symbol": "__l6_call_dispatch_mixer_apply_channel_parameter",
+      "target": "0x8010a9c0"
+    }
+  ],
+  "model": "L6max",
+  "name": "knob-dialog",
+  "payload_file": "knob-dialog-8010a920.bin",
+  "payload_length": 6032,
+  "window_byte_total": 4,
+  "windows": [
+    {
+      "firmware_address": "0x80053b28",
+      "length": 4,
+      "payload_offset": 148
+    }
+  ]
+}

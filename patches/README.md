@@ -8,7 +8,7 @@ in ignored output directories.
 
 | Patch | Supported models | Purpose | Builder |
 | --- | --- | --- | --- |
-| [knob-dialog](knob-dialog/README.md) | L6max 1.10 | Show channel encoder values using the stock notification renderer | `l6patch` |
+| [knob-dialog](knob-dialog/README.md) | L6max 1.10 | Show channel encoder values in a custom scene using the stock GUI renderer | `l6patch` |
 | [midi-sync](midi-sync/README.md) | L6max 1.10; L6 1.10 | Send the channel mixer state as Control Change on request | `l6patch` |
 | [din-mixer-control](din-mixer-control/README.md) | L6max 1.10 | Let the physical MIDI IN/OUT jacks control the mixer when Mixer Control via MIDI is on, as documented but never implemented | `l6patch` |
 
@@ -22,20 +22,39 @@ precompiled templates as the browser patcher, so it needs no cross-compiler. See
 ```text
 patches/
   README.md
+  api/
+    patchrt.rs         # Shared no_std patch runtime and macros
+    l6/                # L6 1.10 declarations, grouped by subsystem
+    l6max/             # L6max 1.10 declarations, grouped by subsystem
   <patch-name>/
-    README.md
-    src/                 # Payload, firmware bindings, assembly, helpers
-    linker/              # Linker script when injecting compiled code
-    hooks.tsv            # Original region hashes/lengths and hook targets
+    README.md            # Overview when the patch has multiple profiles
+    common/              # Optional code shared across model profiles
+    l6/                  # Optional L6 profile
+    l6max/               # Matching profile when L6 is also supported
+      README.md
+      src/               # Payload, firmware bindings and helpers
+      linker/            # Linker script when injecting compiled code
 ```
 
-`midi-sync/l6/` contains the separate L6 1.10 hook, firmware bindings,
-trampoline and linker script. The native builder selects it from the MAIN
-reset vector; the L6max profile remains at the patch root.
+`midi-sync/l6/` and `midi-sync/l6max/` contain the separate firmware profiles,
+including their payload and linker scripts. Shared firmware bindings and
+hookable-site catalogs live under `api/<model>/` and are selected for the
+matching MAIN image.
 
 Create only the files the patch needs. A change to existing instructions may
-not need a compiled payload or linker script. Keep patch-specific bindings and
-trampolines with that patch: their addresses depend on the target firmware.
+not need a compiled payload or linker script. Keep patch-specific bindings
+with that patch and use the builder-generated continuation when hook metadata
+declares one.
+Payloads include [`api/patchrt.rs`](api/patchrt.rs) for shared patch runtime
+support. Model-specific typed firmware declarations and hook catalogs are
+grouped under [`api/`](api/README.md).
+The [Rust patch payload API guide](../docs/development/patch-api.md) explains
+the function attributes, shared hook catalog, and generated hook metadata.
+The builder generates displaced-code continuations for entry hooks, a
+register-preserving veneer for each static offset hook, and call dispatchers
+for call-site hooks. Keep remaining hand-written assembly for loader dispatch
+and other architecture-specific logic scoped to the matching model and
+firmware revision.
 
 ## Heap headroom
 

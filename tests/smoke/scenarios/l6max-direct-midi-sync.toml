@@ -4,7 +4,7 @@ models = ["l6max"]
 backends = ["headless"]
 state = "setup-complete"
 patches = ["midi-sync"]
-main_sha256 = "a3f32acf2c29a32f1d7a5667a0fed5d313594fafd926dabc214d97fd88b1b644"
+main_sha256 = "379804b806079242bc27b36b5b59c2fb354c1b99f0307803782cd43d1dc13d1f"
 
 [[step]]
 action = "delay"

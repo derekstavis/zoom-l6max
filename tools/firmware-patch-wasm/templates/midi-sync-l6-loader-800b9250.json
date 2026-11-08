@@ -1,0 +1,23 @@
+{
+  "base": "0x800b9250",
+  "hooks": [
+    {
+      "address": "0x8002f490",
+      "length": 4,
+      "symbol": "midi_in_hook",
+      "target": "0x800b925c"
+    }
+  ],
+  "model": "L6",
+  "name": "midi-sync",
+  "payload_file": "midi-sync-l6-loader-800b9250.bin",
+  "payload_length": 236,
+  "window_byte_total": 4,
+  "windows": [
+    {
+      "firmware_address": "0x8002f490",
+      "length": 4,
+      "payload_offset": 0
+    }
+  ]
+}

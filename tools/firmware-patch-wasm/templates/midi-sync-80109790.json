@@ -1,0 +1,23 @@
+{
+  "base": "0x80109790",
+  "hooks": [
+    {
+      "address": "0x8003f7c8",
+      "length": 4,
+      "symbol": "midi_in_hook",
+      "target": "0x8010979c"
+    }
+  ],
+  "model": "L6max",
+  "name": "midi-sync",
+  "payload_file": "midi-sync-80109790.bin",
+  "payload_length": 1175,
+  "window_byte_total": 4,
+  "windows": [
+    {
+      "firmware_address": "0x8003f7c8",
+      "length": 4,
+      "payload_offset": 0
+    }
+  ]
+}

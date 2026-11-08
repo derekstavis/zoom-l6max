@@ -16,26 +16,33 @@ The main MCU owns mixer parameter values and LCD rendering. The panel MCU
 reports encoder movement over UART and drives indicators. The patch modifies
 the main firmware and keeps the panel image unchanged.
 
-A channel encoder turn applies the original mixer setter, reads back the stored
-value, and copies an optional presentation event without waiting for a display
-lock or compositor. The existing notification callback consumes the latest
-event and displays a timed notification. The title follows the selected blue
-button: HIGH, FREQ, MID, LOW, AUX1, AUX2, EFX, SUB-MIX, PAN, or LEVEL. The centered body shows EQ gain in dB, frequency in Hz/kHz, normalized
-control percentages for level/sends, and CENTER or L/R position for pan.
-The channel number is omitted. Further turns refresh the notification and
-restart its existing two-second guest timer. Blue buttons remain usable while
-it is visible.
+A channel encoder turn applies the original mixer setter and publishes the
+channel/mode tag through a relaxed atomic byte mailbox. The display callback reads
+the current mixer value when it renders, so queued events cannot carry a stale
+value snapshot. The first valid turn allocates scene state and registers
+DisplayCycle2 slot 5. That callback consumes the event and updates the dialog.
+The state and callback remain for the rest of the boot; expiry and navigation
+restore the borrowed GUI descriptors but retain the small allocation. Stock
+callback slots 1, 3, and 4 remain available to text scrolling, busy animation,
+and notifications. The title
+follows the selected blue button: High, Freq, Mid, Low, Aux1, Aux2, Efx,
+Sub-Mix, Pan, or Level. The centered body shows EQ gain in dB, frequency in
+Hz/kHz, normalized control percentages for level/sends, and CENTER or L/R
+position for pan.
+The channel number is omitted. Further turns refresh the dialog and restart its
+two-second display timeout. Blue buttons remain usable while it is visible.
 
 ## Source layout
 
-- `src/payload.rs`: firmware payload entry point and notification presentation.
+- `src/payload.rs`: payload entry point, slot-5 display callback, dialog
+  presentation, and atomic latest-event mailbox. The patch does not take the
+  notification semaphore.
 - `src/firmware.rs`: bindings to original firmware functions and data.
-- `src/notification_hooks.rs`, `src/synchronization.rs`: notification hooks and locking.
-- `src/trampolines.rs`, `src/trampolines.s`: veneers that read displaced
-  instructions from the locally supplied firmware at build time.
 - `src/values.rs`: parameter value formatting.
 - `linker/link.ld`: payload placement (base `PAYLOAD_BASE` comes from the builder: `0x80108000` when built first) and prohibition on reserved mutable RAM.
-- `hooks.tsv`: hook addresses, lengths, expected byte hashes, and entry symbols.
+- The `knob_changed` post-call handler is declared with
+  `#[function_call_post_hook(mixer_apply_channel_parameter, at = 0x8003_6c74)]`.
+  The builder validates the call target and generates the callee-entry dispatcher.
 
 The host build and package integration live in
 [`l6patch`](../../docs/development/tools/l6patch.md).
@@ -58,7 +65,7 @@ cargo run --offline -p l6max-gui -- --qemu /path/to/qemu-system-arm --firmware-d
 The output directory must be new. Input files are never changed. The output
 includes the patched main image, original panel image and package components,
 the compiled payload, a repacked `L6max.bin`, and a `patch.json` recording image
-and package hashes and hook addresses. Use the repository's custom QEMU build. `--volatile` ensures an old
+and package hashes and generated hooks. Use the repository's custom QEMU build. `--volatile` ensures an old
 persistent NOR image cannot override the supplied firmware.
 
 ## SD update package
@@ -68,17 +75,21 @@ space after the original main image. It grows `main_firmware.bin`, shrinks
 the following padding, updates the manifest and both main-length records,
 and regenerates the big-endian MAIN byte-sum checksum. The total package size,
 panel image/trailer, system table, and component slot boundaries are preserved.
-The encoder call and notification/resource operations receive guarded veneers.
-`hooks.tsv` records displaced lengths and hashes; `patch.json` lists every
-patched address. Displaced instructions are assembled from the locally
-supplied image; the source tree does not embed those byte sequences.
+The call at `0x80036c74` remains a normal BL. The builder redirects the
+callee entry to a dispatcher, which matches the saved caller return address
+and runs the post-call handler after the stock function returns. The
+DisplayCycle2 callback notices a window change and restores borrowed
+descriptors on its next tick, including while a stock notification is visible.
+Notification manager and RTOS call sites remain untouched.
 The original startup target is unchanged. Stock operations
 still run their original code and preserve synchronous completion.
 
-The notification cleanup restores the original widget and removes custom text
-on expiry. Idle recorder polling leaves an active knob popup in place; a busy
-notification can dismiss it. The behavior has been exercised in the emulator
-and on an L6max. See [dismissal behavior](../../docs/firmware/gui/popup-triggers.md).
+Expiry and window changes restore the original widgets and remove custom text.
+Stock notifications can temporarily cover the dialog; its timeout pauses while
+the notification or busy overlay is active. The current persistent-state,
+semaphore-free design has passed the focused emulator scenario. An earlier
+notification-backed version was exercised on an L6max; this revision has not
+been hardware-tested.
 
 The default patch version is `0112` (1.12), a local development marker that
 triggers the startup update prompt over stock 1.10. Use
@@ -116,62 +127,70 @@ Addresses refer to this main firmware revision's runtime address space.
   `0x80053b28` from `0x80036c74`. The patched call preserves all five arguments
   and invokes the original dispatcher before reading the value.
 - `0x800564b0` maps physical channels to mixer channels.
-- `0x80006660` queues notifications. Message 15 is the timed Done notification;
-  `0x800064c0` advances its existing guest timer. Callback slot 4 remains
-  registered to service pending knob values even while no message is active.
-- English resources 229–231 supply the notification's three text lines.
-  Their pointers begin at `0x802059b8`.
-- Bitmap 36 supplies the notification frame and baked MESSAGE header. A RAM
-  copy replaces that header with a setting title; the original renderer draws
-  the text and publishes the LCD transfer.
-- `0x800070d8` copies dynamic UTF-16 text into a widget's resource buffer.
-  Date/Time uses it after formatting numbers on its stack (`0x8003c260`).
-- The Done resources have capacities 5, 1, and 1 UTF-16 units; they cannot hold
-  our dynamic title/value. The popup allocates 1,788 bytes through the original
-  FreeRTOS `pvPortMalloc` (`0x80085478`) and temporarily binds these resources to its
-  allocated buffers. The firmware's text-copy routine fills them from stack
-  buffers. Existing text belonging to other screens is never borrowed.
-- Bitmap 36's resource pointer retains the live allocation, whose first field
-  is a valid bitmap descriptor. No extra global pointer or fixed RAM address
-  is reserved. Repeated turns reuse the allocation.
-- Expiry restores the original resource pointers, lengths, bitmap, layout,
-  font, and polarity before pop can draw a stock successor, then frees the block through FreeRTOS `vPortFree`
-  (`0x8008e588`). If allocation
-  returns null, the original mixer adjustment still runs and no popup is shown.
-- The normal recorder window is `0x80200408`. Setup and modal screens do not
-  receive knob notifications; active unrelated notifications take priority.
+- Stock notifications use layer 5 for frames, layer 6 for text, and callback
+  slot 4 for expiry. The custom scene uses layer 4 and slot 5. Notifications
+  can appear above the dialog; the scene callback pauses its timeout while a
+  stock notification or busy overlay is active. No notification function is
+  hooked.
+- `0x800070d8` (`gui_set_widget_text`) copies arbitrary UTF-16 text into the
+  widget's existing resource buffer using the current language. Its localized
+  implementation at `0x80006fa8` bounds the copy by that resource's capacity;
+  it does not allocate or grow the buffer. The supported firmware's language
+  getter returns 0. `0x80006ad8` renders through the stock font/layout path.
+  Widgets 7 and 33 temporarily share resource 179, a 255-character buffer
+  whose stock contents are verified before use. Its pointer and length tables
+  remain unchanged. First use scans the other initialized widget and background
+  descriptors, declining if another widget references resource 179 or another
+  descriptor already uses scene layer 4.
+- The scene temporarily changes widget descriptors 7 and 33 and background
+  descriptors 10, 37, and 48 to render on layer 4. At first use, the patch
+  checks both widget descriptors against the exact recorder defaults in the
+  supported firmware image before publishing state. The display callback
+  repeats the check immediately before the first draw because it runs in a
+  different task. Both widgets must be on stock
+  layer 1; the patch restores the known descriptor values when the scene
+  expires or the window changes. The patch also checks the three backgrounds
+  against their stock layers (0, 0 and 8). If any layer differs, it declines
+  to start the scene without touching the heap.
+- No heap allocation is needed for state. A 4-byte record (signature, timeout,
+  and atomic pending event) lives directly in bitmap-table slot 0
+  (`0x802073c8`), the null sentinel in this firmware. `gui_draw_background`
+  returns before looking up bitmap ID 0, so the stock renderer never interprets
+  the record as a bitmap. The stock notification descriptor remains in entry
+  36, untouched. The record stays in slot 0 while the callback is registered.
+- The normal recorder window is `0x80200408`. The mixer-dispatch call site at
+  `0x80036c74` redirects knob updates to the patch. The DisplayCycle2 callback
+  restores borrowed descriptors on the first tick after a window transition.
+  Setup and modal screens do not receive knob dialogs.
 
 ## Synchronization
 
-The original maximum-count-one counting semaphore remains the exclusion
-primitive. A 36-byte, initialization-time heap sidecar stores its real handle,
-the current owning task, nesting depth and one copied pending value. The handle
-slot at `0x8020a2a0` contains the sidecar pointer tagged with bit 0. The two
-original kernel callsites in notification pop are redirected to wrappers that
-decode this tag; kernel routines always receive the original semaphore handle.
-No kernel object fields are repurposed and no fixed spare RAM is assumed.
+The knob dispatcher call redirect remains the only firmware hook site.
+Mixer changes run first; afterward the hook publishes the channel and mode
+with one `AtomicU8` store. The DisplayCycle2 callback takes the event with an
+atomic swap, then reads the current mixer value. Input and drawing do not share
+a mutable Rust state reference and neither waits on a semaphore. First use
+publishes fully initialized state before registering the callback, so
+DisplayCycle2 cannot observe a partial state. The callback stays registered
+after the scene expires so later knob events need no re-registration or state
+allocation.
 
-Same-task nesting lets original show/tick/busy operations call original pop
-without a second blocking take. The sidecar is not a FreeRTOS recursive mutex
-and adds no priority inheritance. Interrupt masking is used only for short
-sidecar ownership/event copies, never across drawing or waiting.
+The emulator probe reads `current_task_control_block` at both entry points and
+confirms the mixer hook and DisplayCycle2 callback run under different FreeRTOS
+tasks. Keep the atomic mailbox for this cross-task handoff.
 
-Core queue transitions, shared text/bitmap readers and stock resource setters
-participate in the lock. The input-path active/current queries retain their
-original nonblocking reads of flags and bounded message IDs. They do not return
-pointers into popup allocations. Knob producers never acquire the manager lock;
-the GUI callback revalidates the recorder window and notification priority.
+The scene does not take the stock notification semaphore. It uses widgets 7
+and 33 and backgrounds 10, 37, and 48 on layer 4; notifications use their own
+text widgets and layers 5–6. The emulator scenario verifies bitmap-table slot 0
+starts null, holds the inline state record, and is not needed by stock rendering;
+entry 36 remains the original notification descriptor. It also holds the
+notification semaphore unavailable during first use and refresh. The patch
+uses no heap and retains one idle callback for the rest of the boot.
 
-Stock show, dismissal, clear and busy transitions invalidate pending optional
-values and detach our popup before drawing stock content. A window change
-temporarily suppresses presentation without holding the manager lock across
-arbitrary window callbacks. A stock Done request is processed as stock Done,
-even while our popup currently uses message 15.
-
-If sidecar allocation fails, the slot retains the ordinary semaphore handle,
-the original notification behavior remains available and knob presentation is
-disabled. Popup allocation failure also leaves the applied mixer change intact.
-The sidecar lives until reset; popup allocations are still freed at detach.
+Expiry and window changes clear layer 4, restore the text and background
+descriptors, and reset the pending event on navigation. They do not free the
+state, clear bitmap-table slot 0, or unregister slot 5. The next recorder knob
+event can therefore reuse the same inline state safely.
 
 | Selection | Value getter | Arguments after mixer channel |
 | --- | --- | --- |
@@ -200,17 +219,29 @@ notification values with mixer RAM, verifies updates and expiry, verifies
 original resources are restored, and counts 52 UART encoder reports. It checks
 the expired title band against the recorder's pre-popup pixels, catching stale
 glyphs even when the notification queue reports inactive. It also checks
-one firmware-heap allocation per popup, reuse during refresh, release on expiry,
-and recovery of the original free-byte count. The former `0x841ff000` page stays
+one firmware-heap allocation, reuse during refresh, and recovery of the
+original free-byte count in the legacy notification implementation. The former `0x841ff000` page stays
 unchanged, and the original startup pointer is checked. It also
 changes the mode while a notification is visible and exercises channel 2.
-The first widget uses the firmware's seven-pixel font and black ink polarity
-in the original white header band. See the [patch bindings](src/firmware.rs) and
+The scene-prototype smoke case overlaps a three-line stock notification with
+the dialog, verifies bitmap-table slot 0 starts null and holds the inline state
+record, and confirms entry 36 remains untouched. It holds the notification
+semaphore unavailable during first use and refresh. Both updates still render,
+the atomic mailbox is consumed, and cleanup restores the visible GUI resources
+while retaining the state record. A separate first-use probe changes a
+widget descriptor and verifies that the patch declines without allocating or
+claiming callback slot 5.
+It cycles through all ten knob selections, checks that each title row changes,
+matches every displayed value against mixer state, rejects a corrupted state
+signature, verifies that widget and background layer drift is rejected, and
+confirms that the scene performs no heap allocations.
+Both lines use the firmware's stock text renderer and font resources. See the
+[patch bindings](src/firmware.rs) and
 [parameter display contract](../../docs/firmware/gui/parameter-values.md).
 
 Screenshots come from firmware LCD transfers, without a host UI overlay.
 
-The `popup-concurrency` scenario uses a disposable VM and a local GDB socket. It
+The earlier `0112` popup-concurrency scenario uses a disposable VM and a local GDB socket. It
 invokes the actual recorder polling callback while busy flag 0 and checks
 that popup pixels, heap binding, active state, and elapsed counter survive. It
 replaces one GUI callback invocation with a stock notification request, forces
@@ -221,9 +252,10 @@ waits on the actual FreeRTOS semaphore. No debug controls are added to the firmw
 This test uses GPIO input and guest breakpoints, never the host mouse.
 Its debugger stops perturb timing; it verifies behavior, not hardware latency.
 
-The recorder polling payload is 8,012 bytes, replacing 138 original bytes across
-31 guarded sites while retaining the original notification routines. The
-development `0112` package was validated by the five patch/formatting tests,
+The current scene prototype has one knob-dispatch call redirect and no
+function-entry hooks. The focused emulator check verifies the text, expiry
+restoration, semaphore independence, retained slot-5 callback, descriptor
+validity during stock notifications, and cleanup on window navigation. Earlier `0112` validation covered the five patch/formatting checks,
 the forced concurrency diagnostic, and the SD-install/restart diagnostic with
 all ten knob modes and 52 exact encoder reports. The forced diagnostic covers
 13 reports, including six observed calls to the original mixer routine while
@@ -238,23 +270,46 @@ another restart. The patch is not substituted through QEMU's
 initial firmware image in this test. Its SD and device fixtures are removed
 on completion or failure; display captures remain in the ignored log directory.
 
+The scene prototype exercises the firmware's generic bounded text setter
+with resource 179, a 255-character buffer not assigned to any initialized
+widget. Widgets 7 and 33 temporarily share that resource; the patch writes and
+draws each line in turn, without redirecting the resource pointer table. It
+checks the buffer is still the stock `*` filler before use, then restores that
+filler and both widget descriptors when the dialog closes. The focused
+`knob-dialog-scene-prototype` smoke case checks that the text pointer table
+stays unchanged, resource aliases and layer collisions are rejected without
+allocation, both lines appear in the LCD capture, and the resource and widget
+state are restored. Before first use it opens the main menu, turns an encoder,
+and verifies that state and callback slot 5 remain unclaimed. It saves
+`knob-dialog-non-recorder-before.png` as evidence. The case also captures
+`knob-dialog-active.png` and `knob-dialog-timeout-cleared.png` to show the
+dialog and the recorder screen after expiry. It changes a borrowed descriptor after
+the mixer-side preflight passes but before the first DisplayCycle2 draw; the
+callback recheck refuses that draw, and a retry after restoring the descriptor
+succeeds. Bitmap-table slot 0 holds the retained state record; entry 36 remains
+the stock notification descriptor. This remains an experiment: the overlay
+currently uses white text on black.
+
 ## Limitations
 
 The [notification ownership contract](../../docs/firmware/gui/notification-lifecycle.md)
-describes the original counting semaphore. The synchronization patch widens
-its protected operations
-and handles same-task nesting in the sidecar. The allocator's internal scheduler
-protection alone does not protect popup pointers.
+describes the stock counting semaphore. This scene does not acquire, replace,
+or modify it.
 
 - LEVEL and send percentages represent control position, not linear amplitude.
   Their dB conversion and mute thresholds remain unverified.
-- Popup storage belongs to the original firmware heap. Sidecar initialization
-  allocation failure and real heap exhaustion,
-  all computed callers, priority inversion and physical cache/DMA timing need
-  further coverage; successful QEMU tests do not prove every interleaving.
-- The corrected package was installed and its popup exercised on an L6max.
-  The bootloader's exact checks, arbitrary modifications, downgrades, signature
-  policy and interrupted installation remain unverified.
+- Bitmap-table slot 0 stores the state record. The firmware drawing path skips
+  bitmap ID 0 before lookup. A static Ghidra reference scan found only the
+  guarded background-renderer table lookup in the supported MAIN image, and
+  the focused emulator case verifies the zero-ID path plus stock notifications
+  using entry 36 untouched. An external module that directly indexes slot 0
+  would conflict with this use.
+- All computed callers, simultaneous window transitions and physical cache/DMA
+  timing need further coverage; emulator tests do not prove every interleaving.
+- This persistent-state revision is emulator-tested only. The earlier
+  notification-backed package was exercised on an L6max. The bootloader's
+  exact checks, arbitrary modifications, downgrades, signature policy and
+  interrupted installation remain unverified.
 - Additional channels, languages, SD recording workflows, and notification
   queue collisions need broader coverage beyond the tested hardware path.
 

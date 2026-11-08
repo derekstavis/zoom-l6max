@@ -1,0 +1,57 @@
+{
+  "base": "0x80108000",
+  "model": "L6max",
+  "module_base": "0x80110000",
+  "name": "patch-loader",
+  "payload_file": "patch-loader-L6max-80108000.bin",
+  "payload_length": 10515,
+  "reserve_end": "0x80118000",
+  "sites": [
+    {
+      "address": "0x8000fe08",
+      "guard_sha256": "07f4993f36ec2892ba7daa618956f411293bf2fc693e4a3a2aebb9abd0c2ea04",
+      "length": 4,
+      "link": false,
+      "target_offset": 200
+    },
+    {
+      "address": "0x80076e30",
+      "guard_sha256": "cfa045938b57940b57930f97cd7cdf3e1a8c3b1ddb72c2609b95b97c1b1921ed",
+      "length": 4,
+      "link": false,
+      "target_offset": 236
+    },
+    {
+      "address": "0x80053b28",
+      "guard_sha256": "48117e0eeae09544e6701eda1b9d74942930a0abe6425b20b2152b34eb815c9f",
+      "length": 4,
+      "link": false,
+      "target_offset": 148
+    }
+  ],
+  "static_patches": [
+    "midi-sync"
+  ],
+  "windows": [
+    {
+      "firmware_address": "0x80076e30",
+      "length": 4,
+      "payload_offset": 112
+    },
+    {
+      "firmware_address": "0x8003f7c8",
+      "length": 4,
+      "payload_offset": 124
+    },
+    {
+      "firmware_address": "0x80053b28",
+      "length": 4,
+      "payload_offset": 136
+    },
+    {
+      "firmware_address": "0x8000fe08",
+      "length": 4,
+      "payload_offset": 216
+    }
+  ]
+}

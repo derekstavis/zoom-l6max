@@ -113,6 +113,12 @@ impl QmpClient {
         self.execute(&qmp::cont {}).map(|_| ())
     }
 
+    /// Reset the guest in place. RAM devices retain contents unless their
+    /// model explicitly clears them during reset.
+    pub fn system_reset(&self) -> io::Result<()> {
+        self.execute(&qmp::system_reset {}).map(|_| ())
+    }
+
     pub fn quit(&self) -> io::Result<()> {
         self.execute(&qmp::quit {}).map(|_| ())
     }

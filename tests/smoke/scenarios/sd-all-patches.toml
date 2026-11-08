@@ -1,0 +1,79 @@
+version = 1
+name = "sd-all-patches"
+models = ["l6max"]
+backends = ["headless"]
+state = "setup-complete"
+card = "empty"
+gdb = true
+patches = ["knob-dialog", "din-mixer-control"]
+sd_patches = ["midi-sync"]
+
+[[step]]
+action = "wait"
+until = "mixer-ready"
+guest_timeout_ms = 60000
+wall_timeout_s = 300
+
+[[step]]
+action = "delay"
+guest_ms = 8000
+guest_timeout_ms = 20000
+wall_timeout_s = 300
+
+[[step]]
+action = "expect-sd-patch"
+loaded = true
+
+[[step]]
+action = "press"
+control = "rec-record"
+
+[[step]]
+action = "expect-card-entry"
+path = "RECORDER"
+
+[[step]]
+action = "expect-sd-patch"
+loaded = true
+
+[[step]]
+action = "include"
+path = "fragments/l6max-din-mixer-setup.toml"
+
+[[step]]
+action = "l6max-din-mixer-control"
+expect_din_ring_change = true
+guest_timeout_ms = 10000
+wall_timeout_s = 120
+
+[[step]]
+action = "restart"
+
+[[step]]
+action = "wait"
+until = "mixer-ready"
+guest_timeout_ms = 60000
+wall_timeout_s = 300
+
+[[step]]
+action = "delay"
+guest_ms = 8000
+guest_timeout_ms = 20000
+wall_timeout_s = 300
+
+[[step]]
+action = "expect-sd-patch"
+loaded = true
+
+[[step]]
+action = "knob-dialog"
+guest_timeout_ms = 180000
+wall_timeout_s = 600
+
+[[step]]
+action = "expect-sd-patch"
+loaded = true
+
+[[step]]
+action = "expect-heap"
+minimum_free = 131072

@@ -7,3 +7,4 @@ The Rust host and native GPUI frontend run the dual-chip QEMU model.
 - [Native frontend](../docs/emulator/frontend.md)
 - [Headless host](../docs/emulator/host.md)
 - [QEMU board model](../docs/emulator/board.md)
+- [Rust firmware patch payload API](../docs/development/patch-api.md)

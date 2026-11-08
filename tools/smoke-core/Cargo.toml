@@ -12,6 +12,7 @@ l6max-host.workspace = true
 l6fw.workspace = true
 firmware-patch-core.workspace = true
 firmware-patch-wasm.workspace = true
+patch-loader-core = { path = "../patch-loader-core" }
 serde = { version = "1", features = ["derive"] }
 serde_json.workspace = true
 toml = "0.8.23"

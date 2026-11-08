@@ -1,0 +1,23 @@
+{
+  "base": "0x80109c30",
+  "hooks": [
+    {
+      "address": "0x8003e8ee",
+      "length": 4,
+      "symbol": "__l6_offset_veneer_din_mixer_forward",
+      "target": "0x80109c30"
+    }
+  ],
+  "model": "L6max",
+  "name": "din-mixer-control",
+  "payload_file": "din-mixer-control-80109c30.bin",
+  "payload_length": 84,
+  "window_byte_total": 4,
+  "windows": [
+    {
+      "firmware_address": "0x8003e8ee",
+      "length": 4,
+      "payload_offset": 16
+    }
+  ]
+}
