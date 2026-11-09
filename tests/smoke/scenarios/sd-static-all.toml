@@ -4,6 +4,7 @@ models = ["l6max"]
 backends = ["headless"]
 state = "setup-complete"
 card = "empty"
+gdb = true
 patches = ["din-mixer-control", "knob-dialog"]
 sd_patches = []
 

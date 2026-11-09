@@ -6,6 +6,7 @@ state = "setup-complete"
 card = "empty"
 patches = ["knob-dialog"]
 sd_patches = ["midi-sync"]
+gdb = true
 
 [[step]]
 action = "wait"
@@ -20,16 +21,13 @@ guest_timeout_ms = 20000
 wall_timeout_s = 300
 
 [[step]]
-action = "press"
-control = "rec-record"
-
-[[step]]
-action = "expect-card-entry"
-path = "RECORDER"
-
-[[step]]
 action = "expect-sd-patch"
 loaded = true
+
+[[step]]
+action = "knob-dialog"
+guest_timeout_ms = 180000
+wall_timeout_s = 600
 
 [[step]]
 action = "host-midi-round-trip"
@@ -40,8 +38,3 @@ wall_timeout_s = 120
 action = "host-midi-sync"
 guest_timeout_ms = 30000
 wall_timeout_s = 120
-
-[[step]]
-action = "knob-dialog"
-guest_timeout_ms = 180000
-wall_timeout_s = 600

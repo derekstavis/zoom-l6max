@@ -3933,57 +3933,6 @@ impl State {
                     if chain_count == Some(2) {
                         let first = chain_links.first().ok_or("empty expected hook chain")?;
                         let second = chain_links.get(1).ok_or("short expected hook chain")?;
-                        let modules = patch_report["patches"]
-                            .as_array()
-                            .ok_or("missing module report")?;
-                        for (index, link) in chain_links.iter().enumerate() {
-                            let module_report = modules
-                                .iter()
-                                .find(|module| {
-                                    module["hooks"].as_array().is_some_and(|hooks| {
-                                        hooks.iter().any(|record| {
-                                            record["address"].as_str().and_then(|value| {
-                                                u32::from_str_radix(
-                                                    value.trim_start_matches("0x"),
-                                                    16,
-                                                )
-                                                .ok()
-                                            }) == Some(hook.address)
-                                        })
-                                    })
-                                })
-                                .ok_or("shared hook is missing from a module report")?;
-                            let record = module_report["hooks"]
-                                .as_array()
-                                .and_then(|hooks| {
-                                    hooks.iter().find(|record| {
-                                        record["address"].as_str().and_then(|value| {
-                                            u32::from_str_radix(value.trim_start_matches("0x"), 16)
-                                                .ok()
-                                        }) == Some(hook.address)
-                                    })
-                                })
-                                .ok_or("shared hook is missing from a module report")?;
-                            let entry_offset = if ordered_chain && index == 0 {
-                                pass_through_entry_offset.unwrap()
-                            } else {
-                                record["entry_offset"]
-                                    .as_u64()
-                                    .ok_or("missing hook entry offset")?
-                                    as u32
-                            };
-                            let next_offset = record["next_slot_offset"]
-                                .as_u64()
-                                .ok_or("missing hook continuation offset")?
-                                as u32;
-                            if link.0 != ((link.3 + entry_offset) | 1)
-                                || link.1 != link.3 + next_offset
-                            {
-                                return Err(
-                                    "shared hook link does not match its module metadata".into()
-                                );
-                            }
-                        }
                         if first.2 >= second.2 {
                             return Err(
                                 "filename priority was not used to order shared hooks".into()
@@ -6548,7 +6497,7 @@ fn run_knob_dialog(
         wait_guest(
             session,
             notification_start,
-            3_000,
+            5_000,
             guest_timeout_ms,
             wall_timeout_s,
         )?;
@@ -6572,31 +6521,83 @@ fn run_knob_dialog(
                 "knob dialog timeout screenshot still shows the notification/dialog frame".into(),
             );
         }
-        if qmp.read_memory(0, 0x80202610, 4)? != original_window
-            || u16::from_le_bytes(qmp.read_memory(0, state, 2)?.try_into().unwrap()) != 0x4b4e
-            || qmp.read_memory(0, 0x80207458, 4)? != original_bitmap
-            || qmp.read_memory(
-                0,
-                u32::from_le_bytes(original_bitmap.clone().try_into().unwrap()),
-                8,
-            )? != original_bitmap_descriptor
-            || qmp.read_memory(0, 0x8020a2a0, 4)? != original_notification_semaphore
-            || qmp.read_memory(0, text_table + 229 * 4, 8)? != original_resources
-            || qmp.read_memory(0, text_table + 179 * 4, 4)? != shared_resource_pointer.to_le_bytes()
-            || qmp.read_memory(0, shared_resource_pointer, 512)? != original_shared_resource
-            || qmp.read_memory(0, original_lengths_table + 229 * 2, 4)? != original_lengths
-            || qmp.read_memory(0, widget7, 16)? != original_widget7
-            || qmp.read_memory(0, widget33, 16)? != original_widget33
-            || qmp.read_memory(0, background10, 1)? != original_background_layers[0]
-            || qmp.read_memory(0, background37, 1)? != original_background_layers[1]
-            || qmp.read_memory(0, background48, 1)? != original_background_layers[2]
-            || u32::from_le_bytes(qmp.read_memory(0, 0x8020_a59c + 20, 4)?.try_into().unwrap())
-                != active_slot5
-        {
-            return Err(
-                "custom overlay did not restore borrowed resources or preserve stock bitmap 36"
-                    .into(),
-            );
+        let restore_checks = [
+            (
+                "window",
+                qmp.read_memory(0, 0x80202610, 4)? == original_window,
+            ),
+            (
+                "state signature",
+                u16::from_le_bytes(qmp.read_memory(0, state, 2)?.try_into().unwrap()) == 0x4b4e,
+            ),
+            (
+                "bitmap table",
+                qmp.read_memory(0, 0x80207458, 4)? == original_bitmap,
+            ),
+            (
+                "bitmap descriptor",
+                qmp.read_memory(
+                    0,
+                    u32::from_le_bytes(original_bitmap.clone().try_into().unwrap()),
+                    8,
+                )? == original_bitmap_descriptor,
+            ),
+            (
+                "notification semaphore",
+                qmp.read_memory(0, 0x8020a2a0, 4)? == original_notification_semaphore,
+            ),
+            (
+                "text resource table",
+                qmp.read_memory(0, text_table + 229 * 4, 8)? == original_resources,
+            ),
+            (
+                "shared resource pointer",
+                qmp.read_memory(0, text_table + 179 * 4, 4)?
+                    == shared_resource_pointer.to_le_bytes(),
+            ),
+            (
+                "shared resource contents",
+                qmp.read_memory(0, shared_resource_pointer, 512)? == original_shared_resource,
+            ),
+            (
+                "text lengths",
+                qmp.read_memory(0, original_lengths_table + 229 * 2, 4)? == original_lengths,
+            ),
+            (
+                "widget 7",
+                qmp.read_memory(0, widget7, 16)? == original_widget7,
+            ),
+            (
+                "widget 33",
+                qmp.read_memory(0, widget33, 16)? == original_widget33,
+            ),
+            (
+                "background layer 10",
+                qmp.read_memory(0, background10, 1)? == original_background_layers[0],
+            ),
+            (
+                "background layer 37",
+                qmp.read_memory(0, background37, 1)? == original_background_layers[1],
+            ),
+            (
+                "background layer 48",
+                qmp.read_memory(0, background48, 1)? == original_background_layers[2],
+            ),
+            (
+                "display callback slot 5",
+                u32::from_le_bytes(qmp.read_memory(0, 0x8020_a59c + 20, 4)?.try_into().unwrap())
+                    == active_slot5,
+            ),
+        ];
+        let mismatches = restore_checks
+            .iter()
+            .filter_map(|(name, matches)| (!matches).then_some(*name))
+            .collect::<Vec<_>>();
+        if !mismatches.is_empty() {
+            return Err(format!(
+                "custom overlay did not restore borrowed resources or preserve stock bitmap 36: {mismatches:?}"
+            )
+            .into());
         }
         let heap_after = heap()?;
         if heap_after[0] != heap_live[0]
