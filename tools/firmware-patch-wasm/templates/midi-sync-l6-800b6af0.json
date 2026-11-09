@@ -3,21 +3,23 @@
   "hooks": [
     {
       "address": "0x8002f490",
+      "continuation_site": "midi_in",
+      "continuation_slot_offset": 12,
       "length": 4,
       "symbol": "midi_in_hook",
-      "target": "0x800b6afc"
+      "target": "0x800b6b10"
     }
   ],
   "model": "L6",
   "name": "midi-sync",
   "payload_file": "midi-sync-l6-800b6af0.bin",
-  "payload_length": 236,
+  "payload_length": 256,
   "window_byte_total": 4,
   "windows": [
     {
       "firmware_address": "0x8002f490",
       "length": 4,
-      "payload_offset": 0
+      "payload_offset": 16
     }
   ]
 }

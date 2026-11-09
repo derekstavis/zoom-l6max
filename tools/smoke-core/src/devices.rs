@@ -493,12 +493,12 @@ pub fn run_wasm_patch(options: &Options) -> Result<(), String> {
     let manifest = workspace.join("tools/l6patch/Cargo.toml");
     let mut results = Vec::new();
     let profiles: Vec<Vec<&str>> = match model {
-        l6fw::Model::L6max => (1u8..8)
+        l6fw::Model::L6max => (1u16..(1u16 << firmware_patch_core::PATCHES.len()))
             .map(|mask| {
                 firmware_patch_core::PATCHES
                     .iter()
                     .enumerate()
-                    .filter(|(index, _)| mask & (1 << index) != 0)
+                    .filter(|(index, _)| mask & (1u16 << index) != 0)
                     .map(|(_, patch)| *patch)
                     .collect()
             })
@@ -551,6 +551,73 @@ pub fn run_wasm_patch(options: &Options) -> Result<(), String> {
         }));
     }
 
+    // The persistent loader can coexist with any static L6max patch subset.
+    // Include the loader-only profile: users may install the loader first and
+    // add SD patches later without rebuilding the firmware update.
+    let mut loader_results = Vec::new();
+    if model == l6fw::Model::L6max {
+        for mask in 0u16..(1u16 << firmware_patch_core::PATCHES.len()) {
+            let selected: Vec<&str> = firmware_patch_core::PATCHES
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| mask & (1u16 << index) != 0)
+                .map(|(_, patch)| *patch)
+                .collect();
+            let native_out = root.join(format!("native-loader-{mask:03}"));
+            let mut command = Command::new("cargo");
+            command
+                .current_dir(&workspace)
+                .args(["run", "--offline", "--locked", "--quiet", "--manifest-path"])
+                .arg(&manifest)
+                .arg("--")
+                .arg(&options.firmware_dir)
+                .arg(&native_out)
+                .arg("--experimental-patch-loader");
+            for patch in &selected {
+                command.args(["--patch", patch]);
+            }
+            let output = command.output().map_err(|error| error.to_string())?;
+            if !output.status.success() {
+                return Err(format!(
+                    "native patch-loader build failed for {selected:?}: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                ));
+            }
+            let native =
+                fs::read(native_out.join("L6max.bin")).map_err(|error| error.to_string())?;
+            let (wasm, report) =
+                firmware_patch_wasm::apply_patches_with_loader(&stock, &selected, true).map_err(
+                    |message| format!("WASM patch-loader build failed for {selected:?}: {message}"),
+                )?;
+            if wasm != native {
+                fs::write(root.join(format!("wasm-loader-{mask:03}.bin")), &wasm)
+                    .map_err(|error| error.to_string())?;
+                let differences = wasm
+                    .iter()
+                    .zip(&native)
+                    .enumerate()
+                    .filter_map(|(offset, (left, right))| {
+                        (left != right).then_some((offset, *left, *right))
+                    })
+                    .take(16)
+                    .collect::<Vec<_>>();
+                return Err(format!(
+                    "L6max loader {selected:?} mismatch at {differences:?}: WASM {} bytes SHA-256 {:x}, native {} bytes SHA-256 {:x}",
+                    wasm.len(),
+                    Sha256::digest(&wasm),
+                    native.len(),
+                    Sha256::digest(&native)
+                ));
+            }
+            loader_results.push(json!({
+                "patches": selected,
+                "bytes": wasm.len(),
+                "sha256": format!("{:x}", Sha256::digest(&wasm)),
+                "usage": report["usage"].as_str().unwrap_or("")
+            }));
+        }
+    }
+
     if model == l6fw::Model::L6 {
         for unsupported in ["knob-dialog", "din-mixer-control"] {
             match firmware_patch_wasm::apply_patches(&stock, &[unsupported]) {
@@ -582,7 +649,7 @@ pub fn run_wasm_patch(options: &Options) -> Result<(), String> {
 
     fs::write(
         options.logs.join("wasm-patch.json"),
-        serde_json::to_vec_pretty(&json!({"model":label,"stock_sha256":format!("{:x}", Sha256::digest(&stock)),"profiles":results}))
+        serde_json::to_vec_pretty(&json!({"model":label,"stock_sha256":format!("{:x}", Sha256::digest(&stock)),"profiles":results,"patch_loader_profiles":loader_results}))
             .map_err(|error| error.to_string())?,
     )
     .map_err(|error| error.to_string())?;
@@ -3202,8 +3269,9 @@ impl State {
         let qmp = &session.engine.management[0];
         let payload = if options.sd_image.is_some() {
             let main = selected_main_image(options).map_err(std::io::Error::other)?;
-            let (edits, _, _, _, _, _) = sd_fixture_edits(options, &main, session.engine.model())
-                .map_err(std::io::Error::other)?;
+            let (edits, _, _, _, _, _, _) =
+                sd_fixture_edits(options, &main, session.engine.model())
+                    .map_err(std::io::Error::other)?;
             let entry_offset = edits
                 .iter()
                 .find(|(address, _, _)| *address == HOOK)
@@ -3537,7 +3605,7 @@ impl State {
                 chain_count,
             } => {
                 let main = selected_main_image(options).map_err(std::io::Error::other)?;
-                let (edits, link_base, payload, _, relocations, module_hooks) =
+                let (edits, link_base, payload, _, _relocations, module_hooks, module_images) =
                     sd_fixture_edits(options, &main, session.engine.model())
                         .map_err(std::io::Error::other)?;
                 let qmp = &session.engine.management[0];
@@ -3617,12 +3685,66 @@ impl State {
                                 .count()
                                 >= chain_count.unwrap_or(1) as usize
                         })
+                        .or_else(|| module_hooks.first())
                         .map(|hook| hook.address)
                 } else {
                     module_hooks.first().map(|hook| hook.address)
                 };
                 let chain_row_size =
                     core::mem::size_of::<patch_loader_core::dynamic::FunctionHookChain>() as u32;
+                let mut expected_chains = std::collections::BTreeMap::<u32, u32>::new();
+                for module_hook in &module_hooks {
+                    *expected_chains.entry(module_hook.address).or_default() += 1;
+                }
+                for (address, module_count) in expected_chains {
+                    let row = (0..patch_loader_core::dynamic::MAX_FUNCTION_CHAINS)
+                        .map(|index| registry + 0x100 + index as u32 * chain_row_size)
+                        .find(|row| {
+                            qmp.read_memory(0, *row, 4).ok().is_some_and(|bytes| {
+                                u32::from_le_bytes(bytes.try_into().unwrap()) == address
+                            })
+                        });
+                    let actual_count = row
+                        .map(|row| {
+                            qmp.read_memory(0, row + 4, 4)
+                                .map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()))
+                        })
+                        .transpose()?
+                        .unwrap_or(0);
+                    let expected_count = if !loaded {
+                        0
+                    } else if Some(address) == expected_function {
+                        chain_count.map_or(module_count, u32::from)
+                    } else {
+                        module_count
+                    };
+                    if actual_count != expected_count {
+                        return Err(format!(
+                            "SD hook site {address:#010x} has {actual_count} registered modules, expected {expected_count}"
+                        )
+                        .into());
+                    }
+                    if loaded {
+                        let row = row.ok_or("registered hook site has no chain row")?;
+                        let chain_head =
+                            u32::from_le_bytes(qmp.read_memory(0, row + 8, 4)?.try_into().unwrap());
+                        let slot = sd_dynamic_handler_slot(
+                            options,
+                            session.engine.model(),
+                            registry,
+                            address,
+                        )
+                        .map_err(std::io::Error::other)?;
+                        let published_head =
+                            u32::from_le_bytes(qmp.read_memory(0, slot, 4)?.try_into().unwrap());
+                        if published_head != chain_head {
+                            return Err(format!(
+                                "dispatch slot for {address:#010x} points to {published_head:#010x}, chain head is {chain_head:#010x}"
+                            )
+                            .into());
+                        }
+                    }
+                }
                 let chain_address = if let Some(address) = expected_function {
                     (0..patch_loader_core::dynamic::MAX_FUNCTION_CHAINS)
                         .map(|index| registry + 0x100 + index as u32 * chain_row_size)
@@ -3648,7 +3770,7 @@ impl State {
                     || chain_count.is_some_and(|expected| registered_count != u32::from(expected))
                 {
                     return Err(format!(
-                        "SD hook chain state loaded={loaded}, function={registered_function:#010x}, count={registered_count}, expected count={chain_count:?}"
+                        "SD hook chain state loaded={loaded}, function={registered_function:#010x}, count={registered_count}, expected function={expected_function:?}, expected count={chain_count:?}"
                     )
                     .into());
                 }
@@ -3766,6 +3888,20 @@ impl State {
                         .find(|hook| Some(hook.address) == expected_function)
                         .ok_or("dynamic patch bundle has no hook record")?;
                     let root = sd_fixture_root(options).map_err(std::io::Error::other)?;
+                    let ordered_chain = root.join("sd-chain-first.BIN").is_file();
+                    let patch_report: Value = serde_json::from_slice(&fs::read(
+                        root.join("sd-patches-build/patch.json"),
+                    )?)?;
+                    let pass_through_entry_offset = if ordered_chain {
+                        Some(
+                            patch_report["patches"][0]["pass_through_entry_offsets"][0]
+                                .as_u64()
+                                .ok_or("ordered-chain module has no pass-through entry")?
+                                as u32,
+                        )
+                    } else {
+                        None
+                    };
                     let loader_report: Value = serde_json::from_slice(&fs::read(
                         root.join("patch-loader-firmware/patch.json"),
                     )?)?;
@@ -3794,21 +3930,29 @@ impl State {
                             .as_u64()
                             .ok_or("loader report has no function continuation")?,
                     )? | 1;
-                    if chain_links.last().map(|link| link.3) != Some(loaded_base) {
-                        return Err(
-                            "latest SD allocation does not match the hook-array tail".into()
-                        );
-                    }
                     if chain_count == Some(2) {
-                        let patch_report: Value = serde_json::from_slice(&fs::read(
-                            root.join("sd-patches-build/patch.json"),
-                        )?)?;
                         let first = chain_links.first().ok_or("empty expected hook chain")?;
                         let second = chain_links.get(1).ok_or("short expected hook chain")?;
                         let modules = patch_report["patches"]
                             .as_array()
                             .ok_or("missing module report")?;
-                        for (link, module_report) in chain_links.iter().zip(modules) {
+                        for (index, link) in chain_links.iter().enumerate() {
+                            let module_report = modules
+                                .iter()
+                                .find(|module| {
+                                    module["hooks"].as_array().is_some_and(|hooks| {
+                                        hooks.iter().any(|record| {
+                                            record["address"].as_str().and_then(|value| {
+                                                u32::from_str_radix(
+                                                    value.trim_start_matches("0x"),
+                                                    16,
+                                                )
+                                                .ok()
+                                            }) == Some(hook.address)
+                                        })
+                                    })
+                                })
+                                .ok_or("shared hook is missing from a module report")?;
                             let record = module_report["hooks"]
                                 .as_array()
                                 .and_then(|hooks| {
@@ -3820,10 +3964,14 @@ impl State {
                                     })
                                 })
                                 .ok_or("shared hook is missing from a module report")?;
-                            let entry_offset = record["entry_offset"]
-                                .as_u64()
-                                .ok_or("missing hook entry offset")?
-                                as u32;
+                            let entry_offset = if ordered_chain && index == 0 {
+                                pass_through_entry_offset.unwrap()
+                            } else {
+                                record["entry_offset"]
+                                    .as_u64()
+                                    .ok_or("missing hook entry offset")?
+                                    as u32
+                            };
                             let next_offset = record["next_slot_offset"]
                                 .as_u64()
                                 .ok_or("missing hook continuation offset")?
@@ -3845,20 +3993,35 @@ impl State {
                     for (index, (entry, next_slot, _order, module)) in
                         chain_links.iter().enumerate()
                     {
-                        if chain_count != Some(2) && *next_slot != *module + hook.next_slot_offset {
-                            return Err(format!(
-                                "hook {index} continuation slot {next_slot:#010x} is outside its module"
-                            )
-                            .into());
-                        }
+                        let (module_payload, module_relocations, module_payload_hooks) =
+                            module_images
+                                .iter()
+                                .find_map(|(payload, relocations, hooks)| {
+                                    hooks
+                                        .iter()
+                                        .find(|candidate| {
+                                            candidate.address == hook.address
+                                                && (*entry
+                                                    == ((*module + candidate.entry_offset) | 1)
+                                                    || ordered_chain
+                                                        && index == 0
+                                                        && *entry
+                                                            == ((*module
+                                                                + pass_through_entry_offset
+                                                                    .unwrap_or(u32::MAX))
+                                                                | 1))
+                                                && *next_slot
+                                                    == *module + candidate.next_slot_offset
+                                        })
+                                        .map(|_| (payload, relocations, hooks))
+                                })
+                                .ok_or_else(|| {
+                                    format!(
+                                        "hook {index} does not match any module's hook metadata"
+                                    )
+                                })?;
                         let expected_next =
                             chain_links.get(index + 1).map_or(fallback, |next| next.0);
-                        if chain_count != Some(2) && *entry != ((*module + hook.entry_offset) | 1) {
-                            return Err(format!(
-                                "hook {index} entry {entry:#010x} does not match its bundle offset"
-                            )
-                            .into());
-                        }
                         let actual_next = u32::from_le_bytes(
                             qmp.read_memory(0, *next_slot, 4)?.try_into().unwrap(),
                         );
@@ -3868,30 +4031,64 @@ impl State {
                             )
                             .into());
                         }
-                        if chain_count != Some(2) {
-                            let mut expected = payload.clone();
-                            patch_loader_core::bundle::relocate(
-                                &mut expected,
-                                relocations.clone().into_iter(),
-                                link_base,
-                                *module,
-                            )
-                            .map_err(|error| format!("invalid fixture relocations: {error:?}"))?;
-                            let slot_offset = hook.next_slot_offset as usize;
-                            expected[slot_offset..slot_offset + 4]
-                                .copy_from_slice(&expected_next.to_le_bytes());
-                            for (chunk_index, chunk) in expected.chunks(4096).enumerate() {
-                                let address = *module + (chunk_index * 4096) as u32;
-                                if qmp.read_memory(0, address, chunk.len())? != chunk {
-                                    return Err(format!(
-                                        "allocated SD module {index} does not match its relocated bundle"
-                                    )
-                                    .into());
-                                }
+                        let mut expected = module_payload.clone();
+                        patch_loader_core::bundle::relocate(
+                            &mut expected,
+                            module_relocations.clone().into_iter(),
+                            link_base,
+                            *module,
+                        )
+                        .map_err(|error| format!("invalid fixture relocations: {error:?}"))?;
+                        for payload_hook in module_payload_hooks {
+                            if payload_hook.next_slot_offset == u32::MAX {
+                                continue;
+                            }
+                            let slot = *module + payload_hook.next_slot_offset;
+                            let target = qmp.read_memory(0, slot, 4)?;
+                            let slot_offset = payload_hook.next_slot_offset as usize;
+                            expected[slot_offset..slot_offset + 4].copy_from_slice(&target);
+                        }
+                        for (chunk_index, chunk) in expected.chunks(4096).enumerate() {
+                            let address = *module + (chunk_index * 4096) as u32;
+                            if qmp.read_memory(0, address, chunk.len())? != chunk {
+                                return Err(format!(
+                                    "allocated SD module {index} does not match its relocated bundle"
+                                )
+                                .into());
                             }
                         }
                         if (*entry & !1) < *module {
                             return Err(format!("hook {index} entry precedes its module").into());
+                        }
+                    }
+                    if let Some((latest_payload, latest_relocations, latest_hooks)) =
+                        module_images.last()
+                    {
+                        let mut expected = latest_payload.clone();
+                        patch_loader_core::bundle::relocate(
+                            &mut expected,
+                            latest_relocations.clone().into_iter(),
+                            link_base,
+                            loaded_base,
+                        )
+                        .map_err(|error| format!("invalid latest module relocations: {error:?}"))?;
+                        for latest_hook in latest_hooks {
+                            if latest_hook.next_slot_offset == u32::MAX {
+                                continue;
+                            }
+                            let slot = loaded_base + latest_hook.next_slot_offset;
+                            let target = qmp.read_memory(0, slot, 4)?;
+                            let offset = latest_hook.next_slot_offset as usize;
+                            expected[offset..offset + 4].copy_from_slice(&target);
+                        }
+                        for (chunk_index, chunk) in expected.chunks(4096).enumerate() {
+                            let address = loaded_base + (chunk_index * 4096) as u32;
+                            if qmp.read_memory(0, address, chunk.len())? != chunk {
+                                return Err(
+                                    "latest allocated SD module does not match its relocated bundle"
+                                        .into(),
+                                );
+                            }
                         }
                     }
                 }
@@ -4950,6 +5147,11 @@ type SdEdits = (
     Option<u32>,
     Vec<patch_loader_core::bundle::Relocation>,
     Vec<patch_loader_core::dynamic::Hook>,
+    Vec<(
+        Vec<u8>,
+        Vec<patch_loader_core::bundle::Relocation>,
+        Vec<patch_loader_core::dynamic::Hook>,
+    )>,
 );
 fn sd_fixture_root(options: &Options) -> Result<&std::path::Path, String> {
     options
@@ -4978,7 +5180,15 @@ fn sd_fixture_edits(options: &Options, main: &[u8], model: l6fw::Model) -> Resul
     let patch_output = root.join("sd-patches-build");
     let patch_report_path = patch_output.join("patch.json");
     if !patch_report_path.exists() {
-        return Ok((Vec::new(), 0, Vec::new(), None, Vec::new(), Vec::new()));
+        return Ok((
+            Vec::new(),
+            0,
+            Vec::new(),
+            None,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        ));
     }
     let patch_report: Value =
         serde_json::from_slice(&fs::read(&patch_report_path).map_err(|e| e.to_string())?)
@@ -5093,6 +5303,7 @@ fn sd_fixture_edits(options: &Options, main: &[u8], model: l6fw::Model) -> Resul
     }
     let mut all_edits = Vec::new();
     let mut all_hooks = Vec::new();
+    let mut module_images = Vec::new();
     let mut last = None;
     for patch in patch_report["patches"]
         .as_array()
@@ -5106,11 +5317,20 @@ fn sd_fixture_edits(options: &Options, main: &[u8], model: l6fw::Model) -> Resul
             fs::read(patch_output.join("PATCHES").join(filename)).map_err(|e| e.to_string())?;
         let (edits, payload, init, relocations, hooks) = parse_module(&bytes, &stock, image_base)?;
         all_edits.extend(edits);
-        all_hooks.extend(hooks);
+        all_hooks.extend(hooks.iter().copied());
+        module_images.push((payload.clone(), relocations.clone(), hooks));
         last = Some((payload, init, relocations));
     }
     let (payload, init, relocations) = last.ok_or("dynamic report contains no modules")?;
-    Ok((all_edits, 0, payload, init, relocations, all_hooks))
+    Ok((
+        all_edits,
+        0,
+        payload,
+        init,
+        relocations,
+        all_hooks,
+        module_images,
+    ))
 }
 
 fn sd_dynamic_handler_slot(
@@ -5164,7 +5384,7 @@ fn sd_knob_edits(options: &Options, main: &[u8]) -> Result<Vec<(u32, Vec<u8>)>, 
     }) {
         return Err("SD fixture does not include knob-dialog".into());
     }
-    let (records, _payload_base, _payload, init, _relocations, _module_hooks) =
+    let (records, _payload_base, _payload, init, _relocations, _module_hooks, _module_images) =
         sd_fixture_edits(options, main, l6fw::Model::L6max)?;
     if init.is_none() {
         return Err("SD knob-dialog has no late initializer".into());
@@ -5199,10 +5419,12 @@ fn run_knob_dialog(
     let dynamic_knob_dialog = if options.sd_image.is_some() {
         sd_fixture_edits(options, &main, l6fw::Model::L6max)
             .ok()
-            .is_some_and(|(_, _, payload, _, _, _)| {
-                payload
-                    .windows(b"KNOB_WIN1".len())
-                    .any(|window| window == b"KNOB_WIN1")
+            .is_some_and(|(_, _, _, _, _, _, module_images)| {
+                module_images.iter().any(|(payload, _, _)| {
+                    payload
+                        .windows(b"KNOB_WIN1".len())
+                        .any(|window| window == b"KNOB_WIN1")
+                })
             })
     } else {
         false
@@ -5231,7 +5453,7 @@ fn run_knob_dialog(
                 return Err(format!("SD patch not active at {address:#010x}").into());
             }
         }
-        let (_, link_base, mut expected, _, relocations, _) =
+        let (_, link_base, mut expected, _, relocations, _, _) =
             sd_fixture_edits(options, &main, l6fw::Model::L6max).map_err(std::io::Error::other)?;
         let registry = link_base + 0x8000;
         let loaded_base =

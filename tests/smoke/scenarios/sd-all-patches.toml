@@ -5,8 +5,8 @@ backends = ["headless"]
 state = "setup-complete"
 card = "empty"
 gdb = true
-patches = ["knob-dialog", "din-mixer-control"]
-sd_patches = ["midi-sync"]
+patches = ["din-mixer-control"]
+sd_patches = ["knob-dialog", "midi-control", "midi-sync"]
 
 [[step]]
 action = "wait"

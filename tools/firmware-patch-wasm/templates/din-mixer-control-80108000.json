@@ -3,6 +3,8 @@
   "hooks": [
     {
       "address": "0x8003e8ee",
+      "continuation_site": null,
+      "continuation_slot_offset": null,
       "length": 4,
       "symbol": "__l6_offset_veneer_din_mixer_forward",
       "target": "0x80108000"

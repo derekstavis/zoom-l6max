@@ -36,6 +36,7 @@ struct Unit {
     windows: Vec<Window>,
     hooks: Vec<HookEdit>,
     hook_symbols: Vec<String>,
+    continuation_slots: Vec<Option<(String, usize)>>,
 }
 
 struct LoaderSite {
@@ -44,6 +45,7 @@ struct LoaderSite {
     guard_sha256: String,
     target_offset: u32,
     link: bool,
+    dynamic_dispatch: bool,
 }
 
 struct LoaderUnit {
@@ -111,6 +113,20 @@ fn parse_unit(payload: &[u8], metadata_json: &str) -> Result<Unit, String> {
                 .ok_or("hook missing symbol".to_owned())
         })
         .collect::<Result<Vec<_>, String>>()?;
+    let continuation_slots = meta["hooks"]
+        .as_array()
+        .ok_or("metadata missing hooks")?
+        .iter()
+        .map(|hook| {
+            let site = hook["continuation_site"].as_str();
+            let offset = hook["continuation_slot_offset"].as_u64();
+            match (site, offset) {
+                (Some(site), Some(offset)) => Ok(Some((site.to_owned(), offset as usize))),
+                (None, None) => Ok(None),
+                _ => Err("incomplete static continuation slot metadata".to_owned()),
+            }
+        })
+        .collect::<Result<Vec<_>, String>>()?;
     Ok(Unit {
         model,
         base,
@@ -118,11 +134,12 @@ fn parse_unit(payload: &[u8], metadata_json: &str) -> Result<Unit, String> {
         windows,
         hooks,
         hook_symbols,
+        continuation_slots,
     })
 }
 
 /// Finds the one embedded unit for `name` at exactly `base` — every
-/// non-empty subset of `PATCHES` resolves to one of the 7 embedded units, so
+/// non-empty subset of `PATCHES` resolves to an embedded unit, so
 /// this only fails if the embedded templates are stale or corrupt.
 fn find_unit(name: &str, model: FirmwareModel, base: u32) -> Result<Unit, String> {
     for (unit_name, payload, metadata) in EMBEDDED_UNITS {
@@ -186,6 +203,9 @@ fn parse_loader(payload: &[u8], metadata_json: &str) -> Result<LoaderUnit, Strin
                 link: s["link"]
                     .as_bool()
                     .ok_or("loader site missing branch kind")?,
+                dynamic_dispatch: s["dynamic_dispatch"]
+                    .as_bool()
+                    .ok_or("loader site missing dynamic-dispatch marker")?,
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
@@ -311,6 +331,9 @@ pub fn apply_patches_with_loader(
     let mut base = first_payload_for(model, original_length);
     let mut applied_report = Vec::new();
     let mut diagnostic_hooks = Vec::new();
+    let mut hook_ranges: Vec<(u32, usize, Option<String>)> = Vec::new();
+    let mut continuation_tails = std::collections::BTreeMap::<u32, (usize, usize, String)>::new();
+    let mut loader_dispatch_targets = std::collections::BTreeMap::<u32, u32>::new();
     let mut output_version = UPDATE_VERSION;
     let mut loader_reserve = None;
     if install_patch_loader {
@@ -367,6 +390,9 @@ pub fn apply_patches_with_loader(
             let target = loader_base
                 .checked_add(site.target_offset)
                 .ok_or("loader branch target overflow")?;
+            if site.dynamic_dispatch {
+                loader_dispatch_targets.insert(site.address, target | 1);
+            }
             firmware[offset..offset + 4].copy_from_slice(&branch(site.address, target, site.link));
             for chunk in firmware[offset + 4..offset + site.length].chunks_exact_mut(2) {
                 chunk.copy_from_slice(&0xbf00u16.to_le_bytes());
@@ -393,7 +419,85 @@ pub fn apply_patches_with_loader(
             payload[window.payload_offset..window.payload_offset + window.length]
                 .copy_from_slice(&original_firmware[start..start + window.length]);
         }
-        let edits = PatchEdits::new(unit.hooks);
+        let mut edits = Vec::new();
+        for (index, hook) in unit.hooks.iter().enumerate() {
+            let continuation = unit.continuation_slots[index].clone();
+            if let Some((start, length, prior_site)) = hook_ranges
+                .iter()
+                .find(|(start, length, _)| {
+                    hook.address < *start + *length as u32
+                        && *start < hook.address + hook.length as u32
+                })
+                .cloned()
+            {
+                if start != hook.address || length != hook.length {
+                    return Err(format!(
+                        "incompatible static hook overlap at {:#x}",
+                        hook.address
+                    ));
+                }
+                let Some((site, slot_offset)) = continuation.as_ref().cloned() else {
+                    return Err(format!(
+                        "non-chainable patches share hook {:#x}",
+                        hook.address
+                    ));
+                };
+                if prior_site.as_deref() != Some(&site) {
+                    return Err(format!(
+                        "patches disagree on continuation site at {:#x}",
+                        hook.address
+                    ));
+                }
+                let (prior_slot, _, tail_site) = continuation_tails
+                    .get(&hook.address)
+                    .cloned()
+                    .ok_or("shared hook has no prior continuation slot")?;
+                if tail_site != site {
+                    return Err(format!(
+                        "patches disagree on continuation site at {:#x}",
+                        hook.address
+                    ));
+                }
+                firmware[prior_slot..prior_slot + 4]
+                    .copy_from_slice(&(hook.target | 1).to_le_bytes());
+                continuation_tails.insert(
+                    hook.address,
+                    (
+                        (base - firmware_base) as usize + slot_offset,
+                        hook.length,
+                        site,
+                    ),
+                );
+            } else {
+                hook_ranges.push((
+                    hook.address,
+                    hook.length,
+                    continuation.as_ref().map(|(site, _)| site.clone()),
+                ));
+                edits.push(HookEdit {
+                    address: hook.address,
+                    target: hook.target,
+                    length: hook.length,
+                });
+                if let Some((site, slot_offset)) = continuation.as_ref() {
+                    continuation_tails.insert(
+                        hook.address,
+                        (
+                            (base - firmware_base) as usize + *slot_offset,
+                            hook.length,
+                            site.clone(),
+                        ),
+                    );
+                }
+            }
+            if let Some((_, slot_offset)) = continuation.as_ref() {
+                if let Some(dispatch_target) = loader_dispatch_targets.get(&hook.address) {
+                    payload[*slot_offset..*slot_offset + 4]
+                        .copy_from_slice(&dispatch_target.to_le_bytes());
+                }
+            }
+        }
+        let edits = PatchEdits::new(edits);
         let applied = apply_patch_with_map(
             &mut firmware,
             original_length,

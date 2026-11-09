@@ -419,6 +419,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
     let mut claimed: Vec<(u32, usize)> = Vec::new();
+    let mut loader_dispatch_targets = std::collections::BTreeMap::<u32, u32>::new();
     fs::create_dir_all(&options.output)?;
     let output = options.output.canonicalize()?;
     let padding = fs::read(source.join("padding_before_secondary.bin"))?;
@@ -520,9 +521,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if !site.dynamic_dispatch {
                 continue;
             }
-            if site.name == "midi_in" && patches.contains(&"midi-sync") {
-                continue;
-            }
             let address = site.address;
             let length = usize::from(site.displaced_len);
             let offset = usize::try_from(
@@ -537,6 +535,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 return Err(format!("function hook guard failed: {}", site.name).into());
             }
             let dispatch = symbol(&symbols, &format!("dispatch_{}", site.name))?;
+            loader_dispatch_targets.insert(address, dispatch | 1);
             let fallback = symbol(&symbols, &format!("original_{}", site.name))?;
             firmware[offset..offset + 4].copy_from_slice(&branch(address, dispatch, false));
             for chunk in firmware[offset + 4..offset + length].chunks_exact_mut(2) {
@@ -618,6 +617,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 hook_owners.insert(address, (patch_index, hook_index, site));
             } else {
                 hook_owners.insert(address, (patch_index, hook_index, continuation_site));
+            }
+            if let (Some(site), Some(dispatch)) = (
+                compiled_patches[patch_index].hooks[hook_index]
+                    .continuation_site
+                    .clone(),
+                loader_dispatch_targets.get(&address).copied(),
+            ) {
+                let slot = symbol(
+                    &compiled_patches[patch_index].symbols,
+                    &format!("static_next_{site}_slot"),
+                )?;
+                let slot_offset = usize::try_from(
+                    slot.checked_sub(compiled_patches[patch_index].base)
+                        .ok_or("chain slot precedes payload")?,
+                )?;
+                compiled_patches[patch_index].payload[slot_offset..slot_offset + 4]
+                    .copy_from_slice(&dispatch.to_le_bytes());
             }
         }
     }

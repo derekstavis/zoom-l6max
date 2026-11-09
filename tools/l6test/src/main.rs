@@ -606,6 +606,7 @@ fn fixture_options(
                 let original = fs::read(bundle_dir.join(filename)).map_err(|e| e.to_string())?;
                 let pass_through = report["patches"][0]["pass_through_entry_offset"]
                     .as_u64()
+                    .or_else(|| report["patches"][0]["pass_through_entry_offsets"][0].as_u64())
                     .ok_or("dynamic module report has no pass-through entry")?
                     as u32;
                 let code_len = u32::from_le_bytes(original[8..12].try_into().unwrap()) as usize;

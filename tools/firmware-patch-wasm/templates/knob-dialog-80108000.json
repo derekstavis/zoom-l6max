@@ -3,21 +3,23 @@
   "hooks": [
     {
       "address": "0x80053b28",
+      "continuation_site": "mixer_apply_channel_parameter",
+      "continuation_slot_offset": 160,
       "length": 4,
       "symbol": "__l6_call_dispatch_mixer_apply_channel_parameter",
-      "target": "0x801080a0"
+      "target": "0x801080b4"
     }
   ],
   "model": "L6max",
   "name": "knob-dialog",
   "payload_file": "knob-dialog-80108000.bin",
-  "payload_length": 6032,
+  "payload_length": 6052,
   "window_byte_total": 4,
   "windows": [
     {
       "firmware_address": "0x80053b28",
       "length": 4,
-      "payload_offset": 148
+      "payload_offset": 164
     }
   ]
 }

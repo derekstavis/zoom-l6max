@@ -2,7 +2,7 @@
 //! real Zoom firmware (by design — see the repo's firmware-handling policy).
 //!
 //! Produces the static templates the browser-based patcher ships: for each
-//! of the 7 non-empty subsets of `firmware_patch_core::PATCHES`, and for each
+//! non-empty subset of `firmware_patch_core::PATCHES`, and for each
 //! patch within it, the payload `l6patch` would compile at that
 //! patch's position — but with every displaced byte copied verbatim by a
 //! continuation veneer zeroed out, plus metadata recording which firmware
@@ -46,6 +46,9 @@ struct HookRow {
     symbol: String,
     length: usize,
     continuation_kind: String,
+    continuation_site: Option<String>,
+    continuation_slot_offset: Option<usize>,
+    preserved_instructions: Vec<(usize, usize)>,
 }
 
 fn compile_hook_rows(
@@ -77,17 +80,62 @@ fn compile_hook_rows(
                             .ok_or("hook window length overflow")?,
                 )
                 .ok_or_else(|| format!("hook window outside firmware at {:#x}", window.address))?;
+            let chain_site = registrations
+                .iter()
+                .find_map(|registration| match registration {
+                    firmware_patch_compile::HookRegistration::Entry { site, handler }
+                        if handler == &window.name =>
+                    {
+                        Some(site.clone())
+                    }
+                    firmware_patch_compile::HookRegistration::CallPre { function, .. }
+                    | firmware_patch_compile::HookRegistration::CallPost { function, .. }
+                        if window.name == format!("call_dispatch:{function}") =>
+                    {
+                        Some(function.clone())
+                    }
+                    _ => None,
+                });
+            let continuation_slot_offset = chain_site
+                .as_ref()
+                .map(|site| symbol(&symbols, &format!("static_next_{site}_slot")))
+                .transpose()?
+                .map(|address| usize::try_from(address).unwrap());
+            let continuation_kind = match window.continuation {
+                0 => "linear".to_owned(),
+                1 => "cbz".to_owned(),
+                2 => "relocated_bl".to_owned(),
+                strategy => {
+                    return Err(format!("unsupported continuation strategy {strategy}").into());
+                }
+            };
+            let mut preserved_instructions = Vec::new();
+            if continuation_kind == "cbz" {
+                preserved_instructions.push((0, 2));
+            }
+            if continuation_kind == "relocated_bl" {
+                let start = usize::try_from(window.address - firmware_base)?;
+                let displaced = &firmware[start..start + window.length];
+                let mut offset = 0;
+                while offset + 4 <= displaced.len() {
+                    let first = u16::from_le_bytes(displaced[offset..offset + 2].try_into()?);
+                    let second = u16::from_le_bytes(displaced[offset + 2..offset + 4].try_into()?);
+                    if first & 0xf800 == 0xf000 && second & 0xd000 == 0xd000 {
+                        preserved_instructions.push((offset, offset + 4));
+                        offset += 4;
+                    } else {
+                        offset += 2;
+                    }
+                }
+            }
             Ok(HookRow {
                 address: window.address,
                 symbol: window.target_symbol,
                 length: window.length,
-                continuation_kind: match window.continuation {
-                    0 => "linear".to_owned(),
-                    1 => "cbz".to_owned(),
-                    strategy => {
-                        return Err(format!("unsupported continuation strategy {strategy}").into());
-                    }
-                },
+                continuation_kind,
+                continuation_site: chain_site,
+                continuation_slot_offset,
+                preserved_instructions,
             })
         })
         .collect()
@@ -107,19 +155,19 @@ fn build_sentinel_firmware(
     let mut value_to_address = HashMap::new();
     let mut candidate: u16 = 1;
     for row in rows {
-        let preserved = if row.continuation_kind == "cbz" {
-            Some((0, 2))
-        } else if let Some(offset) = row.continuation_kind.strip_prefix("call@") {
+        let mut preserved = row.preserved_instructions.clone();
+        if let Some(offset) = row.continuation_kind.strip_prefix("call@") {
             let offset: usize = offset
                 .parse()
                 .expect("validated call offset in hook metadata");
-            Some((offset, offset + 4))
-        } else {
-            None
-        };
+            preserved.push((offset, offset + 4));
+        }
         for i in 0..row.length as u32 {
             let byte_index = i as usize;
-            if preserved.is_some_and(|(start, end)| (start..end).contains(&byte_index)) {
+            if preserved
+                .iter()
+                .any(|(start, end)| (*start..*end).contains(&byte_index))
+            {
                 continue;
             }
             let address = row.address + i;
@@ -220,6 +268,7 @@ fn loader_site(
         "guard_sha256": format!("{:x}", Sha256::digest(guard)),
         "target_offset": target_offset,
         "link": link,
+        "dynamic_dispatch": false,
     }))
 }
 
@@ -234,7 +283,7 @@ fn build_loader_template(
     scratch: &Path,
     loader_base: u32,
     static_patches: &[&str],
-    patch_rows: &HashMap<&'static str, Vec<HookRow>>,
+    _patch_rows: &HashMap<&'static str, Vec<HookRow>>,
 ) -> Result<(Vec<u8>, Vec<Window>, serde_json::Value), Box<dyn std::error::Error>> {
     let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let patches = repo.join("patches");
@@ -334,11 +383,21 @@ fn build_loader_template(
             address: site.address,
             symbol: format!("original_{}", site.name),
             length: usize::from(site.displaced_len),
-            continuation_kind: if site.continuation == 1 {
-                "cbz".to_owned()
-            } else {
-                "linear".to_owned()
-            },
+            continuation_kind: match site.continuation {
+                1 => "cbz",
+                2 => "relocated_bl",
+                _ => "linear",
+            }
+            .to_owned(),
+            continuation_site: None,
+            continuation_slot_offset: None,
+            preserved_instructions: preserved_instructions(
+                firmware,
+                firmware_base,
+                site.address,
+                usize::from(site.displaced_len),
+                site.continuation,
+            )?,
         });
     }
     for window in &loader_windows {
@@ -355,6 +414,9 @@ fn build_loader_template(
                 } else {
                     "linear".to_owned()
                 },
+                continuation_site: None,
+                continuation_slot_offset: None,
+                preserved_instructions: Vec::new(),
             });
         }
     }
@@ -396,16 +458,8 @@ fn build_loader_template(
         .iter()
         .filter(|site| site.dynamic_dispatch)
     {
-        let is_static = static_patches.iter().any(|patch| {
-            patch_rows[patch]
-                .iter()
-                .any(|row| row.address == site.address)
-        });
-        if is_static {
-            continue;
-        }
         let dispatcher = format!("dispatch_{}", site.name);
-        sites.push(loader_site(
+        let mut dispatch = loader_site(
             firmware,
             firmware_base,
             loader_base,
@@ -414,7 +468,9 @@ fn build_loader_template(
             &dispatcher,
             false,
             &symbols,
-        )?);
+        )?;
+        dispatch["dynamic_dispatch"] = serde_json::json!(true);
+        sites.push(dispatch);
     }
     let metadata = serde_json::json!({
         "model": if model == FirmwareModel::L6 { "L6" } else { "L6max" },
@@ -427,6 +483,42 @@ fn build_loader_template(
         "sites": sites,
     });
     Ok((template, windows, metadata))
+}
+
+fn preserved_instructions(
+    firmware: &[u8],
+    firmware_base: u32,
+    address: u32,
+    length: usize,
+    strategy: u8,
+) -> Result<Vec<(usize, usize)>, Box<dyn std::error::Error>> {
+    if strategy == 1 {
+        return Ok(vec![(0, 2)]);
+    }
+    if strategy != 2 {
+        return Ok(Vec::new());
+    }
+    let start = usize::try_from(
+        address
+            .checked_sub(firmware_base)
+            .ok_or("site before image")?,
+    )?;
+    let displaced = firmware
+        .get(start..start.checked_add(length).ok_or("site length overflow")?)
+        .ok_or("site outside firmware")?;
+    let mut preserved = Vec::new();
+    let mut offset = 0;
+    while offset + 4 <= displaced.len() {
+        let first = u16::from_le_bytes(displaced[offset..offset + 2].try_into()?);
+        let second = u16::from_le_bytes(displaced[offset + 2..offset + 4].try_into()?);
+        if first & 0xf800 == 0xf000 && second & 0xd000 == 0xd000 {
+            preserved.push((offset, offset + 4));
+            offset += 4;
+        } else {
+            offset += 2;
+        }
+    }
+    Ok(preserved)
 }
 
 /// One precompiled build unit: a patch's payload at one specific base
@@ -486,7 +578,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut per_patch: HashMap<&'static str, PerPatch> = HashMap::new();
     for name in PATCHES {
         let patch_root = patches_dir.join(name);
-        let patch_root = if name == "midi-sync" {
+        let patch_root = if name == "midi-sync" || name == "midi-control" {
             patch_root.join("l6max")
         } else {
             patch_root
@@ -520,11 +612,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .collect::<HashMap<_, _>>();
 
     let mut units: HashMap<(&'static str, u32), Unit> = HashMap::new();
-    for mask in 1u8..8 {
+    for mask in 1u16..(1u16 << PATCHES.len()) {
         let subset: Vec<&'static str> = PATCHES
             .iter()
             .enumerate()
-            .filter(|(i, _)| mask & (1 << i) != 0)
+            .filter(|(i, _)| mask & (1u16 << i) != 0)
             .map(|(_, name)| *name)
             .collect();
         let mut base = FIRST_PAYLOAD;
@@ -590,11 +682,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Additional position-dependent feature templates for loader-enabled
     // images. The native builder places the loader first, then appends static
     // feature payloads; preserve that order in the browser output as well.
-    for mask in 1u8..8 {
+    for mask in 1u16..(1u16 << PATCHES.len()) {
         let subset: Vec<&'static str> = PATCHES
             .iter()
             .enumerate()
-            .filter(|(index, _)| mask & (1 << index) != 0)
+            .filter(|(index, _)| mask & (1u16 << index) != 0)
             .map(|(_, name)| *name)
             .collect();
         let (loader_template, _, _) = build_loader_template(
@@ -656,7 +748,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             base = (base + len + 15) & !15;
         }
     }
-    assert!(units.len() >= 7, "expected the 7 standard build units");
+    assert!(
+        units.len() >= PATCHES.len(),
+        "expected standard build units"
+    );
 
     let templates_dir =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../firmware-patch-wasm/templates");
@@ -699,6 +794,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "target": format!("{target:#x}"),
                     "length": length,
                     "symbol": row.symbol,
+                    "continuation_site": row.continuation_site,
+                    "continuation_slot_offset": row.continuation_slot_offset,
+                    "continuation_site": row.continuation_site,
+                    "continuation_slot_offset": row.continuation_slot_offset,
                 })
             })
             .collect();
@@ -797,6 +896,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "target": format!("{target:#x}"),
                 "length": length,
                 "symbol": row.symbol,
+                "continuation_site": row.continuation_site,
+                "continuation_slot_offset": row.continuation_slot_offset,
+                "continuation_site": row.continuation_site,
+                "continuation_slot_offset": row.continuation_slot_offset,
             })
         })
         .collect();

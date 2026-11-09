@@ -759,3 +759,27 @@ models = ["l6max"]
 scenario = "scenarios/sd-midi-control-sync.toml"
 needs_configuration = true
 wall_timeout_s = 1200
+
+[[case]]
+id = "sd-midi-control"
+suites = ["sd-matrix"]
+models = ["l6max"]
+scenario = "scenarios/sd-midi-control.toml"
+needs_configuration = true
+wall_timeout_s = 1200
+
+[[case]]
+id = "sd-knob-midi-control"
+suites = ["sd-matrix"]
+models = ["l6max"]
+scenario = "scenarios/sd-knob-midi-control.toml"
+needs_configuration = true
+wall_timeout_s = 1200
+
+[[case]]
+id = "sd-knob-midi-sync-dynamic"
+suites = ["sd-matrix"]
+models = ["l6max"]
+scenario = "scenarios/sd-knob-midi-sync-dynamic.toml"
+needs_configuration = true
+wall_timeout_s = 1200
