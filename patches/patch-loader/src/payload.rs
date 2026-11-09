@@ -31,7 +31,7 @@ const CLAIM_WORD: usize = REGISTRY_BASE + 8;
 const MODULE_PTR_WORD: usize = REGISTRY_BASE + 160;
 const MODULE_LEN_WORD: usize = REGISTRY_BASE + 164;
 const HOOK_CHAIN_TABLE: usize = REGISTRY_BASE + 0x100;
-const MAX_FUNCTION_CHAINS: usize = 8;
+const MAX_FUNCTION_CHAINS: usize = core_loader::dynamic::MAX_FUNCTION_CHAINS;
 const DYNAMIC_HANDLER_TABLE: usize = HOOK_CHAIN_TABLE
     + core::mem::size_of::<[core_loader::dynamic::FunctionHookChain; MAX_FUNCTION_CHAINS]>();
 const MAX_RELOCATIONS: u32 = 256;
@@ -380,7 +380,10 @@ unsafe fn clear_payload(base: usize, len: usize) {
     }
 }
 
-unsafe fn find_hook_chain(address: u32) -> Option<*mut core_loader::dynamic::FunctionHookChain> {
+unsafe fn find_hook_chain(
+    address: u32,
+    reserved: &[*mut core_loader::dynamic::FunctionHookChain],
+) -> Option<*mut core_loader::dynamic::FunctionHookChain> {
     let mut free = None;
     for index in 0..MAX_FUNCTION_CHAINS {
         let chain = (HOOK_CHAIN_TABLE
@@ -390,7 +393,10 @@ unsafe fn find_hook_chain(address: u32) -> Option<*mut core_loader::dynamic::Fun
         if value.count != 0 && value.address == address {
             return Some(chain);
         }
-        if free.is_none() && value.count == 0 {
+        if free.is_none()
+            && value.count == 0
+            && !reserved.contains(&chain)
+        {
             free = Some(chain);
         }
     }
@@ -398,9 +404,11 @@ unsafe fn find_hook_chain(address: u32) -> Option<*mut core_loader::dynamic::Fun
 }
 
 /// Load one compact v8 module directly into its final heap allocation. Hook
-/// registrations stay local until the streaming CRC and all relocations pass.
+/// registrations stay local until the streaming CRC, relocations, and every
+/// site/capacity check pass. The complete module's hook set is published under
+/// one interrupt-masked registry update.
 unsafe fn load_dynamic<R: core_loader::bundle::Reader>(reader: &mut R, order: u32) -> bool {
-    const MAX_HOOKS: usize = 1;
+    const MAX_HOOKS: usize = core_loader::dynamic::MAX_HOOKS_PER_MODULE;
     let pending = match core_loader::dynamic::read_header(
         reader,
         MODULE_CAPACITY,
@@ -454,35 +462,83 @@ unsafe fn load_dynamic<R: core_loader::bundle::Reader>(reader: &mut R, order: u3
             return false;
         }
     };
-    let hook = hooks[0];
-    let hook_address = hook.address;
-    let next_slot_offset = hook.next_slot_offset;
-    let dynamic_site_index = hook_catalog::FUNCTION_HOOK_SITES
-        .iter()
-        .filter(|site| site.dynamic_dispatch)
-        .position(|site| site.address == hook_address);
-    let Some(dynamic_site_index) = dynamic_site_index else {
-        unsafe {
-            clear_payload(loaded_base, header.code_len);
-            free(module);
-        }
-        return false;
-    };
-    if next_slot_offset == u32::MAX {
-        unsafe {
-            clear_payload(loaded_base, header.code_len);
-            free(module);
-        }
-        return false;
+    #[derive(Clone, Copy)]
+    struct HookPlan {
+        address: u32,
+        entry: u32,
+        next_slot: u32,
+        chain: *mut core_loader::dynamic::FunctionHookChain,
+        expected_count: u32,
+        dispatch_index: usize,
     }
-    let chain_ptr = unsafe { find_hook_chain(hook_address) };
-    let chain = chain_ptr.map(|chain| unsafe { ptr::read_volatile(chain) });
-    let entry = loaded_base as u32 + hook.entry_offset | 1;
-    let next_slot = loaded_base as u32 + next_slot_offset;
-    let mut updated_chain = chain.unwrap_or_default();
-    let previous_slot =
-        updated_chain.append(hook_address, entry, next_slot, order, loaded_base as u32);
-    if chain_ptr.is_none() || previous_slot.is_err() {
+
+    let mut plans = [HookPlan {
+        address: 0,
+        entry: 0,
+        next_slot: 0,
+        chain: ptr::null_mut(),
+        expected_count: 0,
+        dispatch_index: 0,
+    }; MAX_HOOKS];
+    let mut reserved_chains = [ptr::null_mut(); MAX_HOOKS];
+    let mut planned = 0usize;
+    for hook in hooks.iter().take(header.hook_count).copied() {
+        if hook.next_slot_offset == u32::MAX {
+            unsafe {
+                clear_payload(loaded_base, header.code_len);
+                free(module);
+            }
+            return false;
+        }
+        let Some(dispatch_index) = hook_catalog::FUNCTION_HOOK_SITES
+            .iter()
+            .filter(|site| site.dynamic_dispatch)
+            .position(|site| site.address == hook.address)
+        else {
+            unsafe {
+                clear_payload(loaded_base, header.code_len);
+                free(module);
+            }
+            return false;
+        };
+        let chain = unsafe { find_hook_chain(hook.address, &reserved_chains[..planned]) };
+        let Some(chain) = chain else {
+            unsafe {
+                clear_payload(loaded_base, header.code_len);
+                free(module);
+            }
+            return false;
+        };
+        let mut chain_value = unsafe { ptr::read_volatile(chain) };
+        let expected_count = chain_value.count;
+        let entry = loaded_base as u32 + hook.entry_offset | 1;
+        let next_slot = loaded_base as u32 + hook.next_slot_offset;
+        let previous_slot = chain_value.append(
+            hook.address,
+            entry,
+            next_slot,
+            order,
+            loaded_base as u32,
+        );
+        if previous_slot.is_err() {
+            unsafe {
+                clear_payload(loaded_base, header.code_len);
+                free(module);
+            }
+            return false;
+        }
+        plans[planned] = HookPlan {
+            address: hook.address,
+            entry,
+            next_slot,
+            chain,
+            expected_count,
+            dispatch_index,
+        };
+        reserved_chains[planned] = chain;
+        planned += 1;
+    }
+    if planned != header.hook_count {
         unsafe {
             clear_payload(loaded_base, header.code_len);
             free(module);
@@ -494,31 +550,54 @@ unsafe fn load_dynamic<R: core_loader::bundle::Reader>(reader: &mut R, order: u3
         synchronize_instructions();
         let primask: u32;
         asm!("mrs {0}, PRIMASK", "cpsid i", out(reg) primask, options(nostack, preserves_flags));
-        let slot = (DYNAMIC_HANDLER_TABLE + dynamic_site_index * 4) as *mut u32;
-        let current_chain = ptr::read_volatile(chain_ptr.unwrap());
-        if current_chain.count != updated_chain.count - 1
-            || (current_chain.count == 0 && ptr::read_volatile(slot) != 0)
-            || (current_chain.count != 0 && ptr::read_volatile(slot) != current_chain.links[0].entry)
-        {
-            asm!("msr PRIMASK, {0}", in(reg) primask, options(nostack, preserves_flags));
-            clear_payload(loaded_base, header.code_len);
-            free(module);
-            return false;
+        // Verify every registry row before changing any row or handler head.
+        // `claim()` excludes competing loader transactions; this catches
+        // corrupt/stale registry state without exposing a partially installed
+        // multi-site module.
+        for plan in &plans[..planned] {
+            let current_chain = ptr::read_volatile(plan.chain);
+            let slot = (DYNAMIC_HANDLER_TABLE + plan.dispatch_index * 4) as *mut u32;
+            let current_head = ptr::read_volatile(slot);
+            if (current_chain.address != plan.address
+                && !(current_chain.count == 0 && current_chain.address == 0))
+                || current_chain.count != plan.expected_count
+                || (current_chain.count == 0 && current_head != 0)
+                || (current_chain.count != 0 && current_head != current_chain.links[0].entry)
+            {
+                asm!("msr PRIMASK, {0}", in(reg) primask, options(nostack, preserves_flags));
+                clear_payload(loaded_base, header.code_len);
+                free(module);
+                return false;
+            }
         }
-        let site_name = hook_catalog::FUNCTION_HOOK_SITES
-            .iter()
-            .filter(|site| site.dynamic_dispatch)
-            .nth(dynamic_site_index)
-            .unwrap()
-            .name;
-        let continuation =
-            (crate::patch_api::__continuations::address(site_name) as u32) | 1;
-        ptr::write_volatile(next_slot as *mut u32, continuation);
-        ptr::write_volatile(chain_ptr.unwrap(), updated_chain);
-        if let Some(previous_slot) = previous_slot.unwrap() {
-            ptr::write_volatile(previous_slot as *mut u32, entry);
-        } else {
-            ptr::write_volatile(slot, entry);
+        // Initialize each module continuation before exposing any handler.
+        for plan in &plans[..planned] {
+            let site_name = hook_catalog::FUNCTION_HOOK_SITES
+                .iter()
+                .filter(|site| site.dynamic_dispatch)
+                .nth(plan.dispatch_index)
+                .unwrap()
+                .name;
+            let continuation =
+                (crate::patch_api::__continuations::address(site_name) as u32) | 1;
+            ptr::write_volatile(plan.next_slot as *mut u32, continuation);
+        }
+        for plan in &plans[..planned] {
+            let slot = (DYNAMIC_HANDLER_TABLE + plan.dispatch_index * 4) as *mut u32;
+            let mut updated_chain = ptr::read_volatile(plan.chain);
+            let previous_slot = updated_chain.append(
+                plan.address,
+                plan.entry,
+                plan.next_slot,
+                order,
+                loaded_base as u32,
+            ).unwrap();
+            ptr::write_volatile(plan.chain, updated_chain);
+            if let Some(previous_slot) = previous_slot {
+                ptr::write_volatile(previous_slot as *mut u32, plan.entry);
+            } else {
+                ptr::write_volatile(slot, plan.entry);
+            }
         }
         ptr::write_volatile(MODULE_PTR_WORD as *mut u32, loaded_base as u32);
         ptr::write_volatile(MODULE_LEN_WORD as *mut u32, header.code_len as u32);

@@ -6,7 +6,12 @@
 use sha2::{Digest, Sha256};
 
 /// Patches in catalog order. Output never depends on the order patches are requested in.
-pub const PATCHES: [&str; 3] = ["knob-dialog", "midi-sync", "din-mixer-control"];
+pub const PATCHES: [&str; 4] = [
+    "knob-dialog",
+    "midi-control",
+    "midi-sync",
+    "din-mixer-control",
+];
 pub const FIRST_PAYLOAD: u32 = 0x80108000;
 pub const SLOT_END: u32 = 0x801a2ff8;
 /// SHA-256 of the supported stock L6max MAIN firmware image (1.10).

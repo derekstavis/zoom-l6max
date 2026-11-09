@@ -751,3 +751,11 @@ models = ["l6max"]
 scenario = "scenarios/sd-hook-chain.toml"
 needs_configuration = true
 wall_timeout_s = 1200
+
+[[case]]
+id = "sd-midi-control-sync"
+suites = ["sd-matrix"]
+models = ["l6max"]
+scenario = "scenarios/sd-midi-control-sync.toml"
+needs_configuration = true
+wall_timeout_s = 1200

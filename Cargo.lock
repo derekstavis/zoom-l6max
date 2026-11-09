@@ -1627,6 +1627,7 @@ name = "firmware-patch-compile"
 version = "0.1.0"
 dependencies = [
  "patch-hook-macros",
+ "patch-loader-core",
  "sha2",
 ]
 

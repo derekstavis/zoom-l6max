@@ -9,6 +9,7 @@ in ignored output directories.
 | Patch | Supported models | Purpose | Builder |
 | --- | --- | --- | --- |
 | [knob-dialog](knob-dialog/README.md) | L6max 1.10 | Show channel encoder values in a custom scene using the stock GUI renderer | `l6patch` |
+| [midi-control](midi-control/README.md) | L6max 1.10 | Control recorder transport and blue pages over MIDI, with state feedback | `l6patch` |
 | [midi-sync](midi-sync/README.md) | L6max 1.10; L6 1.10 | Send the channel mixer state as Control Change on request | `l6patch` |
 | [din-mixer-control](din-mixer-control/README.md) | L6max 1.10 | Let the physical MIDI IN/OUT jacks control the mixer when Mixer Control via MIDI is on, as documented but never implemented | `l6patch` |
 
@@ -114,14 +115,18 @@ covered by `.gitignore`; never place extracted proprietary firmware in `patches/
 Read any displaced instruction bytes from that local input during compilation;
 commit the veneer logic and validation metadata instead of copied firmware bytes.
 
-The builder supports `knob-dialog` and `midi-sync` on L6max, and only
-`midi-sync` on L6. If `--patch` is omitted, firmware detection selects
+The builder supports `knob-dialog`, `midi-control`, `midi-sync`, and
+`din-mixer-control` on L6max, and only `midi-sync` on L6. MIDI Control and MIDI
+Sync can be combined; compatible shared entry and call hooks run as an ordered
+chain.
+If `--patch` is omitted, firmware detection selects
 `knob-dialog` on L6max and `midi-sync` on L6. Explicit `--patch` values remain
 model-checked, and the builder rejects an unsupported selection. `--patch` may
 repeat for compatible profiles. L6max payloads start at `0x80108000`; the L6
 payload starts aligned after the exact supported MAIN image and consumes erased
 `padding_before_secondary` bytes. Each linker script takes its base from
-`PAYLOAD_BASE`. The builder checks hook regions against the input and refuses
-overlapping hooks. Overlap checks do not prove independence: before combining
-another patch, verify shared resources (RAM, heap, locks, callbacks) and input
-hash expectations, and document the combination in each patch's README.
+`PAYLOAD_BASE`. The builder checks hook regions against the input and chains
+compatible shared entry and call hooks. Overlapping offset hooks remain errors.
+Before combining another patch, verify shared resources (RAM, heap, locks,
+callbacks) and input hash expectations, and document the combination in each
+patch's README.

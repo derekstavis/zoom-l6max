@@ -5,4 +5,6 @@ include!("memory.rs");
 include!("rtos.rs");
 include!("midi.rs");
 include!("mixer.rs");
+include!("recorder.rs");
+include!("panel.rs");
 include!("gui.rs");

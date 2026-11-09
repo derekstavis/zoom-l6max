@@ -25,11 +25,12 @@ allocates its small state on first use. `din-mixer-control` uses an
 instruction-offset hook and remains static-only. The loader itself is installed
 through the ordinary firmware update.
 
-The loader accepts one hook registration per file. Multiple files can hook the
-same function; they are linked in numeric filename-prefix order. The dynamic
-knob-dialog emulator case loads two ordered modules for the same callee and
-exercises the recorder guard, dialog rendering, timeout, cleanup, and task
-context. The MIDI scenarios cover dynamic entry hooks.
+Each file can register up to eight hooks across cataloged functions. Multiple
+files can hook the same function; their handlers are linked in numeric
+filename-prefix order. The dynamic knob-dialog emulator case loads two ordered
+modules for the same callee and exercises the recorder guard, dialog rendering,
+timeout, cleanup, and task context. The MIDI Control + MIDI Sync scenario loads
+both patches and verifies their shared entry as a two-handler chain.
 
 **The listed emulator cases pass; physical hardware has not been tested.** QEMU
 does not establish physical SDRAM permissions, cache behavior, stack headroom,
@@ -59,7 +60,7 @@ corrupt or unsupported candidates.
 
 Hooks are stored in a fixed-capacity firmware table: up to eight function chains,
 with up to eight hooks per function. The loader has dynamic dispatch stubs for
-the cataloged MIDI input and mixer parameter functions. Each module carries a
+catalog sites marked dynamic in the model-specific function catalog. Each module carries a
 `next` function-pointer slot. The loader connects hooks in filename order and
 points the tail at the displaced stock handler. A hook keeps the target
 function's calling convention; it calls `next` to continue, or returns without
@@ -101,6 +102,7 @@ for `l6patch` as well as the normal emulator prerequisites:
 ```sh
 cargo run --offline --locked -p l6test -- run --case sd-midi-sync --backend headless
 cargo run --offline --locked -p l6test -- run --case sd-l6max-midi-sync --backend headless
+cargo run --offline --locked -p l6test -- run --case sd-midi-control-sync --model l6max --backend headless
 cargo run --offline --locked -p l6test -- run --case sd-din-mixer-control --model l6max --backend headless
 cargo run --offline --locked -p l6test -- run --case sd-knob-dialog --model l6max --backend headless
 cargo run --offline --locked -p l6test -- run --case sd-knob-dialog-dynamic --model l6max --backend headless

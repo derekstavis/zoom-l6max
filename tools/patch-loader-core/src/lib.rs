@@ -525,6 +525,16 @@ pub mod dynamic {
     pub const LOADER_ABI: u16 = 2;
     pub const HOOK_RECORD_LEN: usize = 12;
     pub const RELOCATION_RECORD_LEN: usize = 12;
+    /// Maximum number of distinct hook sites the resident loader can index.
+    /// Keep this synchronized with the fixed registry reserved by Patch loader.
+    // The current L6max catalog exposes seven dynamic sites. Keep one spare
+    // chain and bound per-module loader stack use while covering MIDI Control's
+    // six registrations.
+    pub const MAX_FUNCTION_CHAINS: usize = 8;
+    /// Maximum hook records accepted in one patch file. This covers the
+    /// current multi-site patch prototypes while keeping loader stack use
+    /// bounded.
+    pub const MAX_HOOKS_PER_MODULE: usize = 8;
     pub const MAX_HOOKS_PER_FUNCTION: usize = 8;
 
     #[repr(C)]

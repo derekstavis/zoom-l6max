@@ -452,7 +452,13 @@ impl Scenario {
                 return Err("sd_patches cannot combine installed_patches or update_patches".into());
             }
             if patches.iter().any(|name| {
-                !["midi-sync", "knob-dialog", "din-mixer-control"].contains(&name.as_str())
+                ![
+                    "midi-control",
+                    "midi-sync",
+                    "knob-dialog",
+                    "din-mixer-control",
+                ]
+                .contains(&name.as_str())
             }) {
                 return Err("unknown SD patch name".into());
             }

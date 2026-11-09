@@ -340,6 +340,37 @@ mod tests {
     }
 
     #[test]
+    fn emits_multi_site_v8_module_records() {
+        let payload = [
+            0x00, 0xbf, 0x70, 0x47, 0, 0, 0, 0, 0, 0xbf, 0x70, 0x47, 0, 0, 0, 0,
+        ];
+        let hooks = [(0x8000_1000, 0, 4), (0x8000_2000, 8, 12)];
+        let file = build_dynamic_v8(&payload, 0, &hooks, &[]).unwrap();
+        assert_eq!(u16::from_le_bytes(file[12..14].try_into().unwrap()), 2);
+        assert_eq!(file.len(), 24 + payload.len() + hooks.len() * 12);
+        assert_eq!(
+            u32::from_le_bytes(
+                file[24 + payload.len()..28 + payload.len()]
+                    .try_into()
+                    .unwrap()
+            ),
+            0x8000_1000
+        );
+        assert_eq!(
+            u32::from_le_bytes(
+                file[36 + payload.len()..40 + payload.len()]
+                    .try_into()
+                    .unwrap()
+            ),
+            0x8000_2000
+        );
+        assert_eq!(
+            patch_loader_core::dynamic::checksum(&file),
+            Some(u32::from_le_bytes(file[20..24].try_into().unwrap()))
+        );
+    }
+
+    #[test]
     fn rejects_uncovered_changes_and_overlapping_guards() {
         let stock = [1, 2, 3, 4];
         let patched = [1, 7, 3, 8, 0xff, 0xff, 9, 10];

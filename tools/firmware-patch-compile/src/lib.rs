@@ -498,7 +498,10 @@ fn generate_continuations_from_metadata(
             assembly.push_str(&format!(
                 ".section .text.continuation_{name}, \"ax\"\n.global {original}\n.thumb_func\n{original}:\n    ldr r12, ={slot}\n    ldr r12, [r12]\n    bx r12\n.align 2\n.global {slot}\n{slot}:\n    .word 0\n"
             ));
-        } else {
+        } else if generate_dynamic_sites {
+            // The resident loader's dispatch fallback must stay a direct
+            // stock continuation. Patch modules use the slot-based path below
+            // so statically selected modules can be chained.
             assembly.push_str(&format!(
                 ".section .text.continuation_{name}, \"ax\"\n.global {original}\n.thumb_func\n{original}:\n"
             ));
@@ -513,6 +516,41 @@ fn generate_continuations_from_metadata(
                     assembly.push_str(&format!("    ldr pc, ={resume:#x}\n.ltorg\n"));
                 }
                 1 => emit_cbz_continuation(&mut assembly, site.address, displaced, resume)?,
+                2 => emit_relocated_bl_continuation(
+                    &mut assembly,
+                    site.address,
+                    displaced,
+                    firmware,
+                    main_base,
+                    resume,
+                )?,
+                value => return Err(format!("unsupported continuation strategy {value}").into()),
+            }
+        } else {
+            let slot = format!("static_next_{name}_slot");
+            let stock = format!("static_stock_{name}");
+            assembly.push_str(&format!(
+                ".section .text.continuation_{name}, \"ax\"\n.global {original}\n.thumb_func\n{original}:\n    ldr r12, ={slot}\n    ldr r12, [r12]\n    bx r12\n.align 2\n.global {slot}\n{slot}:\n    .word {stock} + 1\n.thumb_func\n{stock}:\n"
+            ));
+            let resume = site
+                .address
+                .checked_add(u32::from(site.displaced_len))
+                .ok_or("continuation address overflow")?
+                | 1;
+            match site.continuation {
+                0 => {
+                    emit_bytes(&mut assembly, displaced);
+                    assembly.push_str(&format!("    ldr pc, ={resume:#x}\n.ltorg\n"));
+                }
+                1 => emit_cbz_continuation(&mut assembly, site.address, displaced, resume)?,
+                2 => emit_relocated_bl_continuation(
+                    &mut assembly,
+                    site.address,
+                    displaced,
+                    firmware,
+                    main_base,
+                    resume,
+                )?,
                 value => return Err(format!("unsupported continuation strategy {value}").into()),
             }
         }
@@ -534,7 +572,10 @@ fn generate_continuations_from_metadata(
         } else {
             0x8021_8000u32
         };
-        let handler_table = registry_base + 0x100 + 8 * 136;
+        let handler_table = registry_base
+            + 0x100
+            + (patch_loader_core::dynamic::MAX_FUNCTION_CHAINS as u32)
+                * (core::mem::size_of::<patch_loader_core::dynamic::FunctionHookChain>() as u32);
         let mut dynamic_index = 0usize;
         for site in sites.iter().filter(|site| site.dynamic_dispatch) {
             let dispatcher = format!("dispatch_{}", site.name);
@@ -881,6 +922,47 @@ fn emit_bytes(assembly: &mut String, bytes: &[u8]) {
     }
 }
 
+/// Emit a guarded continuation that relocates Thumb BL instructions while
+/// copying other instructions verbatim. This strategy is explicit in the
+/// function catalog and does not claim to relocate arbitrary PC-relative
+/// Thumb instructions.
+fn emit_relocated_bl_continuation(
+    assembly: &mut String,
+    address: u32,
+    displaced: &[u8],
+    firmware: &[u8],
+    firmware_base: u32,
+    resume: u32,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut offset = 0usize;
+    let mut copied_start = 0usize;
+    let mut calls = 0usize;
+    while offset + 4 <= displaced.len() {
+        let first = u16::from_le_bytes(displaced[offset..offset + 2].try_into()?);
+        let second = u16::from_le_bytes(displaced[offset + 2..offset + 4].try_into()?);
+        if first & 0xf800 == 0xf000 && second & 0xd000 == 0xd000 {
+            emit_bytes(assembly, &displaced[copied_start..offset]);
+            let target =
+                decode_thumb_bl_target(firmware, firmware_base, address + u32::try_from(offset)?)?
+                    | 1;
+            assembly.push_str(&format!("    ldr r12, ={target:#x}\n    blx r12\n"));
+            offset += 4;
+            copied_start = offset;
+            calls += 1;
+        } else {
+            offset += 2;
+        }
+    }
+    if calls == 0 {
+        return Err(
+            format!("RelocatedBl continuation at {address:#x} contains no Thumb BL").into(),
+        );
+    }
+    emit_bytes(assembly, &displaced[copied_start..]);
+    assembly.push_str(&format!("    ldr pc, ={resume:#x}\n.ltorg\n"));
+    Ok(())
+}
+
 fn emit_cbz_continuation(
     assembly: &mut String,
     address: u32,
@@ -1065,7 +1147,7 @@ pub fn function_hook_sites(
         let guard_sha256 = std::str::from_utf8(guard_bytes)?.to_owned();
         if address & 1 != 0
             || displaced_len < 2
-            || !matches!(continuation, 0 | 1)
+            || !matches!(continuation, 0 | 1 | 2)
             || !matches!(dynamic_dispatch, 0 | 1)
             || name.is_empty()
             || guard_sha256.len() != 64

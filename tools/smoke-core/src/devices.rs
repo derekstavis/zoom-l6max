@@ -3143,6 +3143,11 @@ impl State {
                         replies.push(message);
                     }
                 } else {
+                    // MIDI Control adds recorder state as CC 115 to the
+                    // existing 94-parameter sync response.
+                    if message[1] == 115 {
+                        continue;
+                    }
                     replies.push(message);
                 }
                 if replies.len() == expected_count {
@@ -3602,8 +3607,34 @@ impl State {
                     )
                     .into());
                 }
-                let chain_address = registry + 0x100;
-                let expected_function = module_hooks.first().map(|hook| hook.address);
+                let expected_function = if chain_count.is_some() {
+                    module_hooks
+                        .iter()
+                        .find(|hook| {
+                            module_hooks
+                                .iter()
+                                .filter(|other| other.address == hook.address)
+                                .count()
+                                >= chain_count.unwrap_or(1) as usize
+                        })
+                        .map(|hook| hook.address)
+                } else {
+                    module_hooks.first().map(|hook| hook.address)
+                };
+                let chain_row_size =
+                    core::mem::size_of::<patch_loader_core::dynamic::FunctionHookChain>() as u32;
+                let chain_address = if let Some(address) = expected_function {
+                    (0..patch_loader_core::dynamic::MAX_FUNCTION_CHAINS)
+                        .map(|index| registry + 0x100 + index as u32 * chain_row_size)
+                        .find(|row| {
+                            qmp.read_memory(0, *row, 4).ok().is_some_and(|bytes| {
+                                u32::from_le_bytes(bytes.try_into().unwrap()) == address
+                            })
+                        })
+                        .unwrap_or(registry + 0x100)
+                } else {
+                    registry + 0x100
+                };
                 let registered_function =
                     u32::from_le_bytes(qmp.read_memory(0, chain_address, 4)?.try_into().unwrap());
                 let registered_count = u32::from_le_bytes(
@@ -3666,9 +3697,9 @@ impl State {
                     prior_order = Some(order);
                     chain_links.push((entry, next_slot, order, module));
                 }
-                for (address, _, entry_offset) in &edits {
-                    let slot = if let Some(function) = expected_function.filter(|f| f == address) {
-                        sd_dynamic_handler_slot(options, session.engine.model(), registry, function)
+                for (address, _, _entry_offset) in &edits {
+                    let slot = if module_hooks.iter().any(|hook| hook.address == *address) {
+                        sd_dynamic_handler_slot(options, session.engine.model(), registry, *address)
                             .map_err(std::io::Error::other)?
                     } else if *address == 0x8003_e8ee {
                         registry + 16
@@ -3713,25 +3744,26 @@ impl State {
                         };
                         registry + 32 + index * 4
                     };
-                    let expected_entry = if loaded && Some(*address) == expected_function {
-                        chain_head
-                    } else if loaded {
-                        loaded_base + *entry_offset | 1
-                    } else {
-                        0
-                    };
                     let handler =
                         u32::from_le_bytes(qmp.read_memory(0, slot, 4)?.try_into().unwrap());
-                    if handler != expected_entry {
+                    let valid = if !loaded {
+                        handler == 0
+                    } else if Some(*address) == expected_function {
+                        handler == chain_head
+                    } else {
+                        handler != 0 && handler & 1 != 0
+                    };
+                    if !valid {
                         return Err(format!(
-                            "SD handler at {slot:#010x} is {handler:#010x}, expected {expected_entry:#010x}"
+                            "SD handler at {slot:#010x} is invalid: {handler:#010x}"
                         )
                         .into());
                     }
                 }
                 if loaded {
                     let hook = module_hooks
-                        .first()
+                        .iter()
+                        .find(|hook| Some(hook.address) == expected_function)
                         .ok_or("dynamic patch bundle has no hook record")?;
                     let root = sd_fixture_root(options).map_err(std::io::Error::other)?;
                     let loader_report: Value = serde_json::from_slice(&fs::read(
@@ -3771,25 +3803,49 @@ impl State {
                         let patch_report: Value = serde_json::from_slice(&fs::read(
                             root.join("sd-patches-build/patch.json"),
                         )?)?;
-                        let pass_through = patch_report["patches"][0]["pass_through_entry_offset"]
-                            .as_u64()
-                            .ok_or("dynamic patch report has no pass-through hook entry")?
-                            as u32;
                         let first = chain_links.first().ok_or("empty expected hook chain")?;
                         let second = chain_links.get(1).ok_or("short expected hook chain")?;
-                        if first.0 != ((first.3 + pass_through) | 1)
-                            || second.0 != ((second.3 + hook.entry_offset) | 1)
-                            || first.2 >= second.2
-                        {
+                        let modules = patch_report["patches"]
+                            .as_array()
+                            .ok_or("missing module report")?;
+                        for (link, module_report) in chain_links.iter().zip(modules) {
+                            let record = module_report["hooks"]
+                                .as_array()
+                                .and_then(|hooks| {
+                                    hooks.iter().find(|record| {
+                                        record["address"].as_str().and_then(|value| {
+                                            u32::from_str_radix(value.trim_start_matches("0x"), 16)
+                                                .ok()
+                                        }) == Some(hook.address)
+                                    })
+                                })
+                                .ok_or("shared hook is missing from a module report")?;
+                            let entry_offset = record["entry_offset"]
+                                .as_u64()
+                                .ok_or("missing hook entry offset")?
+                                as u32;
+                            let next_offset = record["next_slot_offset"]
+                                .as_u64()
+                                .ok_or("missing hook continuation offset")?
+                                as u32;
+                            if link.0 != ((link.3 + entry_offset) | 1)
+                                || link.1 != link.3 + next_offset
+                            {
+                                return Err(
+                                    "shared hook link does not match its module metadata".into()
+                                );
+                            }
+                        }
+                        if first.2 >= second.2 {
                             return Err(
-                                "numeric filename priority was not used to order hooks".into()
+                                "filename priority was not used to order shared hooks".into()
                             );
                         }
                     }
                     for (index, (entry, next_slot, _order, module)) in
                         chain_links.iter().enumerate()
                     {
-                        if *next_slot != *module + hook.next_slot_offset {
+                        if chain_count != Some(2) && *next_slot != *module + hook.next_slot_offset {
                             return Err(format!(
                                 "hook {index} continuation slot {next_slot:#010x} is outside its module"
                             )
@@ -3812,24 +3868,26 @@ impl State {
                             )
                             .into());
                         }
-                        let mut expected = payload.clone();
-                        patch_loader_core::bundle::relocate(
-                            &mut expected,
-                            relocations.clone().into_iter(),
-                            link_base,
-                            *module,
-                        )
-                        .map_err(|error| format!("invalid fixture relocations: {error:?}"))?;
-                        let slot_offset = hook.next_slot_offset as usize;
-                        expected[slot_offset..slot_offset + 4]
-                            .copy_from_slice(&expected_next.to_le_bytes());
-                        for (chunk_index, chunk) in expected.chunks(4096).enumerate() {
-                            let address = *module + (chunk_index * 4096) as u32;
-                            if qmp.read_memory(0, address, chunk.len())? != chunk {
-                                return Err(format!(
-                                    "allocated SD module {index} does not match its relocated bundle"
-                                )
-                                .into());
+                        if chain_count != Some(2) {
+                            let mut expected = payload.clone();
+                            patch_loader_core::bundle::relocate(
+                                &mut expected,
+                                relocations.clone().into_iter(),
+                                link_base,
+                                *module,
+                            )
+                            .map_err(|error| format!("invalid fixture relocations: {error:?}"))?;
+                            let slot_offset = hook.next_slot_offset as usize;
+                            expected[slot_offset..slot_offset + 4]
+                                .copy_from_slice(&expected_next.to_le_bytes());
+                            for (chunk_index, chunk) in expected.chunks(4096).enumerate() {
+                                let address = *module + (chunk_index * 4096) as u32;
+                                if qmp.read_memory(0, address, chunk.len())? != chunk {
+                                    return Err(format!(
+                                        "allocated SD module {index} does not match its relocated bundle"
+                                    )
+                                    .into());
+                                }
                             }
                         }
                         if (*entry & !1) < *module {
@@ -4925,92 +4983,134 @@ fn sd_fixture_edits(options: &Options, main: &[u8], model: l6fw::Model) -> Resul
     let patch_report: Value =
         serde_json::from_slice(&fs::read(&patch_report_path).map_err(|e| e.to_string())?)
             .map_err(|e| e.to_string())?;
-    let filename = patch_report["patches"][0]["file"]
-        .as_str()
-        .and_then(|file| std::path::Path::new(file).file_name())
-        .ok_or("dynamic patch report has no module filename")?;
-    let path = patch_output.join("PATCHES").join(filename);
-    let bytes = fs::read(path).map_err(|e| e.to_string())?;
-    if bytes.len() < patch_loader_core::dynamic::HEADER_LEN
-        || &bytes[..4] != b"L6SB"
-        || u16::from_le_bytes(bytes[4..6].try_into().unwrap())
-            != patch_loader_core::dynamic::FORMAT_VERSION
-        || u16::from_le_bytes(bytes[6..8].try_into().unwrap())
-            != patch_loader_core::dynamic::LOADER_ABI
-        || patch_loader_core::dynamic::checksum(&bytes)
-            != Some(u32::from_le_bytes(bytes[20..24].try_into().unwrap()))
-    {
-        return Err("invalid v8 SD patch file or CRC".into());
-    }
-    let code_len = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
-    let hook_count = u16::from_le_bytes(bytes[12..14].try_into().unwrap()) as usize;
-    let relocation_count = u16::from_le_bytes(bytes[14..16].try_into().unwrap()) as usize;
-    let expected_len = 24usize
-        .checked_add(code_len)
-        .and_then(|n| {
-            n.checked_add(hook_count.checked_mul(patch_loader_core::dynamic::HOOK_RECORD_LEN)?)
-        })
-        .and_then(|n| n.checked_add(relocation_count.checked_mul(12)?))
-        .ok_or("SD patch size overflow")?;
-    if expected_len != bytes.len() || code_len > 0x8000 || hook_count > 32 || relocation_count > 256
-    {
-        return Err("invalid v8 SD patch lengths or counts".into());
-    }
-    struct Reader<'a>(&'a [u8]);
-    impl patch_loader_core::bundle::Reader for Reader<'_> {
-        type Error = ();
-        fn read(&mut self, out: &mut [u8]) -> Result<usize, Self::Error> {
-            let count = out.len().min(self.0.len());
-            out[..count].copy_from_slice(&self.0[..count]);
-            self.0 = &self.0[count..];
-            Ok(count)
+    fn parse_module(
+        bytes: &[u8],
+        stock: &[u8],
+        image_base: u32,
+    ) -> Result<
+        (
+            Vec<(u32, Vec<u8>, u32)>,
+            Vec<u8>,
+            Option<u32>,
+            Vec<patch_loader_core::bundle::Relocation>,
+            Vec<patch_loader_core::dynamic::Hook>,
+        ),
+        String,
+    > {
+        if bytes.len() < patch_loader_core::dynamic::HEADER_LEN
+            || &bytes[..4] != b"L6SB"
+            || u16::from_le_bytes(bytes[4..6].try_into().unwrap())
+                != patch_loader_core::dynamic::FORMAT_VERSION
+            || u16::from_le_bytes(bytes[6..8].try_into().unwrap())
+                != patch_loader_core::dynamic::LOADER_ABI
+            || patch_loader_core::dynamic::checksum(bytes)
+                != Some(u32::from_le_bytes(bytes[20..24].try_into().unwrap()))
+        {
+            return Err("invalid v8 SD patch file or CRC".into());
         }
-    }
-    let mut reader = Reader(&bytes);
-    let pending = patch_loader_core::dynamic::read_header(&mut reader, 0x8000, 1, 256)
+        let code_len = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
+        let hook_count = u16::from_le_bytes(bytes[12..14].try_into().unwrap()) as usize;
+        let relocation_count = u16::from_le_bytes(bytes[14..16].try_into().unwrap()) as usize;
+        let expected_len = 24usize
+            .checked_add(code_len)
+            .and_then(|n| {
+                n.checked_add(hook_count.checked_mul(patch_loader_core::dynamic::HOOK_RECORD_LEN)?)
+            })
+            .and_then(|n| n.checked_add(relocation_count.checked_mul(12)?))
+            .ok_or("SD patch size overflow")?;
+        if expected_len != bytes.len()
+            || code_len > 0x8000
+            || hook_count > patch_loader_core::dynamic::MAX_HOOKS_PER_MODULE
+            || relocation_count > 256
+        {
+            return Err("invalid v8 SD patch lengths or counts".into());
+        }
+        struct Reader<'a>(&'a [u8]);
+        impl patch_loader_core::bundle::Reader for Reader<'_> {
+            type Error = ();
+            fn read(&mut self, out: &mut [u8]) -> Result<usize, Self::Error> {
+                let count = out.len().min(self.0.len());
+                out[..count].copy_from_slice(&self.0[..count]);
+                self.0 = &self.0[count..];
+                Ok(count)
+            }
+        }
+        let mut reader = Reader(bytes);
+        let pending = patch_loader_core::dynamic::read_header(
+            &mut reader,
+            0x8000,
+            patch_loader_core::dynamic::MAX_HOOKS_PER_MODULE,
+            256,
+        )
         .map_err(|e| format!("invalid v8 SD patch header: {e:?}"))?;
-    let mut payload = vec![0; code_len];
-    let mut hooks = vec![patch_loader_core::dynamic::Hook::default(); hook_count];
-    let header =
-        patch_loader_core::dynamic::read_body(&mut reader, pending, &mut payload, &mut hooks, 0, 0)
-            .map_err(|e| format!("invalid v8 SD patch body: {e:?}"))?;
-    let module_hooks = hooks.clone();
-    let mut edits = Vec::with_capacity(hook_count);
-    for hook in hooks {
-        let offset = hook
-            .address
-            .checked_sub(image_base)
-            .ok_or("hook precedes firmware image")? as usize;
-        let end = offset.checked_add(4).ok_or("hook range overflow")?;
-        let original = stock
-            .get(offset..end)
-            .ok_or("hook exceeds firmware image")?
-            .to_vec();
-        edits.push((hook.address, original, hook.entry_offset));
+        let mut payload = vec![0; code_len];
+        let mut hooks = vec![patch_loader_core::dynamic::Hook::default(); hook_count];
+        let header = patch_loader_core::dynamic::read_body(
+            &mut reader,
+            pending,
+            &mut payload,
+            &mut hooks,
+            0,
+            0,
+        )
+        .map_err(|e| format!("invalid v8 SD patch body: {e:?}"))?;
+        let module_hooks = hooks.clone();
+        let mut edits = Vec::with_capacity(hook_count);
+        for hook in hooks {
+            let offset = hook
+                .address
+                .checked_sub(image_base)
+                .ok_or("hook precedes firmware image")? as usize;
+            let end = offset.checked_add(4).ok_or("hook range overflow")?;
+            let original = stock
+                .get(offset..end)
+                .ok_or("hook exceeds firmware image")?
+                .to_vec();
+            edits.push((hook.address, original, hook.entry_offset));
+        }
+        let mut relocations = Vec::with_capacity(relocation_count);
+        let reloc_start = 24 + code_len + hook_count * patch_loader_core::dynamic::HOOK_RECORD_LEN;
+        for bytes in bytes[reloc_start..].chunks_exact(12) {
+            let kind = u32::from_le_bytes(bytes[..4].try_into().unwrap());
+            let first = u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as usize;
+            let second = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
+            relocations.push(match kind {
+                1 => patch_loader_core::bundle::Relocation::Abs32 { offset: first },
+                2 => patch_loader_core::bundle::Relocation::ThumbMov32 {
+                    low_offset: first,
+                    high_offset: second,
+                },
+                _ => return Err("invalid relocation kind".into()),
+            });
+        }
+        Ok((
+            edits,
+            payload,
+            (header.init_offset != 0).then_some(header.init_offset),
+            relocations,
+            module_hooks,
+        ))
     }
-    let mut relocations = Vec::with_capacity(relocation_count);
-    let reloc_start = 24 + code_len + hook_count * patch_loader_core::dynamic::HOOK_RECORD_LEN;
-    for bytes in bytes[reloc_start..].chunks_exact(12) {
-        let kind = u32::from_le_bytes(bytes[..4].try_into().unwrap());
-        let first = u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as usize;
-        let second = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
-        relocations.push(match kind {
-            1 => patch_loader_core::bundle::Relocation::Abs32 { offset: first },
-            2 => patch_loader_core::bundle::Relocation::ThumbMov32 {
-                low_offset: first,
-                high_offset: second,
-            },
-            _ => return Err("invalid relocation kind".into()),
-        });
+    let mut all_edits = Vec::new();
+    let mut all_hooks = Vec::new();
+    let mut last = None;
+    for patch in patch_report["patches"]
+        .as_array()
+        .ok_or("dynamic report has no patch list")?
+    {
+        let filename = patch["file"]
+            .as_str()
+            .and_then(|file| std::path::Path::new(file).file_name())
+            .ok_or("dynamic patch report has no module filename")?;
+        let bytes =
+            fs::read(patch_output.join("PATCHES").join(filename)).map_err(|e| e.to_string())?;
+        let (edits, payload, init, relocations, hooks) = parse_module(&bytes, &stock, image_base)?;
+        all_edits.extend(edits);
+        all_hooks.extend(hooks);
+        last = Some((payload, init, relocations));
     }
-    Ok((
-        edits,
-        0,
-        payload,
-        (header.init_offset != 0).then_some(header.init_offset),
-        relocations,
-        module_hooks,
-    ))
+    let (payload, init, relocations) = last.ok_or("dynamic report contains no modules")?;
+    Ok((all_edits, 0, payload, init, relocations, all_hooks))
 }
 
 fn sd_dynamic_handler_slot(
