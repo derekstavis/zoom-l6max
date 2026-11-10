@@ -40,6 +40,9 @@ struct Fixture {
     firmware_package: Option<PathBuf>,
     patches: Vec<String>,
     installed_patches: Vec<String>,
+    sd_patches: Option<Vec<String>>,
+    sd_bundle_mode: Option<String>,
+    sd_bundle: Option<PathBuf>,
     update_package: Option<PathBuf>,
     state_spec: Option<PathBuf>,
     card_spec: Option<PathBuf>,
@@ -200,6 +203,33 @@ fn hash(path: &Path) -> Result<String, String> {
     }
     Ok(format!("{:x}", sha.finalize()))
 }
+fn hash_patch_directory(path: &Path) -> Result<String, String> {
+    let mut entries = fs::read_dir(path)
+        .map_err(|e| format!("{}: {e}", path.display()))?
+        .map(|entry| entry.map_err(|e| e.to_string()))
+        .collect::<Result<Vec<_>, _>>()?;
+    entries.sort_by_key(|entry| entry.file_name());
+    let mut sha = Sha256::new();
+    for entry in entries {
+        if !entry.file_type().map_err(|e| e.to_string())?.is_file() {
+            continue;
+        }
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        sha.update((name.len() as u32).to_le_bytes());
+        sha.update(name.as_bytes());
+        let mut file = fs::File::open(entry.path()).map_err(|e| e.to_string())?;
+        let mut buffer = [0; 65536];
+        loop {
+            let count = file.read(&mut buffer).map_err(|e| e.to_string())?;
+            if count == 0 {
+                break;
+            }
+            sha.update(&buffer[..count]);
+        }
+    }
+    Ok(format!("{:x}", sha.finalize()))
+}
 /// Hash a sparse card image by its allocated extents and total length, so a
 /// large image costs only what it stores. Compare only hashes from this function.
 fn hash_sparse(path: &Path) -> Result<String, String> {
@@ -327,6 +357,9 @@ fn case_fixture(
         firmware_package: Some(firmware.clone()),
         patches: scenario.map_or_else(Vec::new, |s| s.patches.clone()),
         installed_patches: scenario.map_or_else(Vec::new, |s| s.installed_patches.clone()),
+        sd_patches: scenario.and_then(|s| s.sd_patches.clone()),
+        sd_bundle_mode: scenario.and_then(|s| s.sd_bundle_mode.clone()),
+        sd_bundle: None,
         update_package: None,
         state_spec: state.map(|name| spec("states", name)),
         card_spec: card.map(|name| spec("cards", name)),
@@ -408,6 +441,68 @@ fn load_config(
         app: app.map(resolve_app).transpose()?,
     })
 }
+
+/// Construct the experimental loader and card bundle from the configured
+/// stock package. Both outputs are per-case and recorded with the fixture.
+fn prepare_sd_patch(root: &Path, fixture: &mut Fixture, dir: &Path) -> Result<(), String> {
+    let Some(patches) = fixture.sd_patches.clone() else {
+        return Ok(());
+    };
+    if !fixture.installed_patches.is_empty() {
+        return Err("SD patch fixtures cannot combine installed_patches".into());
+    }
+    if !patches.is_empty() && fixture.card_spec.is_none() {
+        return Err("SD patches need a card spec".into());
+    }
+    let package = fixture
+        .firmware_package
+        .as_ref()
+        .ok_or("SD patches need firmware")?;
+    fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let source = dir.join("sd-stock-firmware");
+    l6fw::unpack(package, &source)?;
+    let build = |output: &Path, option: &str, selected: &[String]| -> Result<(), String> {
+        let mut cmd = Command::new(env::var_os("CARGO").unwrap_or_else(|| "cargo".into()));
+        cmd.current_dir(root)
+            .args(["run", "--offline", "--locked", "-p", "l6patch", "--"])
+            .arg(&source)
+            .arg(output)
+            .arg(option);
+        for patch in selected {
+            cmd.arg("--patch").arg(patch);
+        }
+        let result = cmd
+            .output()
+            .map_err(|e| format!("could not start l6patch: {e}"))?;
+        let mut log = result.stdout;
+        log.extend_from_slice(&result.stderr);
+        let name = if option == "--experimental-patch-loader" {
+            "patch-loader-build.log"
+        } else {
+            "sd-patches-build.log"
+        };
+        fs::write(dir.join(name), &log).map_err(|e| e.to_string())?;
+        if !result.status.success() {
+            return Err(format!("l6patch failed: {}", String::from_utf8_lossy(&log)));
+        }
+        Ok(())
+    };
+    let loader = dir.join("patch-loader-firmware");
+    build(&loader, "--experimental-patch-loader", &fixture.patches)?;
+    fixture.firmware_package = Some(loader.join(if fixture.model == "l6" {
+        "L6.BIN"
+    } else {
+        "L6max.bin"
+    }));
+    fixture.patches.clear();
+    if !patches.is_empty() {
+        let bundle = dir.join("sd-patches-build");
+        build(&bundle, "--experimental-patch-bundle", &patches)?;
+        fixture.sd_bundle = Some(bundle.join("PATCHES"));
+    }
+    Ok(())
+}
+
 fn fixture_options(
     config: &Config,
     fixture: &Fixture,
@@ -489,12 +584,100 @@ fn fixture_options(
     }
     let sd_hash = if let Some(spec) = &fixture.card_spec {
         let target = dir.join("card.img");
-        sd_image::spec::CardSpec::load(spec)?
-            .build(&target, spec.parent().unwrap_or(Path::new(".")))
+        let mut card = sd_image::spec::CardSpec::load(spec)?;
+        if let Some(bundle_dir) = &fixture.sd_bundle
+            && fixture.sd_bundle_mode.as_deref() != Some("absent")
+        {
+            let mut files = fs::read_dir(bundle_dir)
+                .map_err(|e| format!("could not enumerate patch output directory: {e}"))?
+                .map(|entry| entry.map_err(|e| e.to_string()))
+                .collect::<Result<Vec<_>, _>>()?;
+            files.sort_by_key(|entry| entry.file_name());
+            if fixture.sd_bundle_mode.as_deref() == Some("ordered-chain") {
+                let report: serde_json::Value = serde_json::from_slice(
+                    &fs::read(bundle_dir.parent().unwrap().join("patch.json"))
+                        .map_err(|e| e.to_string())?,
+                )
+                .map_err(|e| e.to_string())?;
+                let filename = report["patches"][0]["file"]
+                    .as_str()
+                    .and_then(|path| Path::new(path).file_name())
+                    .ok_or("dynamic module report has no output filename")?;
+                let original = fs::read(bundle_dir.join(filename)).map_err(|e| e.to_string())?;
+                let pass_through = report["patches"][0]["pass_through_entry_offset"]
+                    .as_u64()
+                    .or_else(|| report["patches"][0]["pass_through_entry_offsets"][0].as_u64())
+                    .ok_or("dynamic module report has no pass-through entry")?
+                    as u32;
+                let code_len = u32::from_le_bytes(original[8..12].try_into().unwrap()) as usize;
+                let version = u16::from_le_bytes(original[4..6].try_into().unwrap());
+                let header_len = patch_loader_core::dynamic::HEADER_LEN_V1;
+                let hook_count = u16::from_le_bytes(original[16..18].try_into().unwrap()) as usize;
+                if hook_count != 1 || version != patch_loader_core::dynamic::FORMAT_VERSION {
+                    return Err("ordered-chain fixture expects one dynamic hook".into());
+                }
+                let mut pass_through_module = original.clone();
+                let entry_offset = header_len + code_len + 4;
+                pass_through_module[entry_offset..entry_offset + 4]
+                    .copy_from_slice(&pass_through.to_le_bytes());
+                let checksum = patch_loader_core::dynamic::checksum(&pass_through_module)
+                    .ok_or("invalid dynamic fixture checksum")?;
+                pass_through_module[24..28].copy_from_slice(&checksum.to_le_bytes());
+                let first_path = dir.join("sd-chain-first.BIN");
+                let second_path = dir.join("sd-chain-second.BIN");
+                fs::write(&first_path, pass_through_module).map_err(|e| e.to_string())?;
+                fs::write(&second_path, original).map_err(|e| e.to_string())?;
+                // Insert in reverse order so the firmware must sort by numeric prefix.
+                card.file.push(sd_image::spec::File {
+                    path: "PATCHES/10-SECOND.BIN".into(),
+                    content: sd_image::spec::Content::Copy(second_path),
+                });
+                card.file.push(sd_image::spec::File {
+                    path: "PATCHES/2-FIRST.BIN".into(),
+                    content: sd_image::spec::Content::Copy(first_path),
+                });
+            } else if fixture.sd_bundle_mode.as_deref() == Some("corrupt-first") {
+                let first = files.first().ok_or("empty SD patch directory")?;
+                let mut bytes = fs::read(first.path()).map_err(|e| e.to_string())?;
+                *bytes.last_mut().ok_or("empty SD patch")? ^= 1;
+                let corrupt = dir.join("sd-corrupt-first.BIN");
+                fs::write(&corrupt, bytes).map_err(|e| e.to_string())?;
+                card.file.push(sd_image::spec::File {
+                    path: "PATCHES/AAA.BIN".into(),
+                    content: sd_image::spec::Content::Copy(corrupt),
+                });
+            }
+            for entry in files {
+                if !entry.file_type().map_err(|e| e.to_string())?.is_file() {
+                    continue;
+                }
+                if fixture.sd_bundle_mode.as_deref() == Some("ordered-chain") {
+                    continue;
+                }
+                let filename = entry.file_name().to_string_lossy().into_owned();
+                let source = if fixture.sd_bundle_mode.as_deref() == Some("corrupt") {
+                    let mut bytes = fs::read(entry.path()).map_err(|e| e.to_string())?;
+                    *bytes.last_mut().ok_or("empty SD patch")? ^= 1;
+                    let corrupt = dir.join(format!("sd-corrupt-{filename}"));
+                    fs::write(&corrupt, bytes).map_err(|e| e.to_string())?;
+                    corrupt
+                } else {
+                    entry.path()
+                };
+                card.file.push(sd_image::spec::File {
+                    path: format!("PATCHES/{filename}"),
+                    content: sd_image::spec::Content::Copy(source),
+                });
+            }
+        }
+        card.build(&target, spec.parent().unwrap_or(Path::new(".")))
             .map_err(|e| e.to_string())?;
         args.extend(["--sd-image".into(), target.clone().into_os_string()]);
         Some(hash_sparse(&target)?)
     } else {
+        if fixture.sd_bundle.is_some() {
+            return Err("SD patch bundle requires a card spec".into());
+        }
         args.push("--no-sd".into());
         None
     };
@@ -511,7 +694,7 @@ fn fixture_options(
         args.extend(["--patch".into(), patch.into()]);
     }
     let options = Options::parse_args(args)?;
-    let manifest = json!({"fixture":fixture.name,"model":fixture.model,"firmware":files(&firmware)?,"package_sha256":selected_package.as_ref().map(|p|hash(p)).transpose()?,"patches":fixture.patches,"update_package_sha256":fixture.update_package.as_ref().map(|p|hash(p)).transpose()? ,"state_spec":state_spec,"sd_sha256":sd_hash,"audio_device":audio_device,"qemu_sha256":config.qemu_sha256});
+    let manifest = json!({"fixture":fixture.name,"model":fixture.model,"firmware":files(&firmware)?,"package_sha256":selected_package.as_ref().map(|p|hash(p)).transpose()?,"patches":fixture.patches,"sd_patches":fixture.sd_patches,"sd_bundle_mode":fixture.sd_bundle_mode,"sd_patch_set_sha256":fixture.sd_bundle.as_ref().map(|p|hash_patch_directory(p)).transpose()?,"update_package_sha256":fixture.update_package.as_ref().map(|p|hash(p)).transpose()? ,"state_spec":state_spec,"sd_sha256":sd_hash,"audio_device":audio_device,"qemu_sha256":config.qemu_sha256});
     Ok((options, manifest))
 }
 fn engine_args(options: &Options) -> Vec<String> {
@@ -676,6 +859,7 @@ fn run_case(
             return Err("QEMU changed since preflight".into());
         }
         let mut selected_fixture = fixture.clone();
+        prepare_sd_patch(root, &mut selected_fixture, dir)?;
         if let Some(path) = &case.scenario {
             let patches = Scenario::load(&catalog_dir.join(path))?
                 .update_patches
@@ -1388,6 +1572,82 @@ mod tests {
         path
     }
     #[test]
+    #[ignore = "requires L6_SD_TEST_PACKAGE and L6_SD_TEST_MODEL"]
+    fn builds_sd_fixture_from_local_firmware() {
+        let model = env::var("L6_SD_TEST_MODEL").expect("set L6_SD_TEST_MODEL");
+        let package =
+            PathBuf::from(env::var_os("L6_SD_TEST_PACKAGE").expect("set L6_SD_TEST_PACKAGE"));
+        let selected = env::var("L6_SD_TEST_PATCHES")
+            .unwrap_or_else(|_| "midi-sync".into())
+            .split(',')
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        let static_patches = env::var("L6_SD_TEST_STATIC")
+            .ok()
+            .map(|s| s.split(',').map(str::to_owned).collect())
+            .unwrap_or_default();
+        let root = l6max_host::paths::repository_root();
+        let dir = temp();
+        let mut fixture = Fixture {
+            name: "sd-fixture".into(),
+            model: model.clone(),
+            firmware_package: Some(package),
+            patches: static_patches,
+            installed_patches: vec![],
+            sd_patches: Some(selected.clone()),
+            sd_bundle_mode: None,
+            sd_bundle: None,
+            update_package: None,
+            state_spec: None,
+            card_spec: Some(root.join(format!("tests/smoke/cards/{model}-empty.toml"))),
+            audio_device: None,
+            audio_input: vec![],
+            gdb: false,
+        };
+        prepare_sd_patch(&root, &mut fixture, &dir).unwrap();
+        let patch_dir = fixture.sd_bundle.as_ref().unwrap();
+        let report: serde_json::Value = serde_json::from_slice(
+            &fs::read(patch_dir.parent().unwrap().join("patch.json")).unwrap(),
+        )
+        .unwrap();
+        let filename = report["patches"][0]["file"]
+            .as_str()
+            .and_then(|path| Path::new(path).file_name())
+            .unwrap();
+        let patch_file = patch_dir.join(filename);
+        let bytes = fs::read(&patch_file).unwrap();
+        assert_eq!(&bytes[..4], b"L6SB");
+        assert_eq!(
+            u16::from_le_bytes(bytes[4..6].try_into().unwrap()),
+            patch_loader_core::dynamic::FORMAT_VERSION
+        );
+        let checksum_offset = if bytes[4..6] == 9u16.to_le_bytes() {
+            24..28
+        } else {
+            20..24
+        };
+        assert_eq!(
+            patch_loader_core::dynamic::checksum(&bytes),
+            Some(u32::from_le_bytes(
+                bytes[checksum_offset].try_into().unwrap()
+            ))
+        );
+        let package = fixture.firmware_package.as_ref().unwrap();
+        let unpacked = dir.join("verify-loader");
+        l6fw::unpack(package, &unpacked).unwrap();
+        let spec = fixture.card_spec.as_ref().unwrap();
+        let mut card = sd_image::spec::CardSpec::load(spec).unwrap();
+        let patch_path = format!("PATCHES/{}", filename.to_string_lossy());
+        card.file.push(sd_image::spec::File {
+            path: patch_path.clone(),
+            content: sd_image::spec::Content::Copy(patch_file),
+        });
+        let image = dir.join("card.img");
+        card.build(&image, spec.parent().unwrap()).unwrap();
+        assert!(sd_image::entry_exists(&image, &patch_path).unwrap());
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
     fn fixture_audio_backend_resolves_the_case_artifact_directory() {
         let fixture = Fixture {
             name: "l6-recorder-playback".into(),
@@ -1395,6 +1655,9 @@ mod tests {
             firmware_package: None,
             patches: vec![],
             installed_patches: vec![],
+            sd_patches: None,
+            sd_bundle_mode: None,
+            sd_bundle: None,
             update_package: None,
             state_spec: None,
             card_spec: None,

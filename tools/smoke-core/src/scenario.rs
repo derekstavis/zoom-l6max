@@ -30,6 +30,11 @@ pub struct Scenario {
     /// Patches the engine installs on a device already running the stock firmware.
     #[serde(default)]
     pub installed_patches: Vec<String>,
+    /// Build the experimental persistent Patch loader and the selected SD bundle.
+    /// An empty list installs only the loader for a no-module baseline.
+    pub sd_patches: Option<Vec<String>>,
+    /// SD bundle content: valid (default), absent, or deliberately corrupted.
+    pub sd_bundle_mode: Option<String>,
     /// Patches for the update package, per model, applied to the configured package.
     #[serde(default)]
     pub update_patches: std::collections::BTreeMap<String, Vec<String>>,
@@ -222,6 +227,11 @@ pub enum Action {
         address: u32,
         bytes: Vec<u8>,
     },
+    ExpectSdPatch {
+        loaded: bool,
+        #[serde(default)]
+        chain_count: Option<u8>,
+    },
     ExpectHeap {
         minimum_free: u32,
     },
@@ -234,6 +244,7 @@ pub enum Action {
     PopupConcurrency,
     FirmwareUpdate,
     WasmPatch,
+    WarmReset,
     Restart,
     ExpectRecorder,
     PowerPress {
@@ -417,6 +428,46 @@ impl Scenario {
             );
         }
         validate_models(&value.models)?;
+        if let Some(mode) = &value.sd_bundle_mode {
+            if ![
+                "valid",
+                "absent",
+                "corrupt",
+                "corrupt-first",
+                "ordered-chain",
+            ]
+            .contains(&mode.as_str())
+                || value.sd_patches.is_none()
+            {
+                return Err(
+                    "sd_bundle_mode requires sd_patches and a supported bundle fixture mode".into(),
+                );
+            }
+        }
+        if let Some(patches) = &value.sd_patches {
+            if !patches.is_empty() && value.card.is_none() {
+                return Err("sd_patches require a card spec".into());
+            }
+            if !value.installed_patches.is_empty() || !value.update_patches.is_empty() {
+                return Err("sd_patches cannot combine installed_patches or update_patches".into());
+            }
+            if patches.iter().any(|name| {
+                ![
+                    "midi-control",
+                    "midi-sync",
+                    "knob-dialog",
+                    "din-mixer-control",
+                ]
+                .contains(&name.as_str())
+            }) {
+                return Err("unknown SD patch name".into());
+            }
+            if value.models.iter().any(|model| model == "l6")
+                && patches.iter().any(|name| name != "midi-sync")
+            {
+                return Err("only midi-sync supports L6".into());
+            }
+        }
         if value.backends.is_empty() || value.backends.iter().any(|b| b != "headless" && b != "gui")
         {
             return Err("backends must contain headless and/or gui".into());
@@ -463,8 +514,9 @@ impl Scenario {
                     if *pad > 3 {
                         return Err("editor-pad-playback pad must be 0..3".into());
                     }
-                    if value.models.as_slice() != ["l6"]
-                        || step.models.iter().any(|model| model != "l6")
+                    if step.models.iter().any(|model| model != "l6")
+                        || (step.models.is_empty()
+                            && value.models.iter().any(|model| model != "l6"))
                     {
                         return Err("editor-pad-playback scenarios must be scoped to L6".into());
                     }
@@ -497,8 +549,9 @@ impl Scenario {
                     if *target != 4 {
                         return Err("l6-recorder-playback requires MAIN target 4".into());
                     }
-                    if value.models.as_slice() != ["l6"]
-                        || step.models.iter().any(|model| model != "l6")
+                    if step.models.iter().any(|model| model != "l6")
+                        || (step.models.is_empty()
+                            && value.models.iter().any(|model| model != "l6"))
                     {
                         return Err("l6-recorder-playback scenarios must be scoped to L6".into());
                     }
@@ -610,11 +663,15 @@ impl Scenario {
                 );
             }
             if let Action::L6maxRecorderPlayback { target } = step.action {
-                if value.models.iter().any(|model| model != "l6max")
-                    || step.models.iter().any(|model| model != "l6max")
+                if step.models.iter().any(|model| model != "l6max")
+                    || (step.models.is_empty() && value.models.iter().any(|model| model != "l6max"))
                     || target != 4
-                    || value.main_sha256.as_deref()
+                    || (value.main_sha256.as_deref()
                         != Some("980d92272c1f84bed200b4d2f83575202f6a00082c928d99b9e8b53af8d44461")
+                        && !value
+                            .sd_patches
+                            .as_ref()
+                            .is_some_and(|patches| !patches.is_empty()))
                 {
                     return Err(
                         "l6max-recorder-playback requires L6max MAIN 1.10, MAIN target 4, and its exact firmware hash".into(),
@@ -766,6 +823,16 @@ impl Scenario {
                     );
                 }
             }
+            if let Action::ExpectSdPatch {
+                loaded,
+                chain_count,
+            } = &step.action
+                && (value.sd_patches.is_none()
+                    || *loaded && value.sd_patches.as_ref().is_some_and(Vec::is_empty)
+                    || chain_count.is_some_and(|count| count == 0 || count > 8))
+            {
+                return Err("expect-patch-loader requires an Patch loader fixture (and a selected patch when loaded=true)".into());
+            }
             if let Action::HoldChord {
                 controls,
                 duration_ms,
@@ -850,12 +917,14 @@ impl Scenario {
                 | Action::L6maxUiPadAssignment { .. }
                 | Action::SoundPadPlayback { .. }
                 | Action::ExpectMemory { .. }
+                | Action::ExpectSdPatch { .. }
                 | Action::ExpectHeap { .. }
                 | Action::HoldChord { .. }
                 | Action::AudioCallbacks
                 | Action::KnobDialog
                 | Action::PopupConcurrency
                 | Action::FirmwareUpdate
+                | Action::WarmReset
                 | Action::Restart
                 | Action::ExpectRecorder
                 | Action::PowerPress { .. }

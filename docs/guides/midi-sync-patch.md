@@ -58,7 +58,7 @@ cargo run -p l6patch -- unpacked firmware-midi-sync-v113 --patch midi-sync
 cargo run -p l6patch -- unpacked firmware-knob-midi-v113 --patch knob-dialog --patch midi-sync
 cargo run -p l6fw -- unpack /path/to/L6.BIN unpacked-l6
 cargo run -p l6patch -- unpacked-l6 firmware-midi-sync-l6-v113 --patch midi-sync
-python3 patches/midi-sync/tests/cpu_sim_l6.py firmware-midi-sync-l6-v113/main_firmware.bin
+python3 patches/midi-sync/l6/tests/cpu_sim.py firmware-midi-sync-l6-v113/main_firmware.bin
 cargo run --offline --locked -p l6test -- run --config config.toml \
   --case l6-midi-sync --model l6
 ```
@@ -77,8 +77,8 @@ beyond `rustup` installing the pinned toolchain. `L6_LD_LLD`, `L6_LLVM_NM` and
 ```sh
 cargo test -p l6patch
 python3 -m pip install unicorn
-python3 patches/midi-sync/tests/cpu_sim.py firmware-midi-sync-v113/main_firmware.bin
-python3 patches/midi-sync/tests/cpu_sim_l6.py firmware-midi-sync-l6-v113/main_firmware.bin
+python3 patches/midi-sync/l6max/tests/cpu_sim.py firmware-midi-sync-v113/main_firmware.bin
+python3 patches/midi-sync/l6/tests/cpu_sim.py firmware-midi-sync-l6-v113/main_firmware.bin
 cargo run --offline --locked -p l6test -- run --config config.toml \
   --case l6-midi-sync --model l6
 cargo run --offline --locked -p l6test -- run --config config.toml \

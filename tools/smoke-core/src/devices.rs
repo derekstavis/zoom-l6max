@@ -65,6 +65,10 @@ pub enum Operation {
         address: u32,
         bytes: Vec<u8>,
     },
+    ExpectSdPatch {
+        loaded: bool,
+        chain_count: Option<u8>,
+    },
     ExpectHeap {
         minimum_free: u32,
     },
@@ -77,6 +81,7 @@ pub enum Operation {
     PopupConcurrency,
     FirmwareUpdate,
     WasmPatch,
+    WarmReset,
     Restart,
     ExpectRecorder,
     PowerPress {
@@ -149,7 +154,9 @@ pub fn prepare(scenario: &Scenario, options: &mut Options) -> Result<(), String>
     if scenario.name == "factory-protocol" {
         prepare_factory_fixture(options)?;
     }
-    if scenario.main_sha256.is_some() || !scenario.main_sha256_any.is_empty() {
+    if (scenario.main_sha256.is_some() || !scenario.main_sha256_any.is_empty())
+        && scenario.sd_patches.as_ref().is_none_or(Vec::is_empty)
+    {
         use sha2::{Digest, Sha256};
         let main = selected_main_image(options)?;
         let actual = format!("{:x}", Sha256::digest(main));
@@ -486,12 +493,12 @@ pub fn run_wasm_patch(options: &Options) -> Result<(), String> {
     let manifest = workspace.join("tools/l6patch/Cargo.toml");
     let mut results = Vec::new();
     let profiles: Vec<Vec<&str>> = match model {
-        l6fw::Model::L6max => (1u8..8)
+        l6fw::Model::L6max => (1u16..(1u16 << firmware_patch_core::PATCHES.len()))
             .map(|mask| {
                 firmware_patch_core::PATCHES
                     .iter()
                     .enumerate()
-                    .filter(|(index, _)| mask & (1 << index) != 0)
+                    .filter(|(index, _)| mask & (1u16 << index) != 0)
                     .map(|(_, patch)| *patch)
                     .collect()
             })
@@ -544,6 +551,73 @@ pub fn run_wasm_patch(options: &Options) -> Result<(), String> {
         }));
     }
 
+    // The persistent loader can coexist with any static L6max patch subset.
+    // Include the loader-only profile: users may install the loader first and
+    // add SD patches later without rebuilding the firmware update.
+    let mut loader_results = Vec::new();
+    if model == l6fw::Model::L6max {
+        for mask in 0u16..(1u16 << firmware_patch_core::PATCHES.len()) {
+            let selected: Vec<&str> = firmware_patch_core::PATCHES
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| mask & (1u16 << index) != 0)
+                .map(|(_, patch)| *patch)
+                .collect();
+            let native_out = root.join(format!("native-loader-{mask:03}"));
+            let mut command = Command::new("cargo");
+            command
+                .current_dir(&workspace)
+                .args(["run", "--offline", "--locked", "--quiet", "--manifest-path"])
+                .arg(&manifest)
+                .arg("--")
+                .arg(&options.firmware_dir)
+                .arg(&native_out)
+                .arg("--experimental-patch-loader");
+            for patch in &selected {
+                command.args(["--patch", patch]);
+            }
+            let output = command.output().map_err(|error| error.to_string())?;
+            if !output.status.success() {
+                return Err(format!(
+                    "native patch-loader build failed for {selected:?}: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                ));
+            }
+            let native =
+                fs::read(native_out.join("L6max.bin")).map_err(|error| error.to_string())?;
+            let (wasm, report) =
+                firmware_patch_wasm::apply_patches_with_loader(&stock, &selected, true).map_err(
+                    |message| format!("WASM patch-loader build failed for {selected:?}: {message}"),
+                )?;
+            if wasm != native {
+                fs::write(root.join(format!("wasm-loader-{mask:03}.bin")), &wasm)
+                    .map_err(|error| error.to_string())?;
+                let differences = wasm
+                    .iter()
+                    .zip(&native)
+                    .enumerate()
+                    .filter_map(|(offset, (left, right))| {
+                        (left != right).then_some((offset, *left, *right))
+                    })
+                    .take(16)
+                    .collect::<Vec<_>>();
+                return Err(format!(
+                    "L6max loader {selected:?} mismatch at {differences:?}: WASM {} bytes SHA-256 {:x}, native {} bytes SHA-256 {:x}",
+                    wasm.len(),
+                    Sha256::digest(&wasm),
+                    native.len(),
+                    Sha256::digest(&native)
+                ));
+            }
+            loader_results.push(json!({
+                "patches": selected,
+                "bytes": wasm.len(),
+                "sha256": format!("{:x}", Sha256::digest(&wasm)),
+                "usage": report["usage"].as_str().unwrap_or("")
+            }));
+        }
+    }
+
     if model == l6fw::Model::L6 {
         for unsupported in ["knob-dialog", "din-mixer-control"] {
             match firmware_patch_wasm::apply_patches(&stock, &[unsupported]) {
@@ -575,7 +649,7 @@ pub fn run_wasm_patch(options: &Options) -> Result<(), String> {
 
     fs::write(
         options.logs.join("wasm-patch.json"),
-        serde_json::to_vec_pretty(&json!({"model":label,"stock_sha256":format!("{:x}", Sha256::digest(&stock)),"profiles":results}))
+        serde_json::to_vec_pretty(&json!({"model":label,"stock_sha256":format!("{:x}", Sha256::digest(&stock)),"profiles":results,"patch_loader_profiles":loader_results}))
             .map_err(|error| error.to_string())?,
     )
     .map_err(|error| error.to_string())?;
@@ -1011,6 +1085,26 @@ fn run_l6max_update(options: &Options, main: &[u8]) -> Result<(), String> {
     )
     .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+fn thumb_bl_target(address: u32, instruction: [u8; 4]) -> Option<u32> {
+    let first = u16::from_le_bytes([instruction[0], instruction[1]]);
+    let second = u16::from_le_bytes([instruction[2], instruction[3]]);
+    if first & 0xf800 != 0xf000 || second & 0xd000 != 0xd000 {
+        return None;
+    }
+    let sign = ((first >> 10) & 1) as u32;
+    let j1 = ((second >> 13) & 1) as u32;
+    let j2 = ((second >> 11) & 1) as u32;
+    let i1 = (!(j1 ^ sign)) & 1;
+    let i2 = (!(j2 ^ sign)) & 1;
+    let immediate = (sign << 24)
+        | (i1 << 23)
+        | (i2 << 22)
+        | (((first & 0x03ff) as u32) << 12)
+        | (((second & 0x07ff) as u32) << 1);
+    let displacement = ((immediate as i32) << 7) >> 7;
+    Some(address.wrapping_add(4).wrapping_add(displacement as u32))
 }
 
 fn create_factory_card(card: &std::path::Path) -> Result<(), String> {
@@ -3116,6 +3210,11 @@ impl State {
                         replies.push(message);
                     }
                 } else {
+                    // MIDI Control adds recorder state as CC 115 to the
+                    // existing 94-parameter sync response.
+                    if message[1] == 115 {
+                        continue;
+                    }
                     replies.push(message);
                 }
                 if replies.len() == expected_count {
@@ -3152,7 +3251,6 @@ impl State {
     ) -> Result<Value, Box<dyn std::error::Error>> {
         const IDLE: u32 = 0x80046d50;
         const HOOK: u32 = 0x8002f490;
-        const PAYLOAD: u32 = 0x800b6af0;
         const SENDER: u32 = 0x80031648;
         const EVENT: u32 = 0x841ff000;
         const MIDI_CHANNEL: u32 = 0x804410f0;
@@ -3169,6 +3267,41 @@ impl State {
         }
         let gdb = self.gdb.as_mut().unwrap();
         let qmp = &session.engine.management[0];
+        let payload = if options.sd_image.is_some() {
+            let main = selected_main_image(options).map_err(std::io::Error::other)?;
+            let (edits, _, _, _, _, _, _) =
+                sd_fixture_edits(options, &main, session.engine.model())
+                    .map_err(std::io::Error::other)?;
+            let entry_offset = edits
+                .iter()
+                .find(|(address, _, _)| *address == HOOK)
+                .map(|(_, _, offset)| *offset)
+                .ok_or("dynamic SD bundle has no L6 midi-sync entry")?;
+            let registry = 0x801f_8000;
+            let loaded_base =
+                u32::from_le_bytes(qmp.read_memory(0, registry + 160, 4)?.try_into().unwrap());
+            let slot = sd_dynamic_handler_slot(options, session.engine.model(), registry, HOOK)
+                .map_err(std::io::Error::other)?;
+            let entry = u32::from_le_bytes(qmp.read_memory(0, slot, 4)?.try_into().unwrap());
+            if loaded_base == 0 || entry != (loaded_base + entry_offset | 1) {
+                return Err(
+                    "allocated L6 midi-sync handler does not match the bundle offset".into(),
+                );
+            }
+            entry & !1
+        } else {
+            let patch: Value =
+                serde_json::from_slice(&fs::read(options.firmware_dir.join("patch.json"))?)?;
+            patch["hooks"]
+                .as_array()
+                .ok_or("patch.json has no hooks")?
+                .iter()
+                .find(|hook| hook["symbol"] == "midi_in_hook")
+                .ok_or("patch.json has no L6 MIDI entry hook")?["target"]
+                .as_u64()
+                .ok_or("L6 MIDI entry hook target is not numeric")? as u32
+                & !1
+        };
         gdb.breakpoint(IDLE, true)?;
         gdb.continue_until_stop(Duration::from_secs(60))?;
         let pc = gdb.read_register(15)? & !1;
@@ -3201,16 +3334,16 @@ impl State {
         let mut event = [0u8; 8];
         event[4..7].copy_from_slice(&[0xb0 | channel, 127, 127]);
         gdb.write(EVENT, &event)?;
-        gdb.breakpoint(PAYLOAD, true)?;
+        gdb.breakpoint(payload, true)?;
         gdb.breakpoint(SENDER, true)?;
         gdb.register(0, EVENT)?;
         gdb.register(14, IDLE | 1)?;
         gdb.register(15, HOOK)?;
         gdb.continue_until_stop(Duration::from_secs(10))?;
         let entry_pc = gdb.read_register(15)? & !1;
-        if entry_pc != PAYLOAD {
+        if entry_pc != payload {
             return Err(std::io::Error::other(format!(
-                "L6 hook branched to {entry_pc:#x}, expected {PAYLOAD:#x}"
+                "L6 hook branched to {entry_pc:#x}, expected {payload:#x}"
             ))
             .into());
         }
@@ -3221,7 +3354,7 @@ impl State {
             ))
             .into());
         }
-        gdb.breakpoint(PAYLOAD, false)?;
+        gdb.breakpoint(payload, false)?;
         gdb.continue_until_stop(Duration::from_secs(10))?;
 
         let mut replies = Vec::new();
@@ -3466,6 +3599,451 @@ impl State {
                     .into());
                 }
                 Ok(json!({"address":format!("{address:#010x}"),"bytes":actual}))
+            }
+            Operation::ExpectSdPatch {
+                loaded,
+                chain_count,
+            } => {
+                let main = selected_main_image(options).map_err(std::io::Error::other)?;
+                let (edits, link_base, payload, _, _relocations, module_hooks, module_images) =
+                    sd_fixture_edits(options, &main, session.engine.model())
+                        .map_err(std::io::Error::other)?;
+                let qmp = &session.engine.management[0];
+                let (image_base, loader_calls): (u32, &[u32]) = match session.engine.model() {
+                    l6fw::Model::L6 => (0x8000_1000, &[0x8000_9a60, 0x8000_9aa0]),
+                    l6fw::Model::L6max => (
+                        0x8000_0000,
+                        &[
+                            0x8000_fe08,
+                            0x8000_e9fa,
+                            0x8000_ea24,
+                            0x8001_0118,
+                            0x8002_bc7e,
+                            0x8000_ebac,
+                        ],
+                    ),
+                };
+                for &address in loader_calls {
+                    let offset = (address - image_base) as usize;
+                    let expected = main
+                        .get(offset..offset + 4)
+                        .ok_or("Patch loader image too short")?;
+                    if qmp.read_memory(0, address, 4)? != expected {
+                        return Err(
+                            format!("persistent loader hook missing at {address:#010x}").into()
+                        );
+                    }
+                }
+                for (address, original, _entry_offset) in &edits {
+                    let offset = (*address - image_base) as usize;
+                    let expected = &main[offset..offset + original.len()];
+                    let actual = qmp.read_memory(0, *address, expected.len())?;
+                    if actual != expected {
+                        return Err(format!(
+                            "persistent SD dispatch stub missing at {address:#010x}"
+                        )
+                        .into());
+                    }
+                }
+                let module_base = match session.engine.model() {
+                    l6fw::Model::L6 => 0x801f_0000,
+                    l6fw::Model::L6max => 0x8021_0000,
+                };
+                let registry = module_base + 0x8000;
+                let loaded_base =
+                    u32::from_le_bytes(qmp.read_memory(0, registry + 160, 4)?.try_into().unwrap());
+                let loaded_len =
+                    u32::from_le_bytes(qmp.read_memory(0, registry + 164, 4)?.try_into().unwrap());
+                if loaded != (loaded_base != 0) || (loaded && loaded_len as usize != payload.len())
+                {
+                    let stage = u32::from_le_bytes(
+                        qmp.read_memory(0, registry + 4, 4)?.try_into().unwrap(),
+                    );
+                    return Err(format!(
+                        "SD allocation state loaded={loaded}, base={loaded_base:#010x}, len={loaded_len}, loader stage={stage:#x}"
+                    )
+                    .into());
+                }
+                let claim =
+                    u32::from_le_bytes(qmp.read_memory(0, registry + 8, 4)?.try_into().unwrap());
+                if (claim == 1) != loaded {
+                    let stage = u32::from_le_bytes(
+                        qmp.read_memory(0, registry + 4, 4)?.try_into().unwrap(),
+                    );
+                    return Err(format!(
+                        "SD module loaded={loaded}, claim={claim:#x}, loader stage={stage:#x}"
+                    )
+                    .into());
+                }
+                let expected_function = if chain_count.is_some() {
+                    module_hooks
+                        .iter()
+                        .find(|hook| {
+                            module_hooks
+                                .iter()
+                                .filter(|other| other.address == hook.address)
+                                .count()
+                                >= chain_count.unwrap_or(1) as usize
+                        })
+                        .or_else(|| module_hooks.first())
+                        .map(|hook| hook.address)
+                } else {
+                    module_hooks.first().map(|hook| hook.address)
+                };
+                let chain_row_size =
+                    core::mem::size_of::<patch_loader_core::dynamic::FunctionHookChain>() as u32;
+                let mut expected_chains = std::collections::BTreeMap::<u32, u32>::new();
+                for module_hook in &module_hooks {
+                    *expected_chains.entry(module_hook.address).or_default() += 1;
+                }
+                for (address, module_count) in expected_chains {
+                    let row = (0..patch_loader_core::dynamic::MAX_FUNCTION_CHAINS)
+                        .map(|index| registry + 0x100 + index as u32 * chain_row_size)
+                        .find(|row| {
+                            qmp.read_memory(0, *row, 4).ok().is_some_and(|bytes| {
+                                u32::from_le_bytes(bytes.try_into().unwrap()) == address
+                            })
+                        });
+                    let actual_count = row
+                        .map(|row| {
+                            qmp.read_memory(0, row + 4, 4)
+                                .map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()))
+                        })
+                        .transpose()?
+                        .unwrap_or(0);
+                    let expected_count = if !loaded {
+                        0
+                    } else if Some(address) == expected_function {
+                        chain_count.map_or(module_count, u32::from)
+                    } else {
+                        module_count
+                    };
+                    if actual_count != expected_count {
+                        return Err(format!(
+                            "SD hook site {address:#010x} has {actual_count} registered modules, expected {expected_count}"
+                        )
+                        .into());
+                    }
+                    if loaded {
+                        let row = row.ok_or("registered hook site has no chain row")?;
+                        let chain_head =
+                            u32::from_le_bytes(qmp.read_memory(0, row + 8, 4)?.try_into().unwrap());
+                        let slot = sd_dynamic_handler_slot(
+                            options,
+                            session.engine.model(),
+                            registry,
+                            address,
+                        )
+                        .map_err(std::io::Error::other)?;
+                        let published_head =
+                            u32::from_le_bytes(qmp.read_memory(0, slot, 4)?.try_into().unwrap());
+                        if published_head != chain_head {
+                            return Err(format!(
+                                "dispatch slot for {address:#010x} points to {published_head:#010x}, chain head is {chain_head:#010x}"
+                            )
+                            .into());
+                        }
+                    }
+                }
+                let chain_address = if let Some(address) = expected_function {
+                    (0..patch_loader_core::dynamic::MAX_FUNCTION_CHAINS)
+                        .map(|index| registry + 0x100 + index as u32 * chain_row_size)
+                        .find(|row| {
+                            qmp.read_memory(0, *row, 4).ok().is_some_and(|bytes| {
+                                u32::from_le_bytes(bytes.try_into().unwrap()) == address
+                            })
+                        })
+                        .unwrap_or(registry + 0x100)
+                } else {
+                    registry + 0x100
+                };
+                let registered_function =
+                    u32::from_le_bytes(qmp.read_memory(0, chain_address, 4)?.try_into().unwrap());
+                let registered_count = u32::from_le_bytes(
+                    qmp.read_memory(0, chain_address + 4, 4)?
+                        .try_into()
+                        .unwrap(),
+                );
+                if registered_count > patch_loader_core::dynamic::MAX_HOOKS_PER_FUNCTION as u32
+                    || loaded != (registered_count != 0)
+                    || (registered_count != 0 && Some(registered_function) != expected_function)
+                    || chain_count.is_some_and(|expected| registered_count != u32::from(expected))
+                {
+                    return Err(format!(
+                        "SD hook chain state loaded={loaded}, function={registered_function:#010x}, count={registered_count}, expected function={expected_function:?}, expected count={chain_count:?}"
+                    )
+                    .into());
+                }
+                let chain_head = if registered_count == 0 {
+                    0
+                } else {
+                    u32::from_le_bytes(
+                        qmp.read_memory(0, chain_address + 8, 4)?
+                            .try_into()
+                            .unwrap(),
+                    )
+                };
+                let published_head = if let Some(address) = expected_function {
+                    let slot =
+                        sd_dynamic_handler_slot(options, session.engine.model(), registry, address)
+                            .map_err(std::io::Error::other)?;
+                    u32::from_le_bytes(qmp.read_memory(0, slot, 4)?.try_into().unwrap())
+                } else {
+                    0
+                };
+                if published_head != chain_head {
+                    return Err(format!(
+                        "dynamic dispatch head {published_head:#010x} differs from hook-array head {chain_head:#010x}"
+                    )
+                    .into());
+                }
+                let mut chain_links = Vec::with_capacity(registered_count as usize);
+                let mut prior_order = None;
+                for index in 0..registered_count as usize {
+                    let link = chain_address + 8 + index as u32 * 16;
+                    let mut bytes = [0; 16];
+                    bytes.copy_from_slice(&qmp.read_memory(0, link, 16)?);
+                    let entry = u32::from_le_bytes(bytes[0..4].try_into().unwrap());
+                    let next_slot = u32::from_le_bytes(bytes[4..8].try_into().unwrap());
+                    let order = u32::from_le_bytes(bytes[8..12].try_into().unwrap());
+                    let module = u32::from_le_bytes(bytes[12..16].try_into().unwrap());
+                    if entry & 1 == 0
+                        || module == 0
+                        || prior_order.is_some_and(|prior| order <= prior)
+                    {
+                        return Err(format!(
+                            "invalid SD hook link {index}: entry={entry:#010x}, module={module:#010x}, order={order}"
+                        )
+                        .into());
+                    }
+                    prior_order = Some(order);
+                    chain_links.push((entry, next_slot, order, module));
+                }
+                for (address, _, _entry_offset) in &edits {
+                    let slot = if module_hooks.iter().any(|hook| hook.address == *address) {
+                        sd_dynamic_handler_slot(options, session.engine.model(), registry, *address)
+                            .map_err(std::io::Error::other)?
+                    } else if *address == 0x8003_e8ee {
+                        registry + 16
+                    } else {
+                        let index = match *address {
+                            0x8000_6110 => 0,
+                            0x8000_64c0 => 1,
+                            0x8000_6660 => 2,
+                            0x8000_63b8 => 3,
+                            0x8000_6370 => 4,
+                            0x8000_68a0 => 5,
+                            0x8000_62d0 => 6,
+                            0x8000_6070 => 7,
+                            0x8000_6348 => 8,
+                            0x8000_65f8 => 9,
+                            0x8000_6560 => 10,
+                            0x8000_68f8 => 11,
+                            0x8000_69b0 => 12,
+                            0x8000_6bd0 => 13,
+                            0x8000_7080 => 14,
+                            0x8000_70b0 => 15,
+                            0x8000_7090 => 16,
+                            0x8000_6fa8 => 17,
+                            0x8006_1ab0 => 18,
+                            0x8000_6d50 => 19,
+                            0x8000_6d00 => 20,
+                            0x8006_1738 => 21,
+                            0x8000_5ee0 => 22,
+                            0x8002_4eb8 => 23,
+                            0x8008_bd40 => 24,
+                            0x8000_6060 => 25,
+                            0x8000_5e70 => 26,
+                            0x8003_6c74 => 27,
+                            0x8000_648e => 28,
+                            0x8000_6126 => 29,
+                            0x8000_62c0 => 30,
+                            _ => {
+                                return Err(
+                                    format!("no SD dispatch slot for {address:#010x}").into()
+                                );
+                            }
+                        };
+                        registry + 32 + index * 4
+                    };
+                    let handler =
+                        u32::from_le_bytes(qmp.read_memory(0, slot, 4)?.try_into().unwrap());
+                    let valid = if !loaded {
+                        handler == 0
+                    } else if Some(*address) == expected_function {
+                        handler == chain_head
+                    } else {
+                        handler != 0 && handler & 1 != 0
+                    };
+                    if !valid {
+                        return Err(format!(
+                            "SD handler at {slot:#010x} is invalid: {handler:#010x}"
+                        )
+                        .into());
+                    }
+                }
+                if loaded {
+                    let hook = module_hooks
+                        .iter()
+                        .find(|hook| Some(hook.address) == expected_function)
+                        .ok_or("dynamic patch bundle has no hook record")?;
+                    let root = sd_fixture_root(options).map_err(std::io::Error::other)?;
+                    let ordered_chain = root.join("sd-chain-first.BIN").is_file();
+                    let patch_report: Value = serde_json::from_slice(&fs::read(
+                        root.join("sd-patches-build/patch.json"),
+                    )?)?;
+                    let pass_through_entry_offset = if ordered_chain {
+                        Some(
+                            patch_report["patches"][0]["pass_through_entry_offsets"][0]
+                                .as_u64()
+                                .ok_or("ordered-chain module has no pass-through entry")?
+                                as u32,
+                        )
+                    } else {
+                        None
+                    };
+                    let loader_report: Value = serde_json::from_slice(&fs::read(
+                        root.join("patch-loader-firmware/patch.json"),
+                    )?)?;
+                    let _loader_patch = loader_report["patches"]
+                        .as_array()
+                        .and_then(|patches| {
+                            patches.iter().find(|patch| patch["name"] == "patch-loader")
+                        })
+                        .ok_or("loader report has no patch-loader record")?;
+                    let dispatch_site = loader_report["patches"]
+                        .as_array()
+                        .and_then(|patches| {
+                            patches
+                                .iter()
+                                .find(|patch| patch["name"] == "dynamic-dispatch")
+                        })
+                        .and_then(|patch| patch["sites"].as_array())
+                        .and_then(|sites| {
+                            sites.iter().find(|site| {
+                                site["address"].as_u64() == Some(u64::from(hook.address))
+                            })
+                        })
+                        .ok_or("loader report has no dispatcher for the registered function")?;
+                    let fallback = u32::try_from(
+                        dispatch_site["fallback"]
+                            .as_u64()
+                            .ok_or("loader report has no function continuation")?,
+                    )? | 1;
+                    if chain_count == Some(2) {
+                        let first = chain_links.first().ok_or("empty expected hook chain")?;
+                        let second = chain_links.get(1).ok_or("short expected hook chain")?;
+                        if first.2 >= second.2 {
+                            return Err(
+                                "filename priority was not used to order shared hooks".into()
+                            );
+                        }
+                    }
+                    for (index, (entry, next_slot, _order, module)) in
+                        chain_links.iter().enumerate()
+                    {
+                        let (module_payload, module_relocations, module_payload_hooks) =
+                            module_images
+                                .iter()
+                                .find_map(|(payload, relocations, hooks)| {
+                                    hooks
+                                        .iter()
+                                        .find(|candidate| {
+                                            candidate.address == hook.address
+                                                && (*entry
+                                                    == ((*module + candidate.entry_offset) | 1)
+                                                    || ordered_chain
+                                                        && index == 0
+                                                        && *entry
+                                                            == ((*module
+                                                                + pass_through_entry_offset
+                                                                    .unwrap_or(u32::MAX))
+                                                                | 1))
+                                                && *next_slot
+                                                    == *module + candidate.next_slot_offset
+                                        })
+                                        .map(|_| (payload, relocations, hooks))
+                                })
+                                .ok_or_else(|| {
+                                    format!(
+                                        "hook {index} does not match any module's hook metadata"
+                                    )
+                                })?;
+                        let expected_next =
+                            chain_links.get(index + 1).map_or(fallback, |next| next.0);
+                        let actual_next = u32::from_le_bytes(
+                            qmp.read_memory(0, *next_slot, 4)?.try_into().unwrap(),
+                        );
+                        if actual_next != expected_next {
+                            return Err(format!(
+                                "hook {index} continues to {actual_next:#010x}, expected {expected_next:#010x}"
+                            )
+                            .into());
+                        }
+                        let mut expected = module_payload.clone();
+                        patch_loader_core::bundle::relocate(
+                            &mut expected,
+                            module_relocations.clone().into_iter(),
+                            link_base,
+                            *module,
+                        )
+                        .map_err(|error| format!("invalid fixture relocations: {error:?}"))?;
+                        for payload_hook in module_payload_hooks {
+                            if payload_hook.next_slot_offset == u32::MAX {
+                                continue;
+                            }
+                            let slot = *module + payload_hook.next_slot_offset;
+                            let target = qmp.read_memory(0, slot, 4)?;
+                            let slot_offset = payload_hook.next_slot_offset as usize;
+                            expected[slot_offset..slot_offset + 4].copy_from_slice(&target);
+                        }
+                        for (chunk_index, chunk) in expected.chunks(4096).enumerate() {
+                            let address = *module + (chunk_index * 4096) as u32;
+                            if qmp.read_memory(0, address, chunk.len())? != chunk {
+                                return Err(format!(
+                                    "allocated SD module {index} does not match its relocated bundle"
+                                )
+                                .into());
+                            }
+                        }
+                        if (*entry & !1) < *module {
+                            return Err(format!("hook {index} entry precedes its module").into());
+                        }
+                    }
+                    if let Some((latest_payload, latest_relocations, latest_hooks)) =
+                        module_images.last()
+                    {
+                        let mut expected = latest_payload.clone();
+                        patch_loader_core::bundle::relocate(
+                            &mut expected,
+                            latest_relocations.clone().into_iter(),
+                            link_base,
+                            loaded_base,
+                        )
+                        .map_err(|error| format!("invalid latest module relocations: {error:?}"))?;
+                        for latest_hook in latest_hooks {
+                            if latest_hook.next_slot_offset == u32::MAX {
+                                continue;
+                            }
+                            let slot = loaded_base + latest_hook.next_slot_offset;
+                            let target = qmp.read_memory(0, slot, 4)?;
+                            let offset = latest_hook.next_slot_offset as usize;
+                            expected[offset..offset + 4].copy_from_slice(&target);
+                        }
+                        for (chunk_index, chunk) in expected.chunks(4096).enumerate() {
+                            let address = loaded_base + (chunk_index * 4096) as u32;
+                            if qmp.read_memory(0, address, chunk.len())? != chunk {
+                                return Err(
+                                    "latest allocated SD module does not match its relocated bundle"
+                                        .into(),
+                                );
+                            }
+                        }
+                    }
+                }
+                Ok(
+                    json!({"loaded":loaded,"guarded_hooks":edits.len(),"module_bytes":if loaded { payload.len() } else { 0 },"hook_chain_count":registered_count,"hook_chain_orders":chain_links.iter().map(|link|link.2).collect::<Vec<_>>()}),
+                )
             }
             Operation::ExpectHeap { minimum_free } => {
                 let heap =
@@ -3912,6 +4490,10 @@ impl State {
                 )
             }
             Operation::Restart => Err("restart is supervised by the session runner".into()),
+            Operation::WarmReset => {
+                session.engine.management[0].system_reset()?;
+                Ok(json!({"reset":"qmp-system-reset"}))
+            }
             Operation::PowerPress { hold_ms, powered } => {
                 let inputs = session.engine.inputs.as_ref().unwrap();
                 let started = inputs.panel.snapshot().guest_ms;
@@ -4506,6 +5088,272 @@ impl State {
     }
 }
 
+/// Verify the generated per-patch module before inspecting its live registry.
+type SdEdits = (
+    Vec<(u32, Vec<u8>, u32)>,
+    u32,
+    Vec<u8>,
+    Option<u32>,
+    Vec<patch_loader_core::bundle::Relocation>,
+    Vec<patch_loader_core::dynamic::Hook>,
+    Vec<(
+        Vec<u8>,
+        Vec<patch_loader_core::bundle::Relocation>,
+        Vec<patch_loader_core::dynamic::Hook>,
+    )>,
+);
+fn sd_fixture_root(options: &Options) -> Result<&std::path::Path, String> {
+    options
+        .logs
+        .ancestors()
+        .find(|dir| dir.join("sd-stock-firmware/main_firmware.bin").is_file())
+        .ok_or_else(|| "missing generated SD fixture".into())
+}
+fn sd_fixture_edits(options: &Options, main: &[u8], model: l6fw::Model) -> Result<SdEdits, String> {
+    use sha2::{Digest, Sha256};
+    let root = sd_fixture_root(options)?;
+    let stock =
+        fs::read(root.join("sd-stock-firmware/main_firmware.bin")).map_err(|e| e.to_string())?;
+    let (patch_model, image_base) = match model {
+        l6fw::Model::L6 => (firmware_patch_core::FirmwareModel::L6, 0x8000_1000u32),
+        l6fw::Model::L6max => (firmware_patch_core::FirmwareModel::L6max, 0x8000_0000u32),
+    };
+    firmware_patch_core::verify_firmware_for(patch_model, &stock)?;
+    let loader: Value = serde_json::from_slice(
+        &fs::read(root.join("patch-loader-firmware/patch.json")).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+    if loader["patched_sha256"].as_str() != Some(format!("{:x}", Sha256::digest(main)).as_str()) {
+        return Err("Patch loader image does not match its generated report".into());
+    }
+    let patch_output = root.join("sd-patches-build");
+    let patch_report_path = patch_output.join("patch.json");
+    if !patch_report_path.exists() {
+        return Ok((
+            Vec::new(),
+            0,
+            Vec::new(),
+            None,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        ));
+    }
+    let patch_report: Value =
+        serde_json::from_slice(&fs::read(&patch_report_path).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
+    fn parse_module(
+        bytes: &[u8],
+        stock: &[u8],
+        image_base: u32,
+    ) -> Result<
+        (
+            Vec<(u32, Vec<u8>, u32)>,
+            Vec<u8>,
+            Option<u32>,
+            Vec<patch_loader_core::bundle::Relocation>,
+            Vec<patch_loader_core::dynamic::Hook>,
+        ),
+        String,
+    > {
+        if bytes.len() < patch_loader_core::dynamic::HEADER_LEN_V1 || &bytes[..4] != b"L6SB" {
+            return Err("invalid SD patch file or CRC".into());
+        }
+        let version = u16::from_le_bytes(bytes[4..6].try_into().unwrap());
+        let header_len = patch_loader_core::dynamic::HEADER_LEN_V1;
+        if version != patch_loader_core::dynamic::FORMAT_VERSION
+            || bytes.len() < header_len
+            || u16::from_le_bytes(bytes[6..8].try_into().unwrap())
+                != patch_loader_core::dynamic::LOADER_ABI
+            || patch_loader_core::dynamic::checksum(bytes)
+                != Some(u32::from_le_bytes(bytes[24..28].try_into().unwrap()))
+        {
+            return Err("invalid SD patch file or CRC".into());
+        }
+        let code_len = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
+        let memory_len = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
+        let hook_count = u16::from_le_bytes(bytes[16..18].try_into().unwrap()) as usize;
+        let relocation_count = u16::from_le_bytes(bytes[18..20].try_into().unwrap()) as usize;
+        let expected_len = header_len
+            .checked_add(code_len)
+            .and_then(|n| {
+                n.checked_add(hook_count.checked_mul(patch_loader_core::dynamic::HOOK_RECORD_LEN)?)
+            })
+            .and_then(|n| n.checked_add(relocation_count.checked_mul(12)?))
+            .ok_or("SD patch size overflow")?;
+        if expected_len != bytes.len()
+            || code_len > memory_len
+            || memory_len > 0x60000
+            || hook_count > patch_loader_core::dynamic::MAX_HOOKS_PER_MODULE
+            || relocation_count > 256
+        {
+            return Err("invalid SD patch lengths or counts".into());
+        }
+        struct Reader<'a>(&'a [u8]);
+        impl patch_loader_core::bundle::Reader for Reader<'_> {
+            type Error = ();
+            fn read(&mut self, out: &mut [u8]) -> Result<usize, Self::Error> {
+                let count = out.len().min(self.0.len());
+                out[..count].copy_from_slice(&self.0[..count]);
+                self.0 = &self.0[count..];
+                Ok(count)
+            }
+        }
+        let mut reader = Reader(bytes);
+        let pending = patch_loader_core::dynamic::read_header(
+            &mut reader,
+            0x60000,
+            patch_loader_core::dynamic::MAX_HOOKS_PER_MODULE,
+            256,
+        )
+        .map_err(|e| format!("invalid SD patch header: {e:?}"))?;
+        let mut payload = vec![0; memory_len];
+        let mut hooks = vec![patch_loader_core::dynamic::Hook::default(); hook_count];
+        let header = patch_loader_core::dynamic::read_body(
+            &mut reader,
+            pending,
+            &mut payload,
+            &mut hooks,
+            0,
+            0,
+        )
+        .map_err(|e| format!("invalid SD patch body: {e:?}"))?;
+        let module_hooks = hooks.clone();
+        let mut edits = Vec::with_capacity(hook_count);
+        for hook in hooks {
+            let offset = hook
+                .address
+                .checked_sub(image_base)
+                .ok_or("hook precedes firmware image")? as usize;
+            let end = offset.checked_add(4).ok_or("hook range overflow")?;
+            let original = stock
+                .get(offset..end)
+                .ok_or("hook exceeds firmware image")?
+                .to_vec();
+            edits.push((hook.address, original, hook.entry_offset));
+        }
+        let mut relocations = Vec::with_capacity(relocation_count);
+        let reloc_start =
+            header_len + code_len + hook_count * patch_loader_core::dynamic::HOOK_RECORD_LEN;
+        for bytes in bytes[reloc_start..].chunks_exact(12) {
+            let kind = u32::from_le_bytes(bytes[..4].try_into().unwrap());
+            let first = u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as usize;
+            let second = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
+            relocations.push(match kind {
+                1 => patch_loader_core::bundle::Relocation::Abs32 { offset: first },
+                2 => patch_loader_core::bundle::Relocation::ThumbMov32 {
+                    low_offset: first,
+                    high_offset: second,
+                },
+                _ => return Err("invalid relocation kind".into()),
+            });
+        }
+        Ok((
+            edits,
+            payload,
+            (header.init_offset != 0).then_some(header.init_offset),
+            relocations,
+            module_hooks,
+        ))
+    }
+    let mut all_edits = Vec::new();
+    let mut all_hooks = Vec::new();
+    let mut module_images = Vec::new();
+    let mut last = None;
+    for patch in patch_report["patches"]
+        .as_array()
+        .ok_or("dynamic report has no patch list")?
+    {
+        let filename = patch["file"]
+            .as_str()
+            .and_then(|file| std::path::Path::new(file).file_name())
+            .ok_or("dynamic patch report has no module filename")?;
+        let bytes =
+            fs::read(patch_output.join("PATCHES").join(filename)).map_err(|e| e.to_string())?;
+        let (edits, payload, init, relocations, hooks) = parse_module(&bytes, &stock, image_base)?;
+        all_edits.extend(edits);
+        all_hooks.extend(hooks.iter().copied());
+        module_images.push((payload.clone(), relocations.clone(), hooks));
+        last = Some((payload, init, relocations));
+    }
+    let (payload, init, relocations) = last.ok_or("dynamic report contains no modules")?;
+    Ok((
+        all_edits,
+        0,
+        payload,
+        init,
+        relocations,
+        all_hooks,
+        module_images,
+    ))
+}
+
+fn sd_dynamic_handler_slot(
+    options: &Options,
+    _model: l6fw::Model,
+    registry: u32,
+    function_address: u32,
+) -> Result<u32, String> {
+    let root = sd_fixture_root(options)?;
+    let report: Value = serde_json::from_slice(
+        &fs::read(root.join("patch-loader-firmware/patch.json")).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+    let sites = report["patches"]
+        .as_array()
+        .and_then(|patches| {
+            patches
+                .iter()
+                .find(|patch| patch["name"] == "dynamic-dispatch")
+        })
+        .and_then(|patch| patch["sites"].as_array())
+        .ok_or("Patch loader report has no dynamic dispatch site table")?;
+    let index = sites
+        .iter()
+        .position(|site| site["address"].as_u64() == Some(u64::from(function_address)))
+        .ok_or_else(|| format!("function {function_address:#010x} has no SD dispatch slot"))?;
+    let table_offset = 0x100u32
+        .checked_add(
+            u32::try_from(core::mem::size_of::<
+                [patch_loader_core::dynamic::FunctionHookChain; 8],
+            >())
+            .map_err(|e| e.to_string())?,
+        )
+        .ok_or("dynamic handler table offset overflow")?;
+    registry
+        .checked_add(table_offset)
+        .and_then(|base| base.checked_add(u32::try_from(index).ok()?.checked_mul(4)?))
+        .ok_or_else(|| "dynamic handler slot address overflow".into())
+}
+
+fn sd_knob_edits(options: &Options, main: &[u8]) -> Result<Vec<(u32, Vec<u8>)>, String> {
+    let root = sd_fixture_root(options)?;
+    let report: Value = serde_json::from_slice(
+        &fs::read(root.join("sd-bundle-build/patch.json")).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+    if !report["patches"].as_array().is_some_and(|items| {
+        items
+            .iter()
+            .any(|patch| patch.as_str() == Some("knob-dialog") || patch["name"] == "knob-dialog")
+    }) {
+        return Err("SD fixture does not include knob-dialog".into());
+    }
+    let (records, _payload_base, _payload, init, _relocations, _module_hooks, _module_images) =
+        sd_fixture_edits(options, main, l6fw::Model::L6max)?;
+    if init.is_none() {
+        return Err("SD knob-dialog has no late initializer".into());
+    }
+    let edits = records
+        .into_iter()
+        .map(|(address, original, _entry_offset)| {
+            let offset = (address - 0x8000_0000) as usize;
+            (address, main[offset..offset + original.len()].to_vec())
+        })
+        .collect::<Vec<_>>();
+    Ok(edits)
+}
+
 fn run_knob_dialog(
     session: &Session,
     options: &Options,
@@ -4523,16 +5371,69 @@ fn run_knob_dialog(
     ];
     let main = selected_main_image(options).map_err(std::io::Error::other)?;
     use sha2::{Digest, Sha256};
-    if !MAIN_SHA256.contains(&format!("{:x}", Sha256::digest(&main)).as_str()) {
-        return Err("knob-dialog requires the hash-verified patched L6max MAIN image".into());
-    }
+    let dynamic_knob_dialog = if options.sd_image.is_some() {
+        sd_fixture_edits(options, &main, l6fw::Model::L6max)
+            .ok()
+            .is_some_and(|(_, _, _, _, _, _, module_images)| {
+                module_images.iter().any(|(payload, _, _)| {
+                    payload
+                        .windows(b"KNOB_WIN1".len())
+                        .any(|window| window == b"KNOB_WIN1")
+                })
+            })
+    } else {
+        false
+    };
+    let statically_patched = main.get(0x40c..0x410) == Some(&0x8007eea9u32.to_le_bytes());
+    let sd_edits = if statically_patched
+        || MAIN_SHA256.contains(&format!("{:x}", Sha256::digest(&main)).as_str())
+    {
+        None
+    } else {
+        Some(sd_knob_edits(options, &main).map_err(std::io::Error::other)?)
+    };
     if main.get(0x40c..0x410) != Some(&0x8007eea9u32.to_le_bytes()) {
         return Err("patched startup hook does not reserve popup RAM".into());
     }
     let inputs = session.engine.inputs.as_ref().unwrap();
     let qmp = &session.engine.management[0];
+    let encoder_report_baseline = fs::read_to_string(options.logs.join("engine.trace"))?
+        .matches("l6 panel USART1 TX a1\n")
+        .count() as u64;
     let start = inputs.panel.snapshot().guest_ms;
     wait_guest(session, start, 40_000, guest_timeout_ms, wall_timeout_s)?;
+    if let Some(edits) = &sd_edits {
+        for (address, expected) in edits {
+            if qmp.read_memory(0, *address, expected.len())? != *expected {
+                return Err(format!("SD patch not active at {address:#010x}").into());
+            }
+        }
+        let (_, link_base, mut expected, _, relocations, _, _) =
+            sd_fixture_edits(options, &main, l6fw::Model::L6max).map_err(std::io::Error::other)?;
+        let registry = link_base + 0x8000;
+        let loaded_base =
+            u32::from_le_bytes(qmp.read_memory(0, registry + 160, 4)?.try_into().unwrap());
+        if loaded_base == 0 {
+            return Err("SD knob-dialog module allocation is missing".into());
+        }
+        patch_loader_core::bundle::relocate(
+            &mut expected,
+            relocations.into_iter(),
+            link_base,
+            loaded_base,
+        )
+        .map_err(|error| format!("invalid knob-dialog relocations: {error:?}"))?;
+        for (index, chunk) in expected.chunks(4096).enumerate() {
+            let address = loaded_base + (index * 4096) as u32;
+            if qmp.read_memory(0, address, chunk.len())? != chunk {
+                return Err("SD knob-dialog bytes do not match the relocated bundle".into());
+            }
+        }
+        let slot = qmp.read_memory(0, 0x8020a2a0, 4)?;
+        if u32::from_le_bytes(slot.try_into().unwrap()) & 1 == 0 {
+            return Err("SD knob-dialog late initialization did not install its sidecar".into());
+        }
+    }
     inputs.tap(3, 50)?;
     let after = inputs.panel.snapshot().guest_ms;
     wait_guest(session, after, 1_950, guest_timeout_ms, wall_timeout_s)?;
@@ -4638,6 +5539,1179 @@ fn run_knob_dialog(
             _ => format!("{}%", (raw as u32 * 100 + 63) / 127),
         }
     };
+    if dynamic_knob_dialog
+        || main
+            .windows(b"KNOB_WIN1".len())
+            .any(|window| window == b"KNOB_WIN1")
+    {
+        let inputs = session.engine.inputs.as_ref().unwrap();
+        // Check the first-use guard on an actual non-recorder screen before
+        // the dialog has initialized state or claimed its display callback.
+        const RECORDER_HOME: u32 = 0x8020_0408;
+        if u32::from_le_bytes(qmp.read_memory(0, 0x8020_2610, 4)?.try_into().unwrap())
+            != RECORDER_HOME
+        {
+            return Err("knob-dialog test did not start from the recorder screen".into());
+        }
+        if qmp.read_memory(0, 0x8020_73c8, 4)? != 0u32.to_le_bytes()
+            || qmp.read_memory(0, 0x8020_a59c + 20, 4)? != 0u32.to_le_bytes()
+        {
+            return Err(
+                "knob-dialog state or callback was already active before the guard test".into(),
+            );
+        }
+        inputs.main.tap(0, 120)?;
+        let menu_start = inputs.panel.snapshot().guest_ms;
+        wait_guest(session, menu_start, 500, guest_timeout_ms, wall_timeout_s)?;
+        let non_recorder_window =
+            u32::from_le_bytes(qmp.read_memory(0, 0x8020_2610, 4)?.try_into().unwrap());
+        if non_recorder_window == RECORDER_HOME {
+            return Err("Menu button did not leave the recorder screen for the guard test".into());
+        }
+        capture(100, "knob-dialog-non-recorder-before")?;
+        inputs.knob(0, -1)?;
+        let non_recorder_knob = inputs.panel.snapshot().guest_ms;
+        wait_guest(
+            session,
+            non_recorder_knob,
+            500,
+            guest_timeout_ms,
+            wall_timeout_s,
+        )?;
+        qmp.stop()?;
+        let non_recorder_state = qmp.read_memory(0, 0x8020_73c8, 4)?;
+        let non_recorder_slot5 = qmp.read_memory(0, 0x8020_a59c + 20, 4)?;
+        let non_recorder_window_after =
+            u32::from_le_bytes(qmp.read_memory(0, 0x8020_2610, 4)?.try_into().unwrap());
+        let non_recorder_no_dialog = non_recorder_state == 0u32.to_le_bytes()
+            && non_recorder_slot5 == 0u32.to_le_bytes()
+            && non_recorder_window_after == non_recorder_window;
+        qmp.resume()?;
+        if !non_recorder_no_dialog {
+            return Err(format!(
+                "knob event opened or changed the dialog outside recorder: state={non_recorder_state:02x?}, slot5={non_recorder_slot5:02x?}, window={non_recorder_window_after:#010x}"
+            )
+            .into());
+        }
+        inputs.main.tap(0, 120)?;
+        let return_start = inputs.panel.snapshot().guest_ms;
+        wait_guest(session, return_start, 500, guest_timeout_ms, wall_timeout_s)?;
+        if u32::from_le_bytes(qmp.read_memory(0, 0x8020_2610, 4)?.try_into().unwrap())
+            != RECORDER_HOME
+        {
+            return Err("Menu button did not return to recorder before dialog checks".into());
+        }
+        let non_recorder_guard_passed = true;
+
+        let display_callbacks = qmp.read_memory(0, 0x8020_a59c, 24)?;
+        let display_callback_target =
+            u32::from_le_bytes(display_callbacks[20..24].try_into().unwrap());
+        let slot0 = u32::from_le_bytes(display_callbacks[0..4].try_into().unwrap());
+        let slot2 = u32::from_le_bytes(display_callbacks[8..12].try_into().unwrap());
+        if display_callback_target != 0 || slot0 != 0 || slot2 != 0 {
+            return Err(format!(
+                "expected an empty slot 5 before the first knob event; slot0={slot0:#010x}, slot2={slot2:#010x}, slot5={display_callback_target:#010x}"
+            )
+            .into());
+        }
+        inputs.tap(35, 50)?;
+        let pressed = inputs.panel.snapshot().guest_ms;
+        wait_guest(session, pressed, 500, guest_timeout_ms, wall_timeout_s)?;
+        let baseline = capture(100, "window-scene-before")?;
+        let original_window = qmp.read_memory(0, 0x80202610, 4)?;
+        let original_bitmap = qmp.read_memory(0, 0x80207458, 4)?;
+        let original_bitmap_descriptor = qmp.read_memory(0, 0x800c_b964, 8)?;
+        let original_state_handle = qmp.read_memory(0, 0x8020_73c8, 4)?;
+        if u32::from_le_bytes(original_bitmap.clone().try_into().unwrap()) != 0x800c_b964 {
+            return Err(
+                "stock bitmap-table entry 36 did not point at its guarded ROM descriptor".into(),
+            );
+        }
+        if original_state_handle != 0u32.to_le_bytes() {
+            return Err(format!(
+                "bitmap-table slot 0 is not the expected null sentinel: {original_state_handle:02x?}"
+            )
+            .into());
+        }
+        let original_notification_semaphore = qmp.read_memory(0, 0x8020a2a0, 4)?;
+        let notification_semaphore =
+            u32::from_le_bytes(original_notification_semaphore.clone().try_into().unwrap());
+        if notification_semaphore == 0 || notification_semaphore & 1 != 0 {
+            return Err(format!(
+                "expected the stock untagged notification semaphore, got {notification_semaphore:#010x}"
+            )
+            .into());
+        }
+        let text_table = u32::from_le_bytes(qmp.read_memory(0, 0x80205118, 4)?.try_into().unwrap());
+        let decode_text = |address: u32| -> Result<String, Box<dyn std::error::Error>> {
+            let pointer = u32::from_le_bytes(qmp.read_memory(0, address, 4)?.try_into().unwrap());
+            let bytes = qmp.read_memory(0, pointer, 48)?;
+            let units = bytes
+                .chunks_exact(2)
+                .map(|b| u16::from_le_bytes([b[0], b[1]]))
+                .take_while(|c| *c != 0)
+                .collect::<Vec<_>>();
+            Ok(String::from_utf16(&units)?)
+        };
+        let capture_demo = |name: &str| -> Result<[u8; 1024], Box<dyn std::error::Error>> {
+            let mut frame = capture(100, name)?;
+            for _ in 0..6 {
+                if frame.iter().map(|byte| byte.count_ones()).sum::<u32>() >= 100 {
+                    return Ok(frame);
+                }
+                frame = capture(100, name)?;
+            }
+            Err(format!("demo frame {name} stayed blank").into())
+        };
+        let original_resources = qmp.read_memory(0, text_table + 229 * 4, 8)?;
+        let shared_resource_pointer = u32::from_le_bytes(
+            qmp.read_memory(0, text_table + 179 * 4, 4)?
+                .try_into()
+                .unwrap(),
+        );
+        let original_shared_resource = qmp.read_memory(0, shared_resource_pointer, 512)?;
+        let original_lengths_table =
+            u32::from_le_bytes(qmp.read_memory(0, 0x802050fc, 4)?.try_into().unwrap());
+        let original_lengths = qmp.read_memory(0, original_lengths_table + 229 * 2, 4)?;
+        let widget_pointer = |index: u32| -> Result<u32, Box<dyn std::error::Error>> {
+            Ok(u32::from_le_bytes(
+                qmp.read_memory(0, 0x80200af4 + index * 4, 4)?
+                    .try_into()
+                    .unwrap(),
+            ))
+        };
+        let widget7 = widget_pointer(7)?;
+        let widget33 = widget_pointer(33)?;
+        let original_widget7 = qmp.read_memory(0, widget7, 16)?;
+        let original_widget33 = qmp.read_memory(0, widget33, 16)?;
+        if original_widget7.as_slice() != [1, 0, 0, 0, 10, 0, 1, 0, 1, 0, 126, 0, 1, 0, 1, 2]
+            || original_widget33.as_slice() != [1, 0, 1, 0, 40, 0, 30, 0, 33, 0, 67, 0, 1, 0, 1, 0]
+        {
+            return Err("recorder widgets do not match the guarded firmware defaults".into());
+        }
+        let original_shared_capacity = qmp.read_memory(0, original_lengths_table + 179 * 2, 2)?;
+        if u16::from_le_bytes(original_shared_capacity.try_into().unwrap()) != 255
+            || original_shared_resource
+                .chunks_exact(2)
+                .take(255)
+                .any(|unit| unit != b"*\0")
+            || original_shared_resource[510..512] != [0, 0]
+        {
+            return Err(
+                "shared GUI resource 179 is not the expected free 255-character buffer".into(),
+            );
+        }
+        let background_pointer = |index: u32| -> Result<u32, Box<dyn std::error::Error>> {
+            Ok(u32::from_le_bytes(
+                qmp.read_memory(0, 0x80200670 + index * 4, 4)?
+                    .try_into()
+                    .unwrap(),
+            ))
+        };
+        let background10 = background_pointer(10)?;
+        let background37 = background_pointer(37)?;
+        let background48 = background_pointer(48)?;
+        let original_background_layers = [
+            qmp.read_memory(0, background10, 1)?,
+            qmp.read_memory(0, background37, 1)?,
+            qmp.read_memory(0, background48, 1)?,
+        ];
+        let heap_before = heap()?;
+        let socket = options
+            .gdb_socket
+            .as_ref()
+            .ok_or("knob-dialog lock-contention check needs GDB")?;
+        let mut debugger = l6max_diagnostics::gdb::Gdb::connect(socket)?;
+
+        // A descriptor drift must make the patch decline first use without
+        // allocating state or claiming its callback slot.
+        qmp.stop()?;
+        debugger.write(widget7 + 6, &2u16.to_le_bytes())?;
+        qmp.resume()?;
+        inputs.knob(0, -1)?;
+        let mismatch_start = inputs.panel.snapshot().guest_ms;
+        wait_guest(
+            session,
+            mismatch_start,
+            500,
+            guest_timeout_ms,
+            wall_timeout_s,
+        )?;
+        qmp.stop()?;
+        let mismatch_state = qmp.read_memory(0, 0x8020_73c8, 4)?;
+        let mismatch_slot5 = qmp.read_memory(0, 0x8020_a59c + 20, 4)?;
+        let mismatch_heap = heap()?;
+        debugger.write(widget7 + 6, &1u16.to_le_bytes())?;
+        qmp.resume()?;
+        if mismatch_state != 0u32.to_le_bytes()
+            || mismatch_slot5 != 0u32.to_le_bytes()
+            || mismatch_heap != heap_before
+        {
+            return Err(format!(
+                "descriptor drift was not rejected cleanly: state={mismatch_state:02x?}, slot5={mismatch_slot5:02x?}, heap={mismatch_heap:?}"
+            )
+            .into());
+        }
+
+        // Resource 179 is borrowed by the dialog only if no other initialized
+        // widget points at it. Simulate another patch claiming that resource.
+        let alias_widget = widget_pointer(60)?;
+        let original_alias_resource = qmp.read_memory(0, alias_widget + 4, 2)?;
+        qmp.stop()?;
+        debugger.write(alias_widget + 4, &179u16.to_le_bytes())?;
+        qmp.resume()?;
+        inputs.knob(0, -1)?;
+        let alias_start = inputs.panel.snapshot().guest_ms;
+        wait_guest(session, alias_start, 500, guest_timeout_ms, wall_timeout_s)?;
+        qmp.stop()?;
+        let alias_state = qmp.read_memory(0, 0x8020_73c8, 4)?;
+        let alias_slot5 = qmp.read_memory(0, 0x8020_a59c + 20, 4)?;
+        let alias_heap = heap()?;
+        debugger.write(alias_widget + 4, &original_alias_resource)?;
+        qmp.resume()?;
+        if alias_state != 0u32.to_le_bytes()
+            || alias_slot5 != 0u32.to_le_bytes()
+            || alias_heap != heap_before
+        {
+            return Err(format!(
+                "shared text resource alias was not rejected cleanly: state={alias_state:02x?}, slot5={alias_slot5:02x?}, heap={alias_heap:?}"
+            )
+            .into());
+        }
+
+        // Layer 4 is reserved for this scene. An existing descriptor on that
+        // layer must also prevent first use from claiming it.
+        let original_alias_layer = qmp.read_memory(0, alias_widget, 2)?;
+        qmp.stop()?;
+        debugger.write(alias_widget, &4u16.to_le_bytes())?;
+        qmp.resume()?;
+        inputs.knob(0, -1)?;
+        let layer_start = inputs.panel.snapshot().guest_ms;
+        wait_guest(session, layer_start, 500, guest_timeout_ms, wall_timeout_s)?;
+        qmp.stop()?;
+        let layer_state = qmp.read_memory(0, 0x8020_73c8, 4)?;
+        let layer_slot5 = qmp.read_memory(0, 0x8020_a59c + 20, 4)?;
+        let layer_heap = heap()?;
+        debugger.write(alias_widget, &original_alias_layer)?;
+        qmp.resume()?;
+        if layer_state != 0u32.to_le_bytes()
+            || layer_slot5 != 0u32.to_le_bytes()
+            || layer_heap != heap_before
+        {
+            return Err(format!(
+                "scene layer collision was not rejected cleanly: state={layer_state:02x?}, slot5={layer_slot5:02x?}, heap={layer_heap:?}"
+            )
+            .into());
+        }
+
+        // The compact state record restores fixed stock layers, so reject a
+        // changed borrowed widget layer instead of trying to save metadata.
+        let original_widget_layer = qmp.read_memory(0, widget7, 1)?;
+        qmp.stop()?;
+        debugger.write(widget7, &[0])?;
+        qmp.resume()?;
+        inputs.knob(0, -1)?;
+        let widget_layer_start = inputs.panel.snapshot().guest_ms;
+        wait_guest(
+            session,
+            widget_layer_start,
+            500,
+            guest_timeout_ms,
+            wall_timeout_s,
+        )?;
+        qmp.stop()?;
+        let widget_layer_state = qmp.read_memory(0, 0x8020_73c8, 4)?;
+        let widget_layer_slot5 = qmp.read_memory(0, 0x8020_a59c + 20, 4)?;
+        let widget_layer_heap = heap()?;
+        debugger.write(widget7, &original_widget_layer)?;
+        qmp.resume()?;
+        let widget_layer_guard_rejected = widget_layer_state == 0u32.to_le_bytes()
+            && widget_layer_slot5 == 0u32.to_le_bytes()
+            && widget_layer_heap == heap_before;
+        if !widget_layer_guard_rejected {
+            return Err(format!(
+                "changed widget layer was not rejected cleanly: state={widget_layer_state:02x?}, slot5={widget_layer_slot5:02x?}, heap={widget_layer_heap:?}"
+            )
+            .into());
+        }
+
+        // Background descriptors have the same fixed-layer restoration
+        // contract and must pass the same first-use preflight.
+        qmp.stop()?;
+        debugger.write(background10, &[1])?;
+        qmp.resume()?;
+        inputs.knob(0, -1)?;
+        let background_layer_start = inputs.panel.snapshot().guest_ms;
+        wait_guest(
+            session,
+            background_layer_start,
+            500,
+            guest_timeout_ms,
+            wall_timeout_s,
+        )?;
+        qmp.stop()?;
+        let background_layer_state = qmp.read_memory(0, 0x8020_73c8, 4)?;
+        let background_layer_slot5 = qmp.read_memory(0, 0x8020_a59c + 20, 4)?;
+        let background_layer_heap = heap()?;
+        debugger.write(background10, &original_background_layers[0])?;
+        qmp.resume()?;
+        let background_layer_guard_rejected = background_layer_state == 0u32.to_le_bytes()
+            && background_layer_slot5 == 0u32.to_le_bytes()
+            && background_layer_heap == heap_before;
+        if !background_layer_guard_rejected {
+            return Err(format!(
+                "changed background layer was not rejected cleanly: state={background_layer_state:02x?}, slot5={background_layer_slot5:02x?}, heap={background_layer_heap:?}"
+            )
+            .into());
+        }
+
+        // Simulate the notification manager owning its semaphore during first
+        // use. The scene must not depend on that unrelated lock.
+        qmp.stop()?;
+        let semaphore_count = qmp.read_memory(0, notification_semaphore + 56, 4)?;
+        if semaphore_count != 1u32.to_le_bytes() {
+            qmp.resume()?;
+            return Err("notification semaphore was not available before contention check".into());
+        }
+        debugger.write(notification_semaphore + 56, &0u32.to_le_bytes())?;
+        // Stop at callback registration after the mixer-side scene preflight
+        // has passed. Change a borrowed descriptor before DisplayCycle2 can
+        // render so the callback-side preflight gets exercised deterministically.
+        const DISPLAY_CALLBACK_REGISTER: u32 = 0x8002_4ed0;
+        debugger.breakpoint(DISPLAY_CALLBACK_REGISTER, true)?;
+        qmp.resume()?;
+        inputs.knob(0, -1)?;
+        let registration_deadline = Instant::now() + Duration::from_secs(10);
+        while qmp.query_status()?.running {
+            session.poll()?;
+            if Instant::now() >= registration_deadline {
+                let _ = debugger.breakpoint(DISPLAY_CALLBACK_REGISTER, false);
+                let _ = qmp.resume();
+                return Err("first-use callback registration breakpoint timed out".into());
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        let registration_pc = debugger.read_register(15)? & !1;
+        let callback_slot = debugger.read_register(0)?;
+        let callback_pointer = debugger.read_register(1)?;
+        if registration_pc != DISPLAY_CALLBACK_REGISTER
+            || callback_slot != 5
+            || callback_pointer & 1 == 0
+        {
+            let _ = debugger.breakpoint(DISPLAY_CALLBACK_REGISTER, false);
+            let _ = qmp.resume();
+            return Err(format!(
+                "unexpected display callback registration: pc={registration_pc:#010x}, slot={callback_slot}, callback={callback_pointer:#010x}"
+            )
+            .into());
+        }
+        let callback_entry = callback_pointer & !1;
+        debugger.breakpoint(callback_entry, true)?;
+        debugger.breakpoint(DISPLAY_CALLBACK_REGISTER, false)?;
+        debugger.write(alias_widget, &4u16.to_le_bytes())?;
+        qmp.resume()?;
+        let callback_deadline = Instant::now() + Duration::from_secs(10);
+        while qmp.query_status()?.running {
+            session.poll()?;
+            if Instant::now() >= callback_deadline {
+                let _ = debugger.breakpoint(callback_entry, false);
+                let _ = qmp.resume();
+                return Err("first DisplayCycle2 callback breakpoint timed out".into());
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        let callback_pc = debugger.read_register(15)? & !1;
+        if callback_pc != callback_entry {
+            let _ = debugger.breakpoint(callback_entry, false);
+            let _ = qmp.resume();
+            return Err(format!(
+                "first-use race probe stopped at {callback_pc:#010x}, not callback {callback_entry:#010x}"
+            )
+            .into());
+        }
+        debugger.breakpoint(callback_entry, false)?;
+        qmp.resume()?;
+        let race_frame = capture(150, "window-scene-callback-preflight-race")?;
+        qmp.stop()?;
+        let race_state = qmp.read_memory(0, 0x8020_73c8, 4)?;
+        let race_slot5 = qmp.read_memory(0, 0x8020_a59c + 20, 4)?;
+        let callback_preflight_race_rejected = race_frame == baseline
+            && u16::from_le_bytes(race_state[..2].try_into().unwrap()) == 0x4b4e
+            && u32::from_le_bytes(race_slot5.clone().try_into().unwrap()) == callback_pointer
+            && qmp.read_memory(0, alias_widget, 1)? == [4]
+            && qmp.read_memory(0, widget7, 1)? == [1]
+            && qmp.read_memory(0, background10, 1)? == [0]
+            && qmp.read_memory(0, shared_resource_pointer, 512)? == original_shared_resource;
+        debugger.write(alias_widget, &original_alias_layer)?;
+        qmp.resume()?;
+        if !callback_preflight_race_rejected {
+            return Err(format!(
+                "callback-side scene preflight failed to reject descriptor drift: state={race_state:02x?}, slot5={race_slot5:02x?}, frame_unchanged={} ",
+                race_frame == baseline
+            )
+            .into());
+        }
+
+        // Retry while the notification semaphore is still held. The scene
+        // should now pass its callback-side preflight and render without using
+        // the notification manager's lock.
+        inputs.knob(0, -1)?;
+        let contention_start = inputs.panel.snapshot().guest_ms;
+        wait_guest(
+            session,
+            contention_start,
+            500,
+            guest_timeout_ms,
+            wall_timeout_s,
+        )?;
+        qmp.stop()?;
+        let first_state = qmp.read_memory(0, 0x8020_73c8, 4)?;
+        let first_slot5 =
+            u32::from_le_bytes(qmp.read_memory(0, 0x8020_a59c + 20, 4)?.try_into().unwrap());
+        let heap_while_locked = heap()?;
+        let notification_lock_still_held =
+            qmp.read_memory(0, notification_semaphore + 56, 4)? == 0u32.to_le_bytes();
+        let dialog_without_notification_lock =
+            u16::from_le_bytes(first_state[..2].try_into().unwrap()) == 0x4b4e
+                && first_slot5 & 1 == 1
+                && qmp.read_memory(0, 0x8020_73c8 + 3, 1)? == u8::MAX.to_le_bytes()
+                && qmp.read_memory(0, widget7, 1)? == [4]
+                && qmp.read_memory(0, background10, 1)? == [4]
+                && notification_lock_still_held;
+        debugger.write(notification_semaphore + 56, &semaphore_count)?;
+        qmp.resume()?;
+        if !dialog_without_notification_lock
+            || heap_while_locked[2] != heap_before[2]
+            || heap_while_locked[3] != heap_before[3]
+        {
+            return Err(format!(
+                "dialog first use failed: state={first_state:02x?}, slot5={first_slot5:#010x}, heap={heap_while_locked:?}, notification_lock_still_held={notification_lock_still_held}, widget_x=({}, {})",
+                u16::from_le_bytes([original_widget7[6], original_widget7[7]]),
+                u16::from_le_bytes([original_widget33[6], original_widget33[7]])
+            )
+            .into());
+        }
+
+        inputs.knob(0, -3)?;
+        let active = capture(500, "knob-dialog-active")?;
+        let active_callbacks = qmp.read_memory(0, 0x8020_a59c, 24)?;
+        let active_slot5 = u32::from_le_bytes(active_callbacks[20..24].try_into().unwrap());
+        if active_slot5 & 1 == 0
+            || u32::from_le_bytes(active_callbacks[0..4].try_into().unwrap()) != 0
+            || u32::from_le_bytes(active_callbacks[8..12].try_into().unwrap()) != 0
+        {
+            return Err(format!(
+                "first knob event did not claim only free callback slot 5; slots0/2/5={:#010x}/{:#010x}/{active_slot5:#010x}",
+                u32::from_le_bytes(active_callbacks[0..4].try_into().unwrap()),
+                u32::from_le_bytes(active_callbacks[8..12].try_into().unwrap()),
+            )
+            .into());
+        }
+        if active == baseline {
+            return Err("custom overlay did not change the LCD".into());
+        }
+
+        // Capture emulator frames while the web demo values move in both
+        // directions. The web animation plays these captures at 20 fps.
+        capture_demo("knob-dialog-demo-level-start")?;
+        let mut level_peak_reached = false;
+        for index in 0..70 {
+            let displayed = decode_text(text_table + 179 * 4)?;
+            let value = displayed
+                .strip_suffix('%')
+                .and_then(|value| value.parse::<u8>().ok())
+                .unwrap_or(0);
+            if value >= 69 {
+                level_peak_reached = true;
+                break;
+            }
+            inputs.knob(0, 1)?;
+            capture_demo(&format!("knob-dialog-demo-level-up-{index:02}"))?;
+        }
+        if !level_peak_reached {
+            return Err("demo level sweep did not reach 69%".into());
+        }
+        capture(500, "knob-dialog-demo-level-peak")?;
+        // The displayed percentage is rounded from a 0..127 firmware value,
+        // so 60 encoder steps are not always enough to return to zero.
+        for index in 0..128 {
+            if decode_text(text_table + 179 * 4)? == "0%" {
+                break;
+            }
+            inputs.knob(0, -1)?;
+            capture_demo(&format!("knob-dialog-demo-level-down-{index:02}"))?;
+        }
+        if decode_text(text_table + 179 * 4)? != "0%" {
+            return Err("demo level sweep did not return to zero".into());
+        }
+        capture(500, "knob-dialog-demo-level-zero")?;
+
+        // Observe the producer and consumer task contexts directly. The knob
+        // hook runs from the mixer update path; slot 5 runs from DisplayCycle2.
+        // This determines whether the atomic mailbox can be replaced safely.
+        const CURRENT_TCB: u32 = 0x808a_3af0;
+        let knob_hook_entry = thumb_bl_target(
+            0x8003_6c74,
+            qmp.read_memory(0, 0x8003_6c74, 4)?
+                .try_into()
+                .map_err(|_| "patched mixer call is not four bytes")?,
+        )
+        .ok_or("patched mixer dispatcher call is not a Thumb BL")?;
+        let callback_probe_entry = active_slot5 & !1;
+        qmp.stop()?;
+        debugger.breakpoint(knob_hook_entry, true)?;
+        qmp.resume()?;
+        inputs.knob(0, -1)?;
+        let task_probe_deadline = Instant::now() + Duration::from_secs(10);
+        while qmp.query_status()?.running {
+            session.poll()?;
+            if Instant::now() >= task_probe_deadline {
+                return Err("knob hook task-context breakpoint timed out".into());
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        let hook_pc = debugger.read_register(15)? & !1;
+        if hook_pc != knob_hook_entry {
+            return Err(format!(
+                "task probe stopped at {hook_pc:#010x}, not knob hook {knob_hook_entry:#010x}"
+            )
+            .into());
+        }
+        let hook_task = u32::from_le_bytes(qmp.read_memory(0, CURRENT_TCB, 4)?.try_into().unwrap());
+        debugger.breakpoint(knob_hook_entry, false)?;
+        debugger.breakpoint(callback_probe_entry, true)?;
+        qmp.resume()?;
+
+        let task_probe_deadline = Instant::now() + Duration::from_secs(10);
+        while qmp.query_status()?.running {
+            session.poll()?;
+            if Instant::now() >= task_probe_deadline {
+                let _ = debugger.breakpoint(callback_probe_entry, false);
+                let _ = qmp.resume();
+                return Err("DisplayCycle2 task-context breakpoint timed out".into());
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        let callback_pc = debugger.read_register(15)? & !1;
+        if callback_pc != callback_probe_entry {
+            return Err(format!(
+                "task probe stopped at {callback_pc:#010x}, not DisplayCycle2 callback"
+            )
+            .into());
+        }
+        let callback_task =
+            u32::from_le_bytes(qmp.read_memory(0, CURRENT_TCB, 4)?.try_into().unwrap());
+        if hook_task == callback_task {
+            return Err(
+                "mixer hook and DisplayCycle2 callback unexpectedly share a task; re-evaluate the atomic mailbox"
+                    .into(),
+            );
+        }
+        debugger.breakpoint(callback_probe_entry, false)?;
+        qmp.resume()?;
+        capture(150, "window-scene-task-context-probe")?;
+
+        if u32::from_le_bytes(qmp.read_memory(0, 0x80202610, 4)?.try_into().unwrap())
+            != u32::from_le_bytes(original_window.clone().try_into().unwrap())
+        {
+            return Err("custom overlay replaced the active firmware window".into());
+        }
+        if qmp.read_memory(0, widget7, 1)? != [4]
+            || qmp.read_memory(0, widget33, 1)? != [4]
+            || qmp.read_memory(0, background10, 1)? != [4]
+            || qmp.read_memory(0, background37, 1)? != [4]
+            || qmp.read_memory(0, background48, 1)? != [4]
+        {
+            return Err("custom overlay did not use compositor layer 4".into());
+        }
+        if qmp.read_memory(0, widget7 + 6, 2)? != 0u16.to_le_bytes()
+            || qmp.read_memory(0, widget33 + 6, 2)? != 0u16.to_le_bytes()
+        {
+            return Err("custom overlay widgets were not positioned at the left edge".into());
+        }
+        for widget in [widget7, widget33] {
+            let resource =
+                u16::from_le_bytes(qmp.read_memory(0, widget + 4, 2)?.try_into().unwrap());
+            if resource != 179 {
+                return Err(format!(
+                    "dialog widget did not use shared text resource 179: {resource}"
+                )
+                .into());
+            }
+        }
+        if u32::from_le_bytes(
+            qmp.read_memory(0, text_table + 179 * 4, 4)?
+                .try_into()
+                .unwrap(),
+        ) != shared_resource_pointer
+        {
+            return Err("dialog redirected the shared text-resource pointer".into());
+        }
+        let black_pixel = |x: usize, y: usize| {
+            let index = ((63 - y) / 8) * 128 + x;
+            active[index] & (1 << ((63 - y) % 8)) == 0
+        };
+        if ![(0, 0), (127, 0), (0, 63), (127, 63)]
+            .into_iter()
+            .all(|(x, y)| black_pixel(x, y))
+        {
+            return Err("stock bitmap 22 did not paint the overlay background black".into());
+        }
+        let state = 0x8020_73c8u32;
+        if u16::from_le_bytes(qmp.read_memory(0, state, 2)?.try_into().unwrap()) != 0x4b4e
+            || qmp.read_memory(0, 0x80207458, 4)? != original_bitmap
+        {
+            return Err("in-place state signature or stock bitmap-36 descriptor is invalid".into());
+        }
+        let heap_live = heap()?;
+        if heap_live[0] != heap_before[0]
+            || heap_live[2] != heap_before[2]
+            || heap_live[3] != heap_before[3]
+        {
+            return Err(format!(
+                "dialog state should not allocate heap: before={heap_before:?}, live={heap_live:?}"
+            )
+            .into());
+        }
+        let state_heap_bytes = heap_before[0]
+            .checked_sub(heap_live[0])
+            .ok_or("firmware heap free-byte count increased while allocating dialog state")?;
+        if state_heap_bytes != 0 {
+            return Err(format!(
+                "dialog state should not consume heap bytes, got {state_heap_bytes}"
+            )
+            .into());
+        }
+        let null_bitmap_background = background_pointer(47)?;
+        if u16::from_le_bytes(
+            qmp.read_memory(0, null_bitmap_background + 2, 2)?
+                .try_into()
+                .unwrap(),
+        ) != 0
+        {
+            return Err("background 47 no longer uses bitmap ID 0".into());
+        }
+        let before_null_bitmap_draw = capture(50, "window-scene-before-null-bitmap-probe")?;
+        qmp.stop()?;
+        debugger.call_thumb(0x8000_5e70, &[47], Duration::from_secs(5))?;
+        qmp.resume()?;
+        let after_null_bitmap_draw = capture(100, "window-scene-after-null-bitmap-probe")?;
+        if before_null_bitmap_draw != after_null_bitmap_draw
+            || u16::from_le_bytes(qmp.read_memory(0, state, 2)?.try_into().unwrap()) != 0x4b4e
+            || qmp.read_memory(0, 0x80207458, 4)? != original_bitmap
+        {
+            return Err(
+                "bitmap ID 0 did not safely short-circuit while holding the state handle".into(),
+            );
+        }
+        let value_text = decode_text(text_table + 179 * 4)?;
+        let raw = qmp.read_memory(0, 0x8045ff84 + 0x120, 1)?[0];
+        if !knob_display_matches(9, &expected_value(9, raw), &value_text) {
+            return Err(format!("custom window value mismatch: {value_text:?}").into());
+        }
+        let refreshed = capture(500, "window-scene-refreshed")?;
+        if active != refreshed {
+            return Err("recorder redraw overwrote the custom overlay layers".into());
+        }
+
+        // Hold the notification semaphore while a second value is rendered.
+        // The patch's dedicated layer/widget resources and persistent bitmap
+        // descriptor must remain usable without taking this unrelated lock.
+        qmp.stop()?;
+        let semaphore_count = qmp.read_memory(0, notification_semaphore + 56, 4)?;
+        if semaphore_count != 1u32.to_le_bytes() {
+            qmp.resume()?;
+            return Err(
+                "notification semaphore was not available before callback contention check".into(),
+            );
+        }
+        debugger.write(notification_semaphore + 56, &0u32.to_le_bytes())?;
+        qmp.resume()?;
+        inputs.knob(0, -1)?;
+        let callback_busy_start = inputs.panel.snapshot().guest_ms;
+        wait_guest(
+            session,
+            callback_busy_start,
+            300,
+            guest_timeout_ms,
+            wall_timeout_s,
+        )?;
+        qmp.stop()?;
+        let pending_during_contention = qmp.read_memory(0, state + 3, 1)?;
+        let lock_held_during_render =
+            qmp.read_memory(0, notification_semaphore + 56, 4)? == 0u32.to_le_bytes();
+        let dialog_value_during_lock = decode_text(text_table + 179 * 4)?;
+        let raw_during_lock = qmp.read_memory(0, 0x8045ff84 + 0x120, 1)?[0];
+        debugger.write(notification_semaphore + 56, &semaphore_count)?;
+        qmp.resume()?;
+        if pending_during_contention != u8::MAX.to_le_bytes()
+            || !lock_held_during_render
+            || !knob_display_matches(
+                9,
+                &expected_value(9, raw_during_lock),
+                &dialog_value_during_lock,
+            )
+        {
+            return Err(format!(
+                "dialog did not process the latest update while the notification semaphore was unavailable: pending={pending_during_contention:02x?}, value={dialog_value_during_lock:?}"
+            )
+            .into());
+        }
+        let mut previous_mode_frame = capture(500, "window-scene-after-callback-contention")?;
+        let pending_after_contention = qmp.read_memory(0, state + 3, 1)?;
+        if pending_after_contention != u8::MAX.to_le_bytes() {
+            return Err(format!(
+                "display callback did not consume the pending update while the lock was held: pending={pending_after_contention:02x?}"
+            )
+            .into());
+        }
+        for (mode, button, name) in [
+            (9, 35, "level"),
+            (0, 28, "high"),
+            (1, 33, "freq"),
+            (2, 38, "mid"),
+            (3, 43, "low"),
+            (4, 10, "aux1"),
+            (5, 15, "aux2"),
+            (6, 20, "efx"),
+            (7, 25, "sub-mix"),
+            (8, 30, "pan"),
+        ] {
+            let selection_applied = inputs.panel.snapshot().applied;
+            inputs.tap(button, 50)?;
+            wait_l6_input(
+                session,
+                || inputs.panel.snapshot().applied > selection_applied,
+                "knob-dialog parameter-selection input acknowledgement",
+            )?;
+            let selection = inputs.panel.snapshot().guest_ms;
+            wait_guest(session, selection, 300, guest_timeout_ms, wall_timeout_s)?;
+            let encoder_applied = inputs.panel.snapshot().applied;
+            inputs.knob(0, -1)?;
+            wait_l6_input(
+                session,
+                || inputs.panel.snapshot().applied > encoder_applied,
+                "knob-dialog parameter encoder acknowledgement",
+            )?;
+            let frame = capture(400, &format!("window-scene-{name}"))?;
+            let offset = [2, 5, 4, 6, 15, 16, 12, 9, 8, 0x120][mode as usize];
+            let raw = qmp.read_memory(0, 0x8045ff84 + offset, 1)?[0];
+            let displayed = decode_text(text_table + 179 * 4)?;
+            if !knob_display_matches(mode, &expected_value(mode, raw), &displayed) {
+                return Err(format!(
+                    "scene mode {name} displayed {displayed:?} for raw value {raw}"
+                )
+                .into());
+            }
+            if mode != 9
+                && !(0..17).any(|y| {
+                    let index = ((63 - y) / 8) * 128;
+                    frame[index..index + 128] != previous_mode_frame[index..index + 128]
+                })
+            {
+                return Err(format!("scene title did not change for mode {name}").into());
+            }
+            let mode_heap = heap()?;
+            if mode_heap[2] != heap_live[2] || mode_heap[3] != heap_live[3] {
+                return Err(format!(
+                    "mode {name} changed the persistent heap allocation: {mode_heap:?}"
+                )
+                .into());
+            }
+            previous_mode_frame = frame;
+        }
+        // The preceding mode walk ends on Pan with a verified live scene.
+        // Sweep from center through left 50% to right 50%, capturing at 20 fps.
+        capture_demo("knob-dialog-demo-pan-center")?;
+        if decode_text(text_table + 179 * 4)? != "CENTER" {
+            return Err("demo pan sweep did not start at center".into());
+        }
+        const PAN_VALUE: u32 = 0x8045_ff84 + 8;
+        let pan_start = qmp.read_memory(0, PAN_VALUE, 1)?[0];
+        for name in ["left", "right"] {
+            let mut reached_target = false;
+            for index in 0..100 {
+                let raw = qmp.read_memory(0, PAN_VALUE, 1)?[0];
+                let displayed = decode_text(text_table + 179 * 4)?;
+                let target_reached = if name == "left" {
+                    displayed
+                        .strip_prefix("L ")
+                        .and_then(|value| value.strip_suffix('%'))
+                        .and_then(|value| value.parse::<u8>().ok())
+                        .is_some_and(|value| value >= 48)
+                } else {
+                    displayed
+                        .strip_prefix("R ")
+                        .and_then(|value| value.strip_suffix('%'))
+                        .and_then(|value| value.parse::<u8>().ok())
+                        .is_some_and(|value| value >= 48)
+                };
+                if target_reached {
+                    reached_target = true;
+                    break;
+                }
+                let target = if name == "left" { 32 } else { 95 };
+                inputs.knob(0, if raw < target { 1 } else { -1 })?;
+                capture_demo(&format!("knob-dialog-demo-pan-{name}-{index:02}"))?;
+            }
+            if !reached_target {
+                return Err(format!("demo pan sweep did not reach {name} 50%").into());
+            }
+            capture(500, &format!("knob-dialog-demo-pan-{name}-end"))?;
+        }
+        for _ in 0..100 {
+            let raw = qmp.read_memory(0, PAN_VALUE, 1)?[0];
+            if raw == pan_start {
+                break;
+            }
+            inputs.knob(0, if raw < pan_start { 1 } else { -1 })?;
+            capture(50, "knob-dialog-demo-pan-reset")?;
+        }
+        inputs.tap(35, 50)?;
+        let channel_selection = inputs.panel.snapshot().guest_ms;
+        wait_guest(
+            session,
+            channel_selection,
+            300,
+            guest_timeout_ms,
+            wall_timeout_s,
+        )?;
+        let channel0_level = 0x804600a4;
+        let channel1_level = 0x804600a5;
+        let channel0_raw = qmp.read_memory(0, channel0_level, 1)?[0];
+        let mut channel1_raw = qmp.read_memory(0, channel1_level, 1)?[0];
+        for delta in [-1, 1, -2, 2] {
+            inputs.knob(1, delta)?;
+            capture(250, "window-scene-channel-2-level")?;
+            channel1_raw = qmp.read_memory(0, channel1_level, 1)?[0];
+            if channel1_raw != channel0_raw {
+                break;
+            }
+        }
+        let channel1_display = decode_text(text_table + 179 * 4)?;
+        if channel1_raw == channel0_raw
+            || !knob_display_matches(9, &expected_value(9, channel1_raw), &channel1_display)
+        {
+            return Err(format!(
+                "channel-2 event did not display its own LEVEL value: channel0={channel0_raw}, channel1={channel1_raw}, displayed={channel1_display:?}"
+            )
+            .into());
+        }
+        for (tag, description) in [(0x0f, "invalid mode 15"), (0xf0, "invalid channel 15")] {
+            qmp.stop()?;
+            debugger.write(state + 3, &[tag])?;
+            qmp.resume()?;
+            let invalid_tag_start = inputs.panel.snapshot().guest_ms;
+            wait_guest(
+                session,
+                invalid_tag_start,
+                250,
+                guest_timeout_ms,
+                wall_timeout_s,
+            )?;
+            qmp.stop()?;
+            let discarded = qmp.read_memory(0, state + 3, 1)? == u8::MAX.to_le_bytes();
+            qmp.resume()?;
+            if !discarded {
+                return Err(
+                    format!("display callback did not safely discard {description}").into(),
+                );
+            }
+        }
+        inputs.knob(0, -1)?;
+        capture(100, "window-scene-before-invalid-state-metadata")?;
+        qmp.stop()?;
+        let metadata = qmp.read_memory(0, state, 4)?;
+        let metadata_word = u32::from_le_bytes(metadata.clone().try_into().unwrap());
+        let invalid_metadata = metadata_word ^ 1;
+        debugger.write(state, &invalid_metadata.to_le_bytes())?;
+        qmp.resume()?;
+        let invalid_metadata_start = inputs.panel.snapshot().guest_ms;
+        wait_guest(
+            session,
+            invalid_metadata_start,
+            150,
+            guest_timeout_ms,
+            wall_timeout_s,
+        )?;
+        qmp.stop()?;
+        let invalid_metadata_rejected = qmp.read_memory(0, state, 4)?
+            == invalid_metadata.to_le_bytes()
+            && qmp.read_memory(0, 0x80207458, 4)? == original_bitmap
+            && [widget7, widget33, background10, background37, background48]
+                .into_iter()
+                .all(|descriptor| {
+                    qmp.read_memory(0, descriptor, 1)
+                        .is_ok_and(|layer| layer[0] == 4)
+                });
+        debugger.write(state, &metadata)?;
+        qmp.resume()?;
+        if !invalid_metadata_rejected {
+            return Err("invalid state signature changed an overlay descriptor".into());
+        }
+        inputs.knob(0, -1)?;
+        capture(100, "window-scene-after-invalid-state-metadata")?;
+        let invalid_tag_discarded = true;
+        let lit_pixels = |y0: usize, y1: usize| {
+            (y0..y1)
+                .flat_map(|y| {
+                    (0..128).map(move |x| {
+                        let index = ((63 - y) / 8) * 128 + x;
+                        refreshed[index] & (1 << ((63 - y) % 8)) != 0
+                    })
+                })
+                .filter(|lit| *lit)
+                .count()
+        };
+        if lit_pixels(0, 17) < 10 || lit_pixels(30, 48) < 5 {
+            return Err("shared text resource did not render both dialog lines".into());
+        }
+        let scene_text_before_notification = qmp.read_memory(0, shared_resource_pointer, 512)?;
+        // Exercise the stock notification renderer over the layer-4 scene.
+        // This calls the generic firmware API directly, without relying on
+        // the patch's removed notification hooks.
+        qmp.stop()?;
+        let callback_entry = active_slot5 & !1;
+        debugger.breakpoint(callback_entry, true)?;
+        qmp.resume()?;
+        let breakpoint_deadline = Instant::now() + Duration::from_secs(15);
+        while qmp.query_status()?.running {
+            session.poll()?;
+            if Instant::now() >= breakpoint_deadline {
+                return Err("dialog callback breakpoint was not reached".into());
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        debugger.breakpoint(callback_entry, false)?;
+        // Message 4 uses the three-line notification background, bitmap 36.
+        debugger.register(0, 4)?;
+        debugger.register(15, 0x8000_6660)?;
+        qmp.resume()?;
+        let notification_start = inputs.panel.snapshot().guest_ms;
+        let mut notification_frame = capture(100, "window-scene-stock-notification")?;
+        while notification_frame == refreshed {
+            let elapsed = inputs
+                .panel
+                .snapshot()
+                .guest_ms
+                .wrapping_sub(notification_start);
+            if elapsed >= 1_500 {
+                return Err(
+                    "stock notification did not render its frame over the custom scene".into(),
+                );
+            }
+            notification_frame = capture(100, "window-scene-stock-notification")?;
+        }
+        let callback_after_notification = qmp.read_memory(0, 0x8020a59c + 20, 4)?;
+        let resource_pointer_after_notification = qmp.read_memory(0, text_table + 179 * 4, 4)?;
+        let resource_after_notification = qmp.read_memory(0, shared_resource_pointer, 512)?;
+        if callback_after_notification != active_slot5.to_le_bytes()
+            || resource_pointer_after_notification != shared_resource_pointer.to_le_bytes()
+            || resource_after_notification != scene_text_before_notification
+        {
+            return Err(format!(
+                "stock notification changed scene state: callback {callback_after_notification:02x?} vs {active_slot5:08x}, resource pointer {resource_pointer_after_notification:02x?} vs {shared_resource_pointer:08x}, resource modified={}",
+                resource_after_notification != scene_text_before_notification
+            ).into());
+        }
+        // The dialog has its own inactivity timeout. Wait for the notification
+        // frame to clear instead of sleeping past that timeout as well.
+        let after_notification = loop {
+            let frame = capture(100, "window-scene-after-notification")?;
+            if frame != notification_frame {
+                break frame;
+            }
+            let elapsed = inputs
+                .panel
+                .snapshot()
+                .guest_ms
+                .wrapping_sub(notification_start);
+            if elapsed >= 5_000 {
+                return Err("stock notification did not clear after its timeout".into());
+            }
+        };
+        if qmp.read_memory(0, 0x8020a59c + 20, 4)? != active_slot5.to_le_bytes()
+            || qmp.read_memory(0, text_table + 179 * 4, 4)? != shared_resource_pointer.to_le_bytes()
+            || qmp.read_memory(0, shared_resource_pointer, 512)? != scene_text_before_notification
+        {
+            return Err(
+                "stock notification expiry damaged or prematurely removed the custom scene".into(),
+            );
+        }
+        let timeout_start = inputs.panel.snapshot().guest_ms;
+        loop {
+            let ticks = qmp.read_memory(0, state + 2, 1)?[0];
+            if ticks == 0 {
+                break;
+            }
+            let now = inputs.panel.snapshot().guest_ms;
+            if now.wrapping_sub(timeout_start) >= 5_000 {
+                return Err(format!(
+                    "custom scene timeout did not finish after notification expiry; {ticks} ticks remain"
+                )
+                .into());
+            }
+            wait_guest(session, now, 100, guest_timeout_ms, wall_timeout_s)?;
+        }
+        let timeout_cleared = capture(150, "knob-dialog-timeout-cleared")?;
+        if timeout_cleared == after_notification {
+            return Err("knob dialog timeout screenshot still shows the custom scene".into());
+        }
+        if timeout_cleared == notification_frame {
+            return Err("knob dialog timeout screenshot still shows the notification".into());
+        }
+        let restore_checks = [
+            (
+                "window",
+                qmp.read_memory(0, 0x80202610, 4)? == original_window,
+            ),
+            (
+                "state signature",
+                u16::from_le_bytes(qmp.read_memory(0, state, 2)?.try_into().unwrap()) == 0x4b4e,
+            ),
+            (
+                "bitmap table",
+                qmp.read_memory(0, 0x80207458, 4)? == original_bitmap,
+            ),
+            (
+                "bitmap descriptor",
+                qmp.read_memory(
+                    0,
+                    u32::from_le_bytes(original_bitmap.clone().try_into().unwrap()),
+                    8,
+                )? == original_bitmap_descriptor,
+            ),
+            (
+                "notification semaphore",
+                qmp.read_memory(0, 0x8020a2a0, 4)? == original_notification_semaphore,
+            ),
+            (
+                "text resource table",
+                qmp.read_memory(0, text_table + 229 * 4, 8)? == original_resources,
+            ),
+            (
+                "shared resource pointer",
+                qmp.read_memory(0, text_table + 179 * 4, 4)?
+                    == shared_resource_pointer.to_le_bytes(),
+            ),
+            (
+                "shared resource contents",
+                qmp.read_memory(0, shared_resource_pointer, 512)? == original_shared_resource,
+            ),
+            (
+                "text lengths",
+                qmp.read_memory(0, original_lengths_table + 229 * 2, 4)? == original_lengths,
+            ),
+            (
+                "widget 7",
+                qmp.read_memory(0, widget7, 16)? == original_widget7,
+            ),
+            (
+                "widget 33",
+                qmp.read_memory(0, widget33, 16)? == original_widget33,
+            ),
+            (
+                "background layer 10",
+                qmp.read_memory(0, background10, 1)? == original_background_layers[0],
+            ),
+            (
+                "background layer 37",
+                qmp.read_memory(0, background37, 1)? == original_background_layers[1],
+            ),
+            (
+                "background layer 48",
+                qmp.read_memory(0, background48, 1)? == original_background_layers[2],
+            ),
+            (
+                "display callback slot 5",
+                u32::from_le_bytes(qmp.read_memory(0, 0x8020_a59c + 20, 4)?.try_into().unwrap())
+                    == active_slot5,
+            ),
+        ];
+        let mismatches = restore_checks
+            .iter()
+            .filter_map(|(name, matches)| (!matches).then_some(*name))
+            .collect::<Vec<_>>();
+        if !mismatches.is_empty() {
+            return Err(format!(
+                "custom overlay did not restore borrowed resources or preserve stock bitmap 36: {mismatches:?}"
+            )
+            .into());
+        }
+        let heap_after = heap()?;
+        if heap_after[0] != heap_live[0]
+            || heap_after[2] != heap_live[2]
+            || heap_after[3] != heap_live[3]
+        {
+            return Err(format!(
+                "in-place scene state caused heap changes: live={heap_live:?}, after={heap_after:?}"
+            )
+            .into());
+        }
+        // Prove that the DisplayCycle2 callback restores borrowed global
+        // descriptors on navigation, rather than relying on expiry cleanup.
+        inputs.knob(0, -3)?;
+        capture(400, "window-scene-before-navigation")?;
+        inputs.main.tap(0, 120)?;
+        capture(500, "window-scene-navigation-returned")?;
+        let navigated_window = qmp.read_memory(0, 0x80202610, 4)?;
+        if navigated_window == original_window
+            || u16::from_le_bytes(qmp.read_memory(0, state, 2)?.try_into().unwrap()) != 0x4b4e
+            || qmp.read_memory(0, 0x80207458, 4)? != original_bitmap
+            || qmp.read_memory(
+                0,
+                u32::from_le_bytes(original_bitmap.clone().try_into().unwrap()),
+                8,
+            )? != original_bitmap_descriptor
+            || qmp.read_memory(0, 0x8020a2a0, 4)? != original_notification_semaphore
+            || qmp.read_memory(0, shared_resource_pointer, 512)? != original_shared_resource
+            || qmp.read_memory(0, widget7, 16)? != original_widget7
+            || qmp.read_memory(0, widget33, 16)? != original_widget33
+            || qmp.read_memory(0, background10, 1)? != original_background_layers[0]
+            || qmp.read_memory(0, background37, 1)? != original_background_layers[1]
+            || qmp.read_memory(0, background48, 1)? != original_background_layers[2]
+            || u32::from_le_bytes(qmp.read_memory(0, 0x8020_a59c + 20, 4)?.try_into().unwrap())
+                != active_slot5
+        {
+            return Err(
+                "window-push cleanup did not restore the dialog's borrowed resources".into(),
+            );
+        }
+        return Ok(json!({
+            "overlay_layer": 4,
+            "black_background": true,
+            "notification_semaphore_not_required_for_first_use": true,
+            "callback_preflight_race_rejected": callback_preflight_race_rejected,
+            "notification_semaphore_not_required_for_refresh": true,
+            "stock_notification_overlap": true,
+            "stock_notification_expiry": true,
+            "bitmap_zero_guard_safe": true,
+            "timeout_return": true,
+            "window_change_restore": true,
+            "non_recorder_first_use_rejected": non_recorder_guard_passed,
+            "dialog_active_screenshot": "knob-dialog-active.png",
+            "dialog_timeout_screenshot": "knob-dialog-timeout-cleared.png",
+            "resource_restore": true,
+            "shared_resource_reuse": true,
+            "shared_resource_alias_rejected": true,
+            "scene_layer_collision_rejected": true,
+            "changed_widget_layer_rejected": widget_layer_guard_rejected,
+            "changed_background_layer_rejected": background_layer_guard_rejected,
+            "nonzero_channel_value_matches": true,
+            "invalid_mailbox_tag_discarded": invalid_tag_discarded,
+            "invalid_state_signature_rejected": invalid_metadata_rejected,
+            "stock_notification_bitmap_untouched": true,
+            "state_allocation_requested_bytes": 0,
+            "state_heap_bytes_consumed": state_heap_bytes,
+            "state_retained_for_boot": true,
+            "display_callback_slot": 5,
+            "display_callback_target": format!("{active_slot5:#010x}"),
+            "mixer_hook_task_control_block": format!("{hook_task:#010x}"),
+            "display_callback_task_control_block": format!("{callback_task:#010x}"),
+            "mixer_and_callback_share_task": hook_task == callback_task,
+            "display_callback_remains_registered": true
+        }));
+    }
     let mut reports = 0u64;
     for (mode, button, name) in [
         (9, 35, "level"),
@@ -4667,7 +6741,12 @@ fn run_knob_dialog(
         }
         let heap_live = heap()?;
         if heap_live[2] != heap_before[2] + 1 || heap_live[3] != heap_before[3] {
-            return Err(format!("{name}: popup heap allocation mismatch").into());
+            return Err(format!(
+                "{name}: popup heap allocation mismatch: before={heap_before:?}, live={heap_live:?}, window={:?}, bitmap={:?}",
+                qmp.read_memory(0, 0x80202610, 4)?,
+                qmp.read_memory(0, 0x80207458, 4)?
+            )
+            .into());
         }
         let allocation = u32::from_le_bytes(qmp.read_memory(0, 0x80207458, 4)?.try_into().unwrap());
         if !(0x808a4150..0x80921140).contains(&allocation) {
@@ -4782,7 +6861,8 @@ fn run_knob_dialog(
     }
     let actual = fs::read_to_string(options.logs.join("engine.trace"))?
         .matches("l6 panel USART1 TX a1\n")
-        .count() as u64;
+        .count() as u64
+        - encoder_report_baseline;
     if actual != reports {
         return Err(format!("encoder report count {actual}, expected {reports}").into());
     }

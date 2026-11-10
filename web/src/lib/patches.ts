@@ -4,10 +4,21 @@ export interface PatchInfo {
   title: string
   description: string
   readmeUrl: string
-  /** Optional demo clip filename under `public/demos/`, e.g. recorded from the emulator. */
-  demoGif?: string
+  /** Optional demo image filename under `public/demos/`, e.g. recorded from the emulator. */
+  demoImage?: string
   /** Optional plain-language instructions for triggering the patch from outside gear (e.g. a MIDI command). */
   requestCommand?: string
+}
+
+export interface LoadablePatchInfo {
+  id: string
+  models: readonly ('L6' | 'L6max')[]
+  title: string
+  description: string
+  /** Filename hosted under `public/loadable-patches/<model>/`. */
+  fileName: string
+  loaderAbi: number
+  readmeUrl: string
 }
 
 // Descriptions summarize each patch's own README in the main repo — see the
@@ -22,7 +33,7 @@ export const PATCHES: PatchInfo[] = [
       'Shows a popup with the actual value — dB, Hz, percent, or pan position — when you turn a channel knob. The stock firmware changes the value but never displays it.',
     readmeUrl:
       'https://github.com/derekstavis/zoom-l6max/blob/main/patches/knob-dialog/README.md',
-    demoGif: 'knob-dialog.gif',
+    demoImage: 'knob-dialog.webp',
   },
   {
     id: 'din-mixer-control',
@@ -32,7 +43,7 @@ export const PATCHES: PatchInfo[] = [
       "Makes the mixer's documented \"Mixer Control via MIDI\" setting work over the physical TRS MIDI IN jack, not just USB — the stock firmware never implements that direction despite the setting existing.",
     readmeUrl:
       'https://github.com/derekstavis/zoom-l6max/blob/main/patches/din-mixer-control/README.md',
-    demoGif: 'din-mixer-control.gif',
+    demoImage: 'din-mixer-control.webp',
   },
   {
     id: 'midi-sync',
@@ -43,5 +54,32 @@ export const PATCHES: PatchInfo[] = [
     requestCommand: 'Send Control Change 127 with a value of 64 or higher, on the mixer’s configured MIDI channel.',
     readmeUrl:
       'https://github.com/derekstavis/zoom-l6max/blob/main/patches/midi-sync/README.md',
+  },
+]
+
+/** Dynamic modules shipped by the site. The persistent Patch loader must already
+ * be installed on the device before these files can be used. */
+export const LOADABLE_PATCHES: LoadablePatchInfo[] = [
+  {
+    id: 'midi-sync',
+    models: ['L6', 'L6max'],
+    title: 'Read mixer values over MIDI',
+    description:
+      'The same MIDI sync feature as above, packaged as an SD card patch. It loads when the card is mounted and clears from RAM when the mixer restarts.',
+    fileName: 'MIDI.BIN',
+    loaderAbi: 2,
+    readmeUrl:
+      'https://github.com/derekstavis/zoom-l6max/blob/main/patches/patch-loader/README.md',
+  },
+  {
+    id: 'knob-dialog',
+    models: ['L6max'],
+    title: 'Show knob values on display',
+    description:
+      'The same knob-value dialog as above, packaged as an SD card patch. It loads when the card is mounted and clears from RAM when the mixer restarts.',
+    fileName: 'KNOB.BIN',
+    loaderAbi: 2,
+    readmeUrl:
+      'https://github.com/derekstavis/zoom-l6max/blob/main/patches/patch-loader/README.md',
   },
 ]

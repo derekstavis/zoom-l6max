@@ -199,6 +199,16 @@ volatile = true
 no_sd = true
 
 [[case]]
+id = "knob-dialog-scene-prototype"
+suites = ["full"]
+models = ["l6max"]
+scenario = "scenarios/knob-dialog-scene-prototype.toml"
+needs_configuration = true
+volatile = true
+no_sd = true
+wall_timeout_s = 900
+
+[[case]]
 id = "l6-event-dispatch"
 suites = ["full"]
 models = ["l6"]
@@ -612,3 +622,164 @@ models = ["l6"]
 scenario = "scenarios/l6-eq-audio-update.toml"
 volatile = true
 no_sd = true
+
+[[case]]
+id = "sd-midi-sync"
+suites = ["sd-matrix"]
+models = ["l6", "l6max"]
+scenario = "scenarios/sd-midi-sync.toml"
+needs_configuration = true
+wall_timeout_s = 1200
+environment = { L6_AUDIO_SAMPLE_TRACE = "1" }
+
+[[case]]
+id = "sd-l6max-midi-sync"
+suites = ["sd-matrix"]
+models = ["l6max"]
+scenario = "scenarios/sd-l6max-midi-sync.toml"
+needs_configuration = true
+wall_timeout_s = 1200
+
+[[case]]
+id = "sd-midi-corrupt-sibling"
+suites = []
+models = ["l6max"]
+scenario = "scenarios/sd-midi-corrupt-sibling.toml"
+needs_configuration = true
+wall_timeout_s = 1200
+
+[[case]]
+id = "sd-din-mixer-control"
+suites = ["sd-matrix"]
+models = ["l6max"]
+scenario = "scenarios/sd-din-mixer-control.toml"
+needs_configuration = true
+wall_timeout_s = 1200
+
+[[case]]
+id = "sd-knob-dialog"
+suites = ["sd-matrix"]
+models = ["l6max"]
+scenario = "scenarios/sd-knob-dialog.toml"
+needs_configuration = true
+wall_timeout_s = 1200
+
+[[case]]
+id = "sd-knob-dialog-dynamic"
+suites = ["sd-matrix"]
+models = ["l6max"]
+scenario = "scenarios/sd-knob-dialog-dynamic.toml"
+needs_configuration = true
+wall_timeout_s = 1200
+
+[[case]]
+id = "sd-midi-absent"
+suites = []
+models = ["l6", "l6max"]
+scenario = "scenarios/sd-midi-absent.toml"
+needs_configuration = true
+wall_timeout_s = 1200
+
+[[case]]
+id = "sd-midi-corrupt"
+suites = []
+models = ["l6", "l6max"]
+scenario = "scenarios/sd-midi-corrupt.toml"
+needs_configuration = true
+wall_timeout_s = 1200
+
+[[case]]
+id = "sd-midi-volatile"
+suites = []
+models = ["l6", "l6max"]
+scenario = "scenarios/sd-midi-volatile.toml"
+needs_configuration = true
+wall_timeout_s = 1800
+
+[[case]]
+id = "sd-warm-reset"
+suites = []
+models = ["l6", "l6max"]
+scenario = "scenarios/sd-warm-reset.toml"
+needs_configuration = true
+wall_timeout_s = 1200
+
+[[case]]
+id = "sd-mixed-static"
+suites = ["sd-matrix"]
+models = ["l6max"]
+scenario = "scenarios/sd-mixed-static.toml"
+needs_configuration = true
+wall_timeout_s = 1800
+
+[[case]]
+id = "sd-all-patches"
+suites = ["sd-matrix"]
+models = ["l6max"]
+scenario = "scenarios/sd-all-patches.toml"
+needs_configuration = true
+wall_timeout_s = 2400
+
+[[case]]
+id = "patch-loader-only"
+suites = ["sd-matrix"]
+models = ["l6max"]
+scenario = "scenarios/patch-loader-only.toml"
+needs_configuration = true
+wall_timeout_s = 1200
+
+[[case]]
+id = "sd-knob-midi"
+suites = ["sd-matrix"]
+models = ["l6max"]
+scenario = "scenarios/sd-knob-midi.toml"
+needs_configuration = true
+wall_timeout_s = 1800
+
+[[case]]
+id = "sd-static-all"
+suites = ["sd-matrix"]
+models = ["l6max"]
+scenario = "scenarios/sd-static-all.toml"
+needs_configuration = true
+wall_timeout_s = 1800
+
+[[case]]
+id = "sd-hook-chain"
+suites = ["sd-matrix"]
+models = ["l6max"]
+scenario = "scenarios/sd-hook-chain.toml"
+needs_configuration = true
+wall_timeout_s = 1200
+
+[[case]]
+id = "sd-midi-control-sync"
+suites = ["sd-matrix"]
+models = ["l6max"]
+scenario = "scenarios/sd-midi-control-sync.toml"
+needs_configuration = true
+wall_timeout_s = 1200
+
+[[case]]
+id = "sd-midi-control"
+suites = ["sd-matrix"]
+models = ["l6max"]
+scenario = "scenarios/sd-midi-control.toml"
+needs_configuration = true
+wall_timeout_s = 1200
+
+[[case]]
+id = "sd-knob-midi-control"
+suites = ["sd-matrix"]
+models = ["l6max"]
+scenario = "scenarios/sd-knob-midi-control.toml"
+needs_configuration = true
+wall_timeout_s = 1200
+
+[[case]]
+id = "sd-knob-midi-sync-dynamic"
+suites = ["sd-matrix"]
+models = ["l6max"]
+scenario = "scenarios/sd-knob-midi-sync-dynamic.toml"
+needs_configuration = true
+wall_timeout_s = 1200

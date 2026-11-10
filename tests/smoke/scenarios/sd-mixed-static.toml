@@ -1,0 +1,48 @@
+version = 1
+name = "sd-mixed-static"
+models = ["l6max"]
+backends = ["headless"]
+state = "setup-complete"
+card = "empty"
+patches = ["din-mixer-control"]
+sd_patches = ["midi-sync"]
+
+[[step]]
+action = "wait"
+until = "mixer-ready"
+guest_timeout_ms = 60000
+wall_timeout_s = 300
+
+[[step]]
+action = "delay"
+guest_ms = 8000
+guest_timeout_ms = 20000
+wall_timeout_s = 300
+
+[[step]]
+action = "press"
+control = "rec-record"
+
+[[step]]
+action = "expect-card-entry"
+path = "RECORDER"
+
+[[step]]
+action = "delay"
+guest_ms = 40000
+guest_timeout_ms = 45000
+wall_timeout_s = 900
+
+[[step]]
+action = "expect-sd-patch"
+loaded = true
+
+[[step]]
+action = "include"
+path = "fragments/l6max-din-mixer-setup.toml"
+
+[[step]]
+action = "l6max-din-mixer-control"
+expect_din_ring_change = true
+guest_timeout_ms = 10000
+wall_timeout_s = 120

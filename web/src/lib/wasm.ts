@@ -42,9 +42,10 @@ export interface PatchOutcome {
 export async function applyPatches(
   packageBytes: Uint8Array,
   selected: string[],
+  installPatchLoader = false,
 ): Promise<PatchOutcome> {
   await ensureReady()
-  const result = applyPatchesWasm(packageBytes, selected)
+  const result = applyPatchesWasm(packageBytes, selected, installPatchLoader)
   const report = JSON.parse(result.reportJson) as PatchReport
   return { package: result.package, report }
 }

@@ -4957,6 +4957,11 @@ static void l6_chip_init(MachineState *machine, L6ChipState *s, bool panel,
                             TYPE_ARMV7M);
     cpu = DEVICE(&s->armv7m);
     qdev_prop_set_uint32(cpu, "num-irq", panel ? 32 : 160);
+    /* The firmware's reset vectors live at its mapped flash base. Explicitly
+     * set VTOR so system resets fetch the board image rather than address 0,
+     * which is not the MAIN vector table for these profiles. */
+    qdev_prop_set_uint32(cpu, "init-nsvtor",
+                         panel ? flash_base : profile->main_flash_base);
     /* The main image probes the implemented NVIC priority bits at startup.
      * Its expected four bits differ from QEMU's generic M7 default of eight.
      */
