@@ -54,6 +54,6 @@ firmware_symbols! {
 }
 
 firmware_variables! {
-    pub message_length: u16, at 0x805e_5d4a;
-    pub message_buffer: u8, at 0x8089_8938;
+    pub midi_message_length: u16, at 0x805e_5d4a;
+    pub midi_message_buffer: u8, at 0x8089_8938;
 }
