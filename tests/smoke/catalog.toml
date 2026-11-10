@@ -729,6 +729,22 @@ needs_configuration = true
 wall_timeout_s = 1200
 
 [[case]]
+id = "sd-dual-efx-emulator"
+suites = ["sd-matrix"]
+models = ["l6max"]
+scenario = "scenarios/sd-dual-efx-emulator.toml"
+needs_configuration = true
+wall_timeout_s = 1800
+
+[[case]]
+id = "sd-dual-efx-shared-hook-chain"
+suites = ["sd-matrix"]
+models = ["l6max"]
+scenario = "scenarios/sd-dual-efx-shared-hook-chain.toml"
+needs_configuration = true
+wall_timeout_s = 2400
+
+[[case]]
 id = "sd-knob-midi"
 suites = ["sd-matrix"]
 models = ["l6max"]

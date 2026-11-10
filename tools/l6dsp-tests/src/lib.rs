@@ -1,32 +1,32 @@
-#[path = "../../../patches/dual-efx/src/math.rs"]
-pub mod math;
-#[path = "../../../patches/dual-efx/src/velvet.rs"]
-pub mod velvet;
-#[path = "../../../patches/dual-efx/src/plateau.rs"]
-pub mod plateau;
-#[cfg(experimental_plateau_32k)]
-#[path = "../../../patches/dual-efx/src/plateau_rate.rs"]
-mod plateau_rate;
-#[path = "../../../patches/dual-efx/src/routing.rs"]
-pub mod routing;
-#[path = "../../../patches/dual-efx/src/parameter_view.rs"]
-pub mod parameter_view;
-#[path = "../../../patches/dual-efx/src/parameters.rs"]
-pub mod parameters;
-#[path = "../../../patches/dual-efx/src/controls.rs"]
-pub mod controls;
-#[path = "../../../patches/dual-efx/src/admission.rs"]
+#[path = "../../../patches/dual-efx/l6max/src/admission.rs"]
 pub mod admission;
+#[path = "../probe/boundary_pause.rs"]
+pub mod boundary_pause;
+#[path = "../../../patches/dual-efx/l6max/src/controls.rs"]
+pub mod controls;
 #[path = "../probe/event_queue.rs"]
 pub mod event_queue;
 #[path = "../probe/handoff_protocol.rs"]
 pub mod handoff_protocol;
 #[path = "../probe/heap_range.rs"]
 pub mod heap_range;
-#[path = "../probe/boundary_pause.rs"]
-pub mod boundary_pause;
+#[path = "../../../patches/dual-efx/l6max/src/math.rs"]
+pub mod math;
+#[path = "../../../patches/dual-efx/l6max/src/parameter_view.rs"]
+pub mod parameter_view;
+#[path = "../../../patches/dual-efx/l6max/src/parameters.rs"]
+pub mod parameters;
+#[path = "../../../patches/dual-efx/l6max/src/plateau.rs"]
+pub mod plateau;
+#[cfg(experimental_plateau_32k)]
+#[path = "../../../patches/dual-efx/l6max/src/plateau_rate.rs"]
+mod plateau_rate;
 #[path = "../probe/refresh_handoff.rs"]
 pub mod refresh_handoff;
+#[path = "../../../patches/dual-efx/l6max/src/routing.rs"]
+pub mod routing;
+#[path = "../../../patches/dual-efx/l6max/src/velvet.rs"]
+pub mod velvet;
 
 #[cfg(test)]
 mod tests {
@@ -35,8 +35,12 @@ mod tests {
     #[cfg(experimental_plateau_32k)]
     #[test]
     fn plateau_32k_routed_converter_matches_explicit_core_and_resets() {
-        let params = plateau::PlateauParameters { size: 4.0, predelay_ms: 500.0,
-            mod_depth: 16.0, ..plateau::PlateauParameters::default() };
+        let params = plateau::PlateauParameters {
+            size: 4.0,
+            predelay_ms: 500.0,
+            mod_depth: 16.0,
+            ..plateau::PlateauParameters::default()
+        };
         let mut routed = Box::new(routing::IdlePlateau::new());
         let mut core = Box::new(plateau::PlateauReverb::new());
         let mut rate = plateau_rate::PlateauRate::new();
@@ -50,7 +54,9 @@ mod tests {
             let expected = rate.process(input, input, |l, r| core.process_sample(l, r));
             assert_eq!(actual, expected, "frame {frame}");
             let level = actual.0.abs().max(actual.1.abs());
-            if level != 0.0 && first.is_none() { first = Some(frame); }
+            if level != 0.0 && first.is_none() {
+                first = Some(frame);
+            }
             peak = peak.max(level);
         }
         assert!(first.is_some_and(|frame| frame >= 23_999));
@@ -59,10 +65,17 @@ mod tests {
         // Neither initialization nor clear may retain converter history.
         for reinitialize in [true, false] {
             routed.process_sample(0.5, 0.5);
-            if reinitialize { routed.init(params); } else { routed.clear(); }
+            if reinitialize {
+                routed.init(params);
+            } else {
+                routed.clear();
+            }
             for frame in 0..26_000 {
-                assert_eq!(routed.process_sample(0.0, 0.0), (0.0, 0.0),
-                    "stale output at frame {frame}, reinitialize={reinitialize}");
+                assert_eq!(
+                    routed.process_sample(0.0, 0.0),
+                    (0.0, 0.0),
+                    "stale output at frame {frame}, reinitialize={reinitialize}"
+                );
             }
         }
     }
@@ -70,17 +83,28 @@ mod tests {
     #[cfg(experimental_plateau_32k)]
     #[test]
     fn plateau_32k_inspector_model_accepts_full_range() {
-        use parameters::{edit_encoder, snapshot_parameter, EfxParamId as Id, ParameterBank, ParameterHandoff};
+        use parameters::{
+            EfxParamId as Id, ParameterBank, ParameterHandoff, edit_encoder, snapshot_parameter,
+        };
         let mut original = Box::<routing::DualEfxProcessor>::new_uninit();
         let processor = routing::DualEfxProcessor::initialize_in_place(&mut original);
-        assert_eq!(edit_encoder(processor, ParameterBank::Plateau, 0, i32::MAX), Some(Id::PlatPreDelay));
-        assert_eq!(edit_encoder(processor, ParameterBank::Plateau, 1, i32::MAX), Some(Id::PlatSize));
+        assert_eq!(
+            edit_encoder(processor, ParameterBank::Plateau, 0, i32::MAX),
+            Some(Id::PlatPreDelay)
+        );
+        assert_eq!(
+            edit_encoder(processor, ParameterBank::Plateau, 1, i32::MAX),
+            Some(Id::PlatSize)
+        );
         assert_eq!(processor.plateau.params.predelay_ms, 500.0);
         assert_eq!(processor.plateau.params.size, 4.0);
         let saved = ParameterHandoff::new();
         for id in [Id::PlatPreDelay, Id::PlatSize] {
             let snapshot = snapshot_parameter(id, processor);
-            assert!(parameter_view::ParameterSnapshot::from_words(id as u32, snapshot.value.to_bits()).is_some());
+            assert!(
+                parameter_view::ParameterSnapshot::from_words(id as u32, snapshot.value.to_bits())
+                    .is_some()
+            );
             saved.record(id, processor);
         }
         let mut storage = Box::<routing::DualEfxProcessor>::new_uninit();
@@ -93,17 +117,27 @@ mod tests {
         for frame in 0..30_000 {
             let input = if frame == 0 { 0.5 } else { 0.0 };
             let actual = restored.plateau.process_sample(input, input);
-            assert_eq!(actual, processor.plateau.process_sample(input, input), "frame {frame}");
+            assert_eq!(
+                actual,
+                processor.plateau.process_sample(input, input),
+                "frame {frame}"
+            );
             peak = peak.max(actual.0.abs()).max(actual.1.abs());
         }
-        assert!(peak > 0.0001, "the restored predelay must eventually produce output");
+        assert!(
+            peak > 0.0001,
+            "the restored predelay must eventually produce output"
+        );
     }
 
     #[cfg(experimental_plateau_32k)]
     #[test]
     fn plateau_32k_freeze_discards_converter_input_even_on_short_holds() {
-        let params = plateau::PlateauParameters { predelay_ms: 0.0, diffusion: 0.0,
-            ..plateau::PlateauParameters::default() };
+        let params = plateau::PlateauParameters {
+            predelay_ms: 0.0,
+            diffusion: 0.0,
+            ..plateau::PlateauParameters::default()
+        };
         let mut reverb = Box::new(routing::IdlePlateau::new());
         for live in [false, true] {
             for pre_freeze_input in [false, true] {
@@ -114,12 +148,23 @@ mod tests {
                 }
                 let mut frozen = params;
                 frozen.freeze = true;
-                if live { reverb.set_live_parameters(frozen); } else { reverb.set_parameters(frozen); }
+                if live {
+                    reverb.set_live_parameters(frozen);
+                } else {
+                    reverb.set_parameters(frozen);
+                }
                 assert_eq!(reverb.process_sample(0.75, 0.75), (0.0, 0.0));
-                if live { reverb.set_live_parameters(params); } else { reverb.set_parameters(params); }
+                if live {
+                    reverb.set_live_parameters(params);
+                } else {
+                    reverb.set_parameters(params);
+                }
                 for frame in 0..2_000 {
-                    assert_eq!(reverb.process_sample(0.0, 0.0), (0.0, 0.0),
-                        "frozen input replayed at frame {frame}, live={live}, pre={pre_freeze_input}");
+                    assert_eq!(
+                        reverb.process_sample(0.0, 0.0),
+                        (0.0, 0.0),
+                        "frozen input replayed at frame {frame}, live={live}, pre={pre_freeze_input}"
+                    );
                 }
             }
         }
@@ -134,7 +179,10 @@ mod tests {
         assert!(gate.try_enter(CallbackPath::Live).is_none());
         let close = gate.try_close().unwrap();
         assert!(gate.try_close().is_none());
-        assert!(gate.try_enter(CallbackPath::Live).is_none(), "failed close reopened the gate");
+        assert!(
+            gate.try_enter(CallbackPath::Live).is_none(),
+            "failed close reopened the gate"
+        );
         assert!(!close.is_drained());
         drop(live);
         assert!(close.is_drained());
@@ -176,7 +224,10 @@ mod tests {
             let timed_out = gate.try_close().unwrap();
             assert!(!timed_out.is_drained());
             drop(timed_out);
-            assert!(gate.try_enter(CallbackPath::Live).is_none(), "active lease was lost on timeout");
+            assert!(
+                gate.try_enter(CallbackPath::Live).is_none(),
+                "active lease was lost on timeout"
+            );
             let close = gate.try_close().unwrap();
             assert!(!close.is_drained());
             continue_tx.send(()).unwrap();
@@ -200,8 +251,12 @@ mod tests {
         let changing = AtomicBool::new(false);
         let start = Barrier::new(5);
         std::thread::scope(|scope| {
-            for path in [CallbackPath::Live, CallbackPath::Live,
-                         CallbackPath::FileMix, CallbackPath::FileMix] {
+            for path in [
+                CallbackPath::Live,
+                CallbackPath::Live,
+                CallbackPath::FileMix,
+                CallbackPath::FileMix,
+            ] {
                 let (gate, active, changing, start) = (&gate, &active, &changing, &start);
                 scope.spawn(move || {
                     start.wait();
@@ -277,7 +332,9 @@ mod tests {
                 handles.push(scope.spawn(move || {
                     start.wait();
                     let lease = gate.try_enter_live_bypass();
-                    if lease.is_some() { successes.fetch_add(1, Ordering::SeqCst); }
+                    if lease.is_some() {
+                        successes.fetch_add(1, Ordering::SeqCst);
+                    }
                     attempted.wait();
                     release.wait();
                     drop(lease);
@@ -291,7 +348,9 @@ mod tests {
             assert!(!close.is_drained());
             assert!(gate.try_enter_live_bypass().is_none());
             release.wait();
-            for handle in handles { handle.join().unwrap(); }
+            for handle in handles {
+                handle.join().unwrap();
+            }
             assert!(close.is_drained());
             drop(close);
         });
@@ -324,27 +383,48 @@ mod tests {
         assert!(pause.finish(following));
         assert!(!pause.bypass(0));
         let exhausted = AtomicU32::new(u32::MAX & !3);
-        assert!(boundary_pause::BoundaryPause(&exhausted).request().is_none());
+        assert!(
+            boundary_pause::BoundaryPause(&exhausted)
+                .request()
+                .is_none()
+        );
     }
 
     #[test]
     fn ainr_boundary_snapshot_packs_and_reconstructs_the_candidate_tail() {
-        use boundary_pause::{CAPTURE_BYTES, CLONE_BYTES, DESCRIPTOR_OFFSET, SNAPSHOT_END, SNAPSHOT_START};
-        let source: Vec<u8> = (0..SNAPSHOT_END).map(|i| (i.wrapping_mul(37) & 255) as u8).collect();
+        use boundary_pause::{
+            CAPTURE_BYTES, CLONE_BYTES, DESCRIPTOR_OFFSET, SNAPSHOT_END, SNAPSHOT_START,
+        };
+        let source: Vec<u8> = (0..SNAPSHOT_END)
+            .map(|i| (i.wrapping_mul(37) & 255) as u8)
+            .collect();
         let mut packed = vec![0xa5; CAPTURE_BYTES + 2];
-        unsafe { boundary_pause::copy_snapshot(source.as_ptr(), packed.as_mut_ptr().add(1)); }
+        unsafe {
+            boundary_pause::copy_snapshot(source.as_ptr(), packed.as_mut_ptr().add(1));
+        }
         assert_eq!(packed[0], 0xa5);
         assert_eq!(packed[CAPTURE_BYTES + 1], 0xa5);
-        assert_eq!(&packed[1..=CAPTURE_BYTES], &source[SNAPSHOT_START..SNAPSHOT_END]);
-        assert_eq!(&packed[1 + DESCRIPTOR_OFFSET..1 + DESCRIPTOR_OFFSET + 4], &source[0xba4c..0xba50]);
+        assert_eq!(
+            &packed[1..=CAPTURE_BYTES],
+            &source[SNAPSHOT_START..SNAPSHOT_END]
+        );
+        assert_eq!(
+            &packed[1 + DESCRIPTOR_OFFSET..1 + DESCRIPTOR_OFFSET + 4],
+            &source[0xba4c..0xba50]
+        );
 
         let mut clone = vec![0xa5; CLONE_BYTES + 2];
-        unsafe { boundary_pause::install_snapshot(packed.as_ptr().add(1), clone.as_mut_ptr().add(1)); }
+        unsafe {
+            boundary_pause::install_snapshot(packed.as_ptr().add(1), clone.as_mut_ptr().add(1));
+        }
         assert_eq!(clone[0], 0xa5);
         assert_eq!(clone[CLONE_BYTES + 1], 0xa5);
         let clone = &clone[1..=CLONE_BYTES];
         assert!(clone[..SNAPSHOT_START].iter().all(|&byte| byte == 0));
-        assert_eq!(&clone[SNAPSHOT_START..SNAPSHOT_END], &source[SNAPSHOT_START..SNAPSHOT_END]);
+        assert_eq!(
+            &clone[SNAPSHOT_START..SNAPSHOT_END],
+            &source[SNAPSHOT_START..SNAPSHOT_END]
+        );
         assert!(clone[SNAPSHOT_END..].iter().all(|&byte| byte == 0));
     }
 
@@ -443,19 +523,31 @@ mod tests {
                 barrier.wait();
                 assert!(primary.cancel(false));
                 primary.arm();
-                assert!(primary.claim().is_none(), "old installer still owns the primary claim");
+                assert!(
+                    primary.claim().is_none(),
+                    "old installer still owns the primary claim"
+                );
                 barrier.wait();
             });
             // Force cancellation between the validity check and pointer detach.
             assert!(primary.current_claim(installer));
             barrier.wait();
             barrier.wait();
-            assert!(slot.compare_exchange(0x80907c18, 0, Ordering::AcqRel, Ordering::Acquire).is_ok());
-            assert!(primary.claim().is_none(), "no new installer may use the detached buffer");
+            assert!(
+                slot.compare_exchange(0x80907c18, 0, Ordering::AcqRel, Ordering::Acquire)
+                    .is_ok()
+            );
+            assert!(
+                primary.claim().is_none(),
+                "no new installer may use the detached buffer"
+            );
             other.join().unwrap();
         });
         assert!(!primary.finish(installer, 15, true));
-        assert!(primary.claim().is_some(), "only retirement allows another capture");
+        assert!(
+            primary.claim().is_some(),
+            "only retirement allows another capture"
+        );
     }
 
     #[test]
@@ -463,7 +555,10 @@ mod tests {
         use core::sync::atomic::AtomicU32;
         let pause = AtomicU32::new(0);
         let capture = AtomicU32::new(0);
-        let refresh = refresh_handoff::RefreshHandoff { pause: &pause, capture: &capture };
+        let refresh = refresh_handoff::RefreshHandoff {
+            pause: &pause,
+            capture: &capture,
+        };
 
         // Cancellation before the audio task claims the request.
         let unclaimed = refresh.request().unwrap();
@@ -475,7 +570,10 @@ mod tests {
         let (boundary, writer) = refresh.claim().unwrap();
         refresh.cancel(old);
         assert!(refresh.claim_completed(old).is_none());
-        assert!(refresh.request().is_none(), "timed-out writer still owns scratch");
+        assert!(
+            refresh.request().is_none(),
+            "timed-out writer still owns scratch"
+        );
         assert!(!refresh.publish(boundary, writer));
 
         // A late timeout cannot cancel a newer generation.
@@ -505,7 +603,10 @@ mod tests {
         use std::sync::Barrier;
         let pause = AtomicU32::new(0);
         let capture = AtomicU32::new(0);
-        let refresh = refresh_handoff::RefreshHandoff { pause: &pause, capture: &capture };
+        let refresh = refresh_handoff::RefreshHandoff {
+            pause: &pause,
+            capture: &capture,
+        };
         let request = refresh.request().unwrap();
         let barrier = Barrier::new(2);
         std::thread::scope(|scope| {
@@ -531,12 +632,15 @@ mod tests {
         assert!(closed.is_drained());
         let retry = refresh.request().unwrap();
         std::thread::scope(|scope| {
-            scope.spawn(|| {
-                assert!(gate.try_enter(admission::CallbackPath::Live).is_none());
-                assert!(gate.try_enter(admission::CallbackPath::FileMix).is_none());
-                let (boundary, writer) = refresh.claim().unwrap();
-                assert!(refresh.publish(boundary, writer));
-            }).join().unwrap();
+            scope
+                .spawn(|| {
+                    assert!(gate.try_enter(admission::CallbackPath::Live).is_none());
+                    assert!(gate.try_enter(admission::CallbackPath::FileMix).is_none());
+                    let (boundary, writer) = refresh.claim().unwrap();
+                    assert!(refresh.publish(boundary, writer));
+                })
+                .join()
+                .unwrap();
         });
         assert!(closed.is_drained());
         assert!(refresh.release(refresh.claim_completed(retry).unwrap()));
@@ -661,8 +765,9 @@ mod tests {
     #[test]
     fn control_queue_preserves_fifo_at_capacity_and_counter_wrap() {
         use core::sync::atomic::{AtomicU32, Ordering};
-        use event_queue::{Queue, CAPACITY, WORDS_WITH_GENERATIONS};
-        let words: [AtomicU32; WORDS_WITH_GENERATIONS] = [const { AtomicU32::new(0) }; WORDS_WITH_GENERATIONS];
+        use event_queue::{CAPACITY, Queue, WORDS_WITH_GENERATIONS};
+        let words: [AtomicU32; WORDS_WITH_GENERATIONS] =
+            [const { AtomicU32::new(0) }; WORDS_WITH_GENERATIONS];
         let start = u32::MAX - 31;
         words[0].store(start, Ordering::Relaxed);
         words[1].store(start, Ordering::Relaxed);
@@ -670,7 +775,10 @@ mod tests {
         for n in 0..CAPACITY {
             assert_eq!(queue.push(n, || n ^ 0x55aa), Ok(start.wrapping_add(n + 1)));
         }
-        assert_eq!(queue.push(999, || panic!("full queue requested generation")), Err(1));
+        assert_eq!(
+            queue.push(999, || panic!("full queue requested generation")),
+            Err(1)
+        );
         let (head, mut tail) = queue.batch().unwrap();
         for n in 0..CAPACITY {
             assert_ne!(tail, head);
@@ -686,11 +794,14 @@ mod tests {
     #[test]
     fn standalone_queue_does_not_access_generation_storage() {
         use core::sync::atomic::AtomicU32;
-        use event_queue::{Queue, CAPACITY, HEADER_WORDS};
+        use event_queue::{CAPACITY, HEADER_WORDS, Queue};
         let words: [AtomicU32; HEADER_WORDS + CAPACITY as usize] =
             [const { AtomicU32::new(0) }; HEADER_WORDS + CAPACITY as usize];
         let queue = Queue::new(&words, false);
-        assert_eq!(queue.push(77, || panic!("standalone requested a generation")), Ok(1));
+        assert_eq!(
+            queue.push(77, || panic!("standalone requested a generation")),
+            Ok(1)
+        );
         let (head, tail) = queue.batch().unwrap();
         assert_eq!((head, tail), (1, 0));
         assert_eq!(queue.push(88, || 1), Ok(2));
@@ -704,8 +815,9 @@ mod tests {
     #[test]
     fn control_queue_rejects_impossible_indices_without_consuming() {
         use core::sync::atomic::{AtomicU32, Ordering};
-        use event_queue::{Queue, CAPACITY, WORDS_WITH_GENERATIONS};
-        let words: [AtomicU32; WORDS_WITH_GENERATIONS] = [const { AtomicU32::new(0) }; WORDS_WITH_GENERATIONS];
+        use event_queue::{CAPACITY, Queue, WORDS_WITH_GENERATIONS};
+        let words: [AtomicU32; WORDS_WITH_GENERATIONS] =
+            [const { AtomicU32::new(0) }; WORDS_WITH_GENERATIONS];
         let queue = Queue::new(&words, true);
         for (head, tail) in [(65, 0), (0, 1), (u32::MAX, 0), (32, u32::MAX - 32)] {
             words[0].store(head, Ordering::Relaxed);
@@ -722,13 +834,16 @@ mod tests {
     fn control_queue_publishes_events_with_their_generations_between_threads() {
         use core::sync::atomic::AtomicU32;
         use event_queue::{Queue, WORDS_WITH_GENERATIONS};
-        let words: [AtomicU32; WORDS_WITH_GENERATIONS] = [const { AtomicU32::new(0) }; WORDS_WITH_GENERATIONS];
+        let words: [AtomicU32; WORDS_WITH_GENERATIONS] =
+            [const { AtomicU32::new(0) }; WORDS_WITH_GENERATIONS];
         let queue = Queue::new(&words, true);
         let mut mismatch = None;
         std::thread::scope(|scope| {
             scope.spawn(|| {
                 for n in 0..100_000u32 {
-                    while queue.push(n, || !n).is_err() { std::thread::yield_now(); }
+                    while queue.push(n, || !n).is_err() {
+                        std::thread::yield_now();
+                    }
                 }
             });
             let mut expected = 0u32;
@@ -749,7 +864,10 @@ mod tests {
         assert_eq!(mismatch, None);
     }
 
-    fn paired_reverb_return() -> (Box<routing::DualEfxProcessor>, Box<routing::DualEfxProcessor>) {
+    fn paired_reverb_return() -> (
+        Box<routing::DualEfxProcessor>,
+        Box<routing::DualEfxProcessor>,
+    ) {
         let mut actual = Box::new(routing::DualEfxProcessor::new());
         let mut expected = Box::new(routing::DualEfxProcessor::new());
         for processor in [&mut actual, &mut expected] {
@@ -787,9 +905,17 @@ mod tests {
             cascade.set_parameters(direct.current);
             for frame in 0..64 {
                 random = random.wrapping_mul(1664525).wrapping_add(1013904223);
-                let a = if block % 300 < 200 { ((random >> 8) as f32 / 16777216.0 - 0.5) * 0.5 } else { 0.0 };
+                let a = if block % 300 < 200 {
+                    ((random >> 8) as f32 / 16777216.0 - 0.5) * 0.5
+                } else {
+                    0.0
+                };
                 random = random.wrapping_mul(1664525).wrapping_add(1013904223);
-                let c = if block % 500 < 400 { ((random >> 8) as f32 / 16777216.0 - 0.5) * 0.3 } else { 0.0 };
+                let c = if block % 500 < 400 {
+                    ((random >> 8) as f32 / 16777216.0 - 0.5) * 0.3
+                } else {
+                    0.0
+                };
                 if (260..320).contains(&(block % 400)) {
                     let expected = direct.process_sample(a, c);
                     cascade.process_sample(0.0, 0.0);
@@ -817,12 +943,18 @@ mod tests {
             engine.init(params);
             for channel in &mut engine.channels {
                 channel.banks[0].count = 1;
-                channel.banks[0].storage[0] = velvet::Tap { delay: 0, gain: 1.0 };
+                channel.banks[0].storage[0] = velvet::Tap {
+                    delay: 0,
+                    gain: 1.0,
+                };
             }
         }
         for _ in 0..100 {
             assert_eq!(direct.process_sample(0.5, 0.5), (0.0, 0.0));
-            assert_eq!(shared.process_shared_mono(&mut history, 0.5, 0.5), ((0.0, 0.0), (0.0, 0.0)));
+            assert_eq!(
+                shared.process_shared_mono(&mut history, 0.5, 0.5),
+                ((0.0, 0.0), (0.0, 0.0))
+            );
         }
         params.amount = 1.0;
         direct.set_parameters(params);
@@ -833,7 +965,11 @@ mod tests {
             let (a, cascade) = shared.process_shared_mono(&mut history, 0.5, 0.5);
             assert_eq!(stereo, a);
             assert_eq!(a, cascade);
-            assert!(stereo.0 >= previous && stereo.0 - previous < 0.02, "frame {frame}: {previous} -> {}", stereo.0);
+            assert!(
+                stereo.0 >= previous && stereo.0 - previous < 0.02,
+                "frame {frame}: {previous} -> {}",
+                stereo.0
+            );
             previous = stereo.0;
         }
         assert!(previous > 0.4);
@@ -850,7 +986,11 @@ mod tests {
             let (a, cascade) = shared.process_shared_mono(&mut history, 0.5, 0.5);
             assert_eq!(stereo, a);
             assert_eq!(a, cascade);
-            assert!((stereo.0 - previous).abs() < 0.02, "frame {frame}: {previous} -> {}", stereo.0);
+            assert!(
+                (stereo.0 - previous).abs() < 0.02,
+                "frame {frame}: {previous} -> {}",
+                stereo.0
+            );
             previous = stereo.0;
         }
         assert!(previous > 0.4);
@@ -859,14 +999,17 @@ mod tests {
         direct.reset();
         for channel in &mut direct.channels {
             channel.banks[0].count = 1;
-            channel.banks[0].storage[0] = velvet::Tap { delay: 0, gain: 1.0 };
+            channel.banks[0].storage[0] = velvet::Tap {
+                delay: 0,
+                gain: 1.0,
+            };
         }
         assert_eq!(direct.process_sample(0.5, 0.5), (0.0, 0.0));
     }
 
     #[test]
     fn cascade_encoder_edits_ramp_reverb_input() {
-        use parameters::{edit_encoder, ParameterBank};
+        use parameters::{ParameterBank, edit_encoder};
         let mut processor = Box::new(routing::DualEfxProcessor::new());
         let configure = |p: &mut routing::DualEfxProcessor| {
             p.init();
@@ -875,7 +1018,10 @@ mod tests {
             p.velvet.init(params);
             for channel in &mut p.velvet.channels {
                 channel.banks[0].count = 1;
-                channel.banks[0].storage[0] = velvet::Tap { delay: 0, gain: 1.0 };
+                channel.banks[0].storage[0] = velvet::Tap {
+                    delay: 0,
+                    gain: 1.0,
+                };
             }
         };
         configure(&mut processor);
@@ -890,9 +1036,11 @@ mod tests {
         lp.set_cutoff(14_080.0);
         let mut hp = plateau::OnePoleHP::new();
         hp.set_cutoff(13.75);
-        let filter = |x, dc: &mut plateau::OnePoleHP, lp: &mut plateau::OnePoleLP, hp: &mut plateau::OnePoleHP| {
-            hp.process(lp.process(dc.process(x)))
-        };
+        let filter =
+            |x,
+             dc: &mut plateau::OnePoleHP,
+             lp: &mut plateau::OnePoleLP,
+             hp: &mut plateau::OnePoleHP| { hp.process(lp.process(dc.process(x))) };
         let sample = math::soft_clip(0.5);
         let mut previous = last_predelay(&processor);
         assert!((previous - filter(sample, &mut dc, &mut lp, &mut hp)).abs() < 1e-6);
@@ -912,8 +1060,14 @@ mod tests {
             gain += step;
             processor.process_bus_sample(0.0, 0.0, 0.5);
             let next = last_predelay(&processor);
-            assert!((next - previous).abs() < 0.02, "frame {frame}: {previous} -> {next}");
-            assert!((next - filter(sample * gain, &mut dc, &mut lp, &mut hp)).abs() < 1e-6, "frame {frame}");
+            assert!(
+                (next - previous).abs() < 0.02,
+                "frame {frame}: {previous} -> {next}"
+            );
+            assert!(
+                (next - filter(sample * gain, &mut dc, &mut lp, &mut hp)).abs() < 1e-6,
+                "frame {frame}"
+            );
             previous = next;
         }
         edit_encoder(&mut processor, ParameterBank::Velvet, 7, -10).unwrap();
@@ -922,8 +1076,14 @@ mod tests {
             gain = if frame == 63 { 0.0 } else { gain + step };
             processor.process_bus_sample(0.0, 0.0, 0.5);
             let next = last_predelay(&processor);
-            assert!(next <= previous && previous - next < 0.02, "fade-out frame {frame}");
-            assert!((next - filter(sample * gain, &mut dc, &mut lp, &mut hp)).abs() < 1e-6, "fade-out frame {frame}");
+            assert!(
+                next <= previous && previous - next < 0.02,
+                "fade-out frame {frame}"
+            );
+            assert!(
+                (next - filter(sample * gain, &mut dc, &mut lp, &mut hp)).abs() < 1e-6,
+                "fade-out frame {frame}"
+            );
             previous = next;
         }
 
@@ -948,12 +1108,26 @@ mod tests {
             processor.process_stereo_send(&[0.5], &[0.5], &mut left, &mut right, true, true);
             let next = last_predelay(&processor);
             assert!((next - previous).abs() < 0.02, "stereo frame {frame}");
-            assert!((next - filter(0.5 + sample * (1.0 - (frame + 1) as f32 / 64.0), &mut dc, &mut lp, &mut hp)).abs() < 1e-6);
+            assert!(
+                (next
+                    - filter(
+                        0.5 + sample * (1.0 - (frame + 1) as f32 / 64.0),
+                        &mut dc,
+                        &mut lp,
+                        &mut hp
+                    ))
+                .abs()
+                    < 1e-6
+            );
             previous = next;
         }
         processor.cascade_gain = 0.25;
         processor.process_stereo_send(&[0.5], &[0.5], &mut left, &mut right, true, true);
-        assert!((last_predelay(&processor) - filter(0.5 + sample * 0.25, &mut dc, &mut lp, &mut hp)).abs() < 1e-6);
+        assert!(
+            (last_predelay(&processor) - filter(0.5 + sample * 0.25, &mut dc, &mut lp, &mut hp))
+                .abs()
+                < 1e-6
+        );
     }
 
     #[test]
@@ -987,13 +1161,19 @@ mod tests {
         (idle, reference)
     }
 
-    fn assert_idle_reverb_frame(idle: &mut routing::IdlePlateau,
-                                reference: &mut plateau::PlateauReverb,
-                                input: f32, frame: usize) {
+    fn assert_idle_reverb_frame(
+        idle: &mut routing::IdlePlateau,
+        reference: &mut plateau::PlateauReverb,
+        input: f32,
+        frame: usize,
+    ) {
         let actual = idle.process_sample(input, input);
         let expected = reference.process_sample(input, input);
-        assert_eq!((actual.0.to_bits(), actual.1.to_bits()),
-                   (expected.0.to_bits(), expected.1.to_bits()), "frame {frame}");
+        assert_eq!(
+            (actual.0.to_bits(), actual.1.to_bits()),
+            (expected.0.to_bits(), expected.1.to_bits()),
+            "frame {frame}"
+        );
     }
 
     #[test]
@@ -1032,7 +1212,7 @@ mod tests {
 
     #[test]
     fn plateau_live_encoder_edits_match_full_parameter_updates() {
-        use parameters::{edit_encoder, ParameterBank};
+        use parameters::{ParameterBank, edit_encoder};
         let (mut fast, mut reference) = paired_reverb_return();
         let mut peak = 0.0f32;
         for frame in 0..100_000 {
@@ -1043,16 +1223,26 @@ mod tests {
                 let turn = elapsed / period;
                 // The rapid sequence reverses predelay and diffusion before
                 // their previous smoothing ramps have finished.
-                let encoder = if slow { [0, 1, 2, 5, 6, 7, 3, 4][turn % 8] }
-                    else { [0, 0, 5, 5, 1, 7, 6, 2, 3, 4][turn % 10] };
+                let encoder = if slow {
+                    [0, 1, 2, 5, 6, 7, 3, 4][turn % 8]
+                } else {
+                    [0, 0, 5, 5, 1, 7, 6, 2, 3, 4][turn % 10]
+                };
                 let delta = if turn % 2 == 0 { 3 } else { -4 };
                 let mut p = reference.plateau.params;
                 match encoder {
-                    0 => p.predelay_ms = math::clamp(p.predelay_ms + delta as f32 * 2.0, 0.0, 190.0),
+                    0 => {
+                        p.predelay_ms = math::clamp(p.predelay_ms + delta as f32 * 2.0, 0.0, 190.0)
+                    }
                     1 => p.size += delta as f32 * 0.02,
                     2 => p.decay += delta as f32 * 0.02,
-                    3 => p.low_cut_hz = math::clamp(p.low_cut_hz + delta as f32 * 20.0, 20.0, 1000.0),
-                    4 => p.high_cut_hz = math::clamp(p.high_cut_hz + delta as f32 * 250.0, 1000.0, 16000.0),
+                    3 => {
+                        p.low_cut_hz = math::clamp(p.low_cut_hz + delta as f32 * 20.0, 20.0, 1000.0)
+                    }
+                    4 => {
+                        p.high_cut_hz =
+                            math::clamp(p.high_cut_hz + delta as f32 * 250.0, 1000.0, 16000.0)
+                    }
                     5 => p.diffusion += delta as f32 * 0.05,
                     6 => p.mod_depth += delta as f32 * 0.25,
                     _ => p.freeze = delta > 0,
@@ -1071,10 +1261,16 @@ mod tests {
 
     #[test]
     fn plateau_live_edits_clamp_like_full_setter() {
-        use parameters::{edit_encoder, ParameterBank};
+        use parameters::{ParameterBank, edit_encoder};
         let (mut fast, mut reference) = paired_reverb_return();
-        for (encoder, delta) in [(0, i32::MAX), (0, i32::MIN), (1, i32::MAX),
-                                 (1, i32::MIN), (5, i32::MAX), (5, i32::MIN)] {
+        for (encoder, delta) in [
+            (0, i32::MAX),
+            (0, i32::MIN),
+            (1, i32::MAX),
+            (1, i32::MIN),
+            (5, i32::MAX),
+            (5, i32::MIN),
+        ] {
             let mut p = reference.plateau.params;
             let step = delta as f32;
             match encoder {
@@ -1085,23 +1281,34 @@ mod tests {
             }
             reference.plateau.set_parameters(p);
             assert!(edit_encoder(&mut fast, ParameterBank::Plateau, encoder, delta).is_some());
-            assert_eq!(fast.plateau.params.predelay_ms, reference.plateau.params.predelay_ms);
+            assert_eq!(
+                fast.plateau.params.predelay_ms,
+                reference.plateau.params.predelay_ms
+            );
             assert_eq!(fast.plateau.params.size, reference.plateau.params.size);
-            assert_eq!(fast.plateau.params.diffusion, reference.plateau.params.diffusion);
+            assert_eq!(
+                fast.plateau.params.diffusion,
+                reference.plateau.params.diffusion
+            );
             if encoder == 1 && delta == i32::MIN {
                 assert_eq!(fast.plateau.params.size, 0.01);
             }
             for frame in 0..128 {
                 let input = if frame == 0 { 0.5 } else { 0.0 };
-                assert_eq!(fast.process_bus_sample(0.0, input, 0.0),
-                           reference.process_bus_sample(0.0, input, 0.0));
+                assert_eq!(
+                    fast.process_bus_sample(0.0, input, 0.0),
+                    reference.process_bus_sample(0.0, input, 0.0)
+                );
             }
         }
     }
 
     #[test]
     fn parameter_handoff_restores_each_latest_applied_value() {
-        use parameters::{edit_encoder, format_parameter, snapshot_parameter, EfxParamId as Id, ParameterBank, ParameterHandoff};
+        use parameters::{
+            EfxParamId as Id, ParameterBank, ParameterHandoff, edit_encoder, format_parameter,
+            snapshot_parameter,
+        };
         let mut source = Box::new(routing::DualEfxProcessor::new());
         let mut restored = Box::new(routing::DualEfxProcessor::new());
         source.init();
@@ -1110,7 +1317,11 @@ mod tests {
         let mut ids = Vec::new();
         for bank in [ParameterBank::Velvet, ParameterBank::Plateau] {
             for encoder in 0..8 {
-                let delta = if bank == ParameterBank::Velvet && (encoder == 5 || encoder == 7) { -1 } else { 1 };
+                let delta = if bank == ParameterBank::Velvet && (encoder == 5 || encoder == 7) {
+                    -1
+                } else {
+                    1
+                };
                 let id = edit_encoder(&mut source, bank, encoder, delta).unwrap();
                 handoff.record(id, &source);
                 ids.push(id);
@@ -1121,15 +1332,33 @@ mod tests {
         handoff.record(id, &source);
         handoff.restore(&mut restored);
         for id in ids {
-            assert_eq!(snapshot_parameter(id, &restored).value.to_bits(),
-                       snapshot_parameter(id, &source).value.to_bits(), "{id:?}");
+            assert_eq!(
+                snapshot_parameter(id, &restored).value.to_bits(),
+                snapshot_parameter(id, &source).value.to_bits(),
+                "{id:?}"
+            );
         }
         // Applying the handoff to fresh state does not claim to restore tails.
-        assert_eq!(restored.velvet.current.amount.to_bits(), source.velvet.current.amount.to_bits());
-        assert_eq!(restored.plateau.params.size.to_bits(), source.plateau.params.size.to_bits());
-        assert_eq!(restored.plateau.params.decay.to_bits(), source.plateau.params.decay.to_bits());
-        assert_eq!(restored.plateau.params.diffusion.to_bits(), source.plateau.params.diffusion.to_bits());
-        assert_eq!(restored.cascade_gain.to_bits(), source.cascade_gain.to_bits());
+        assert_eq!(
+            restored.velvet.current.amount.to_bits(),
+            source.velvet.current.amount.to_bits()
+        );
+        assert_eq!(
+            restored.plateau.params.size.to_bits(),
+            source.plateau.params.size.to_bits()
+        );
+        assert_eq!(
+            restored.plateau.params.decay.to_bits(),
+            source.plateau.params.decay.to_bits()
+        );
+        assert_eq!(
+            restored.plateau.params.diffusion.to_bits(),
+            source.plateau.params.diffusion.to_bits()
+        );
+        assert_eq!(
+            restored.cascade_gain.to_bits(),
+            source.cascade_gain.to_bits()
+        );
 
         // Refresh edits can also clamp the transition length, so they must
         // replace both stored values before the next selection.
@@ -1140,8 +1369,14 @@ mod tests {
         restored.init();
         handoff.restore(&mut restored);
         assert_eq!(source.velvet.current.transition_ms, 450.0);
-        assert_eq!(restored.velvet.current.refresh_seconds, source.velvet.current.refresh_seconds);
-        assert_eq!(restored.velvet.current.transition_ms, source.velvet.current.transition_ms);
+        assert_eq!(
+            restored.velvet.current.refresh_seconds,
+            source.velvet.current.refresh_seconds
+        );
+        assert_eq!(
+            restored.velvet.current.transition_ms,
+            source.velvet.current.transition_ms
+        );
 
         // Preserve the requested density across a parameter handoff.
         source.init();
@@ -1181,7 +1416,12 @@ mod tests {
         params.high_cut_hz = 1000.0;
         source.plateau.set_parameters(params);
         let handoff = ParameterHandoff::new();
-        for id in [Id::PlatPreDelay, Id::PlatDiffusion, Id::PlatLowCut, Id::PlatHighCut] {
+        for id in [
+            Id::PlatPreDelay,
+            Id::PlatDiffusion,
+            Id::PlatLowCut,
+            Id::PlatHighCut,
+        ] {
             handoff.record(id, &source);
         }
         handoff.restore(&mut restored);
@@ -1190,18 +1430,35 @@ mod tests {
         assert_eq!(restored.plateau.l_apf1.gain, expected.plateau.l_apf1.gain);
         for frame in 0..16_000 {
             let input = if frame == 0 { 0.5 } else { 0.0 };
-            assert_eq!(restored.plateau.process_sample(input, input),
-                       expected.plateau.process_sample(input, input), "frame {frame}");
+            assert_eq!(
+                restored.plateau.process_sample(input, input),
+                expected.plateau.process_sample(input, input),
+                "frame {frame}"
+            );
         }
     }
 
     #[test]
     fn parameter_handoff_replays_full_control_state_from_first_frame() {
         use parameters::{EfxParamId as Id, ParameterHandoff};
-        let ids = [Id::VndAmount, Id::VndTimeSpread, Id::VndDensity, Id::VndDecay,
-            Id::VndRefresh, Id::VndMode, Id::VndTransition, Id::PlatPreDelay,
-            Id::PlatSize, Id::PlatDecay, Id::PlatLowCut, Id::PlatHighCut,
-            Id::PlatDiffusion, Id::PlatModDepth, Id::PlatFreeze, Id::GlobalCascade];
+        let ids = [
+            Id::VndAmount,
+            Id::VndTimeSpread,
+            Id::VndDensity,
+            Id::VndDecay,
+            Id::VndRefresh,
+            Id::VndMode,
+            Id::VndTransition,
+            Id::PlatPreDelay,
+            Id::PlatSize,
+            Id::PlatDecay,
+            Id::PlatLowCut,
+            Id::PlatHighCut,
+            Id::PlatDiffusion,
+            Id::PlatModDepth,
+            Id::PlatFreeze,
+            Id::GlobalCascade,
+        ];
         for case in 0..4 {
             let mut source = Box::new(routing::DualEfxProcessor::new());
             let mut actual = Box::new(routing::DualEfxProcessor::new());
@@ -1230,7 +1487,9 @@ mod tests {
             source.plateau.set_parameters(plateau);
             source.cascade_gain = [0.0, 0.25, 0.75, 1.0][case];
             let handoff = ParameterHandoff::new();
-            for id in ids { handoff.record(id, &source); }
+            for id in ids {
+                handoff.record(id, &source);
+            }
             handoff.restore(&mut actual);
             expected.velvet.init(source.velvet.current);
             expected.plateau.init(source.plateau.params);
@@ -1241,7 +1500,11 @@ mod tests {
                 let b = if frame % 113 == 0 { -0.2 } else { 0.0 };
                 let cascade = if frame % 379 == 0 { 0.1 } else { 0.0 };
                 let output = actual.process_bus_sample(a, b, cascade);
-                assert_eq!(output, expected.process_bus_sample(a, b, cascade), "case {case}, frame {frame}");
+                assert_eq!(
+                    output,
+                    expected.process_bus_sample(a, b, cascade),
+                    "case {case}, frame {frame}"
+                );
                 peak = peak.max(output.0.abs()).max(output.1.abs());
             }
             assert!(peak > 0.0001, "case {case} did not exercise output");
@@ -1250,15 +1513,24 @@ mod tests {
 
     #[test]
     fn velvet_refresh_encoder_covers_full_range_after_restore() {
-        use parameters::{edit_encoder, snapshot_parameter, EfxParamId, ParameterBank, ParameterHandoff, ParameterSnapshot};
+        use parameters::{
+            EfxParamId, ParameterBank, ParameterHandoff, ParameterSnapshot, edit_encoder,
+            snapshot_parameter,
+        };
         let mut source_storage = Box::<routing::DualEfxProcessor>::new_uninit();
         let source = routing::DualEfxProcessor::initialize_in_place(&mut source_storage);
-        assert_eq!(edit_encoder(source, ParameterBank::Velvet, 4, 110), Some(EfxParamId::VndRefresh));
+        assert_eq!(
+            edit_encoder(source, ParameterBank::Velvet, 4, 110),
+            Some(EfxParamId::VndRefresh)
+        );
         assert_eq!(source.velvet.current.refresh_seconds, 60.0);
         edit_encoder(source, ParameterBank::Velvet, 4, 1);
         assert_eq!(source.velvet.current.refresh_seconds, 60.0);
         let snapshot = snapshot_parameter(EfxParamId::VndRefresh, source);
-        assert!(ParameterSnapshot::from_words(EfxParamId::VndRefresh as u32, snapshot.value.to_bits()).is_some());
+        assert!(
+            ParameterSnapshot::from_words(EfxParamId::VndRefresh as u32, snapshot.value.to_bits())
+                .is_some()
+        );
 
         let handoff = ParameterHandoff::new();
         handoff.record(EfxParamId::VndRefresh, source);
@@ -1274,7 +1546,7 @@ mod tests {
 
     #[test]
     fn velvet_density_display_tracks_the_generated_tap_count() {
-        use parameters::{snapshot_parameter, EfxParamId, ParameterSnapshot};
+        use parameters::{EfxParamId, ParameterSnapshot, snapshot_parameter};
         let mut processor = Box::new(routing::DualEfxProcessor::new());
         processor.init();
         for (spread, requested, expected_taps, expected_density) in [
@@ -1293,7 +1565,13 @@ mod tests {
             let snapshot = snapshot_parameter(EfxParamId::VndDensity, &processor);
             assert!((snapshot.value - expected_density).abs() < 0.01);
             assert_eq!(processor.velvet.current.density, requested);
-            assert!(ParameterSnapshot::from_words(EfxParamId::VndDensity as u32, snapshot.value.to_bits()).is_some());
+            assert!(
+                ParameterSnapshot::from_words(
+                    EfxParamId::VndDensity as u32,
+                    snapshot.value.to_bits()
+                )
+                .is_some()
+            );
         }
     }
 
@@ -1322,21 +1600,29 @@ mod tests {
         let mut gesture = controls::EfxSelectGesture::default();
         let events = [
             // An ordinary short press.
-            (true, 100, 1, Action::None), (false, 250, 2, Action::SelectNext),
+            (true, 100, 1, Action::None),
+            (false, 250, 2, Action::SelectNext),
             // The first release is lost; the next press starts afresh.
-            (true, 1000, 3, Action::None), (true, 3000, 5, Action::None),
+            (true, 1000, 3, Action::None),
+            (true, 3000, 5, Action::None),
             (false, 3150, 6, Action::SelectNext),
             // A lost release and following press cannot create a hold.
-            (true, 4000, 7, Action::None), (false, 6000, 10, Action::None),
-            (true, 7000, 11, Action::None), (false, 8500, 12, Action::ToggleInspector),
+            (true, 4000, 7, Action::None),
+            (false, 6000, 10, Action::None),
+            (true, 7000, 11, Action::None),
+            (false, 8500, 12, Action::ToggleInspector),
             // An unassociated event cancels; tick and sequence can wrap.
-            (true, 9000, 13, Action::None), (false, 10000, 0, Action::None),
+            (true, 9000, 13, Action::None),
+            (false, 10000, 0, Action::None),
             (true, u32::MAX - 99, u32::MAX, Action::None),
             (false, 650, 1, Action::ToggleInspector),
         ];
         for (pressed, tick, sequence, expected) in events {
-            assert_eq!(gesture.sequenced_edge(pressed, tick, sequence, 750), expected,
-                "unexpected gesture for sequence {sequence}");
+            assert_eq!(
+                gesture.sequenced_edge(pressed, tick, sequence, 750),
+                expected,
+                "unexpected gesture for sequence {sequence}"
+            );
         }
         // Switching between tagged and untagged sources cannot reuse a press.
         assert_eq!(gesture.sequenced_edge(true, 100, 2, 750), Action::None);
@@ -1356,20 +1642,32 @@ mod tests {
         assert_eq!(gesture.sequenced_edge(false, 3150, 4, 750), Action::None);
         // A clean following gesture still works.
         assert_eq!(gesture.sequenced_edge(true, 4000, 5, 750), Action::None);
-        assert_eq!(gesture.sequenced_edge(false, 4100, 6, 750), Action::SelectNext);
+        assert_eq!(
+            gesture.sequenced_edge(false, 4100, 6, 750),
+            Action::SelectNext
+        );
         assert_eq!(gesture.sequenced_edge(true, 5000, 7, 750), Action::None);
-        assert_eq!(gesture.sequenced_edge(false, 6000, 8, 750), Action::ToggleInspector);
+        assert_eq!(
+            gesture.sequenced_edge(false, 6000, 8, 750),
+            Action::ToggleInspector
+        );
         // A detected gap discards ambiguity and permits a fresh press.
         assert_eq!(gesture.sequenced_edge(true, 7000, 9, 750), Action::None);
         assert_eq!(gesture.sequenced_edge(true, 7100, 10, 750), Action::None);
         assert_eq!(gesture.sequenced_edge(true, 8000, 12, 750), Action::None);
-        assert_eq!(gesture.sequenced_edge(false, 8100, 13, 750), Action::SelectNext);
+        assert_eq!(
+            gesture.sequenced_edge(false, 8100, 13, 750),
+            Action::SelectNext
+        );
         // Losing the tag explicitly cancels the ambiguous gesture.
         assert_eq!(gesture.sequenced_edge(true, 9000, 14, 750), Action::None);
         assert_eq!(gesture.sequenced_edge(true, 9100, 15, 750), Action::None);
         assert_eq!(gesture.sequenced_edge(false, 9200, 0, 750), Action::None);
         assert_eq!(gesture.sequenced_edge(true, 10000, 20, 750), Action::None);
-        assert_eq!(gesture.sequenced_edge(false, 10100, 21, 750), Action::SelectNext);
+        assert_eq!(
+            gesture.sequenced_edge(false, 10100, 21, 750),
+            Action::SelectNext
+        );
 
         let mut untagged = controls::EfxSelectGesture::default();
         assert_eq!(untagged.edge(true, 100, 750), Action::None);
@@ -1382,22 +1680,48 @@ mod tests {
     #[test]
     fn panel_efx_decoder_requires_complete_matching_frames() {
         let mut decoder = controls::PanelEfxDecoder::default();
-        let bytes = [0x91, 4, 6, 0x90, 4, 6, 0x91, 3, 6, 0x91, 4, 0xe1,
-                     6, 0x91, 4, 0x90, 4, 6, 4, 6];
-        let events: Vec<_> = bytes.into_iter().filter_map(|byte| decoder.feed(byte)).collect();
+        let bytes = [
+            0x91, 4, 6, 0x90, 4, 6, 0x91, 3, 6, 0x91, 4, 0xe1, 6, 0x91, 4, 0x90, 4, 6, 4, 6,
+        ];
+        let events: Vec<_> = bytes
+            .into_iter()
+            .filter_map(|byte| decoder.feed(byte))
+            .collect();
         assert_eq!(events, [true, false, false]);
     }
 
     #[test]
     fn inspector_encoders_edit_and_display_actual_parameters() {
-        use parameters::{edit_encoder, format_parameter, EfxParamId as Id, ParameterBank as Bank};
+        use parameters::{EfxParamId as Id, ParameterBank as Bank, edit_encoder, format_parameter};
         let mut processor = Box::new(routing::DualEfxProcessor::new());
         processor.init();
         let banks = [
-            (Bank::Velvet, [Id::VndAmount, Id::VndTimeSpread, Id::VndDensity,
-                Id::VndDecay, Id::VndRefresh, Id::VndMode, Id::VndTransition, Id::GlobalCascade]),
-            (Bank::Plateau, [Id::PlatPreDelay, Id::PlatSize, Id::PlatDecay,
-                Id::PlatLowCut, Id::PlatHighCut, Id::PlatDiffusion, Id::PlatModDepth, Id::PlatFreeze]),
+            (
+                Bank::Velvet,
+                [
+                    Id::VndAmount,
+                    Id::VndTimeSpread,
+                    Id::VndDensity,
+                    Id::VndDecay,
+                    Id::VndRefresh,
+                    Id::VndMode,
+                    Id::VndTransition,
+                    Id::GlobalCascade,
+                ],
+            ),
+            (
+                Bank::Plateau,
+                [
+                    Id::PlatPreDelay,
+                    Id::PlatSize,
+                    Id::PlatDecay,
+                    Id::PlatLowCut,
+                    Id::PlatHighCut,
+                    Id::PlatDiffusion,
+                    Id::PlatModDepth,
+                    Id::PlatFreeze,
+                ],
+            ),
         ];
         for (bank, ids) in banks {
             for (encoder, id) in ids.into_iter().enumerate() {
@@ -1405,7 +1729,11 @@ mod tests {
                 let delta = if id == Id::PlatFreeze { 1 } else { -1 };
                 assert_eq!(edit_encoder(&mut processor, bank, encoder, delta), Some(id));
                 let after = format_parameter(id, &processor);
-                assert_ne!(&before.value_str[..before.value_len], &after.value_str[..after.value_len], "{id:?}");
+                assert_ne!(
+                    &before.value_str[..before.value_len],
+                    &after.value_str[..after.value_len],
+                    "{id:?}"
+                );
             }
             assert_eq!(edit_encoder(&mut processor, bank, 8, 1), None);
             assert_eq!(edit_encoder(&mut processor, bank, 0, 0), None);
@@ -1435,13 +1763,30 @@ mod tests {
 
     #[test]
     fn display_snapshot_does_not_borrow_live_dsp_state() {
-        use parameters::{format_parameter, format_snapshot, snapshot_parameter, EfxParamId as Id, ParameterSnapshot};
+        use parameters::{
+            EfxParamId as Id, ParameterSnapshot, format_parameter, format_snapshot,
+            snapshot_parameter,
+        };
         let mut processor = Box::new(routing::DualEfxProcessor::new());
         processor.init();
-        let ids = [Id::VndAmount, Id::VndTimeSpread, Id::VndDensity, Id::VndDecay,
-            Id::VndRefresh, Id::VndMode, Id::VndTransition, Id::PlatPreDelay,
-            Id::PlatSize, Id::PlatDecay, Id::PlatLowCut, Id::PlatHighCut,
-            Id::PlatDiffusion, Id::PlatModDepth, Id::PlatFreeze, Id::GlobalCascade];
+        let ids = [
+            Id::VndAmount,
+            Id::VndTimeSpread,
+            Id::VndDensity,
+            Id::VndDecay,
+            Id::VndRefresh,
+            Id::VndMode,
+            Id::VndTransition,
+            Id::PlatPreDelay,
+            Id::PlatSize,
+            Id::PlatDecay,
+            Id::PlatLowCut,
+            Id::PlatHighCut,
+            Id::PlatDiffusion,
+            Id::PlatModDepth,
+            Id::PlatFreeze,
+            Id::GlobalCascade,
+        ];
         let snapshots = ids.map(|id| snapshot_parameter(id, &processor));
         let original = ids.map(|id| format_parameter(id, &processor));
         processor.velvet.current.amount = 0.0;
@@ -1449,10 +1794,15 @@ mod tests {
         processor.plateau.params.freeze = true;
         processor.cascade_gain = 0.0;
         for (snapshot, expected) in snapshots.into_iter().zip(original) {
-            let copied = ParameterSnapshot::from_words(snapshot.id as u32, snapshot.value.to_bits()).unwrap();
+            let copied =
+                ParameterSnapshot::from_words(snapshot.id as u32, snapshot.value.to_bits())
+                    .unwrap();
             let actual = format_snapshot(copied);
             assert_eq!(actual.title, expected.title);
-            assert_eq!(&actual.value_str[..actual.value_len], &expected.value_str[..expected.value_len]);
+            assert_eq!(
+                &actual.value_str[..actual.value_len],
+                &expected.value_str[..expected.value_len]
+            );
         }
         assert!(ParameterSnapshot::from_words(16, 0).is_none());
         assert!(ParameterSnapshot::from_words(Id::VndAmount as u32, f32::NAN.to_bits()).is_none());
@@ -1463,33 +1813,52 @@ mod tests {
     fn display_snapshot_rejects_values_outside_applied_parameter_ranges() {
         use parameter_view::{EfxParamId as Id, ParameterSnapshot};
         let ranges: [(Id, f32, f32); 14] = [
-            (Id::VndAmount, 0.0, 100.0), (Id::VndTimeSpread, 1.0, 100.0),
-            (Id::VndDensity, 10.0, 4600.0), (Id::VndDecay, -120.0, 0.0),
-            (Id::VndRefresh, 0.1, 60.0), (Id::VndTransition, 1.0, 54000.0),
-            (Id::PlatPreDelay, 0.0, plateau::MAX_PREDELAY_MS), (Id::PlatSize, 0.01 * 100.0, plateau::MAX_SIZE * 100.0),
+            (Id::VndAmount, 0.0, 100.0),
+            (Id::VndTimeSpread, 1.0, 100.0),
+            (Id::VndDensity, 10.0, 4600.0),
+            (Id::VndDecay, -120.0, 0.0),
+            (Id::VndRefresh, 0.1, 60.0),
+            (Id::VndTransition, 1.0, 54000.0),
+            (Id::PlatPreDelay, 0.0, plateau::MAX_PREDELAY_MS),
+            (Id::PlatSize, 0.01 * 100.0, plateau::MAX_SIZE * 100.0),
             (Id::PlatDecay, 0.1 * 100.0, 0.999 * 100.0),
             (Id::PlatLowCut, 20.0, plateau::SAMPLE_RATE * 0.49),
             (Id::PlatHighCut, 20.0, plateau::SAMPLE_RATE * 0.49),
-            (Id::PlatDiffusion, 0.0, 100.0), (Id::PlatModDepth, 0.0, 16.0),
+            (Id::PlatDiffusion, 0.0, 100.0),
+            (Id::PlatModDepth, 0.0, 16.0),
             (Id::GlobalCascade, 0.0, 100.0),
         ];
         for (id, min, max) in ranges {
             for value in [min, max] {
-                assert!(ParameterSnapshot::from_words(id as u32, value.to_bits()).is_some(), "{id:?}: {value}");
+                assert!(
+                    ParameterSnapshot::from_words(id as u32, value.to_bits()).is_some(),
+                    "{id:?}: {value}"
+                );
             }
             for value in [min - 1.0, max + 1.0, f32::MAX, f32::NAN] {
-                assert!(ParameterSnapshot::from_words(id as u32, value.to_bits()).is_none(), "{id:?}: {value}");
+                assert!(
+                    ParameterSnapshot::from_words(id as u32, value.to_bits()).is_none(),
+                    "{id:?}: {value}"
+                );
             }
         }
         let mut processor = Box::new(routing::DualEfxProcessor::new());
         processor.init();
-        for bank in [parameters::ParameterBank::Velvet, parameters::ParameterBank::Plateau] {
+        for bank in [
+            parameters::ParameterBank::Velvet,
+            parameters::ParameterBank::Plateau,
+        ] {
             for encoder in 0..8 {
                 for delta in [i32::MIN, i32::MAX] {
-                    let id = parameters::edit_encoder(&mut processor, bank, encoder, delta).unwrap();
+                    let id =
+                        parameters::edit_encoder(&mut processor, bank, encoder, delta).unwrap();
                     let snapshot = parameters::snapshot_parameter(id, &processor);
-                    assert!(ParameterSnapshot::from_words(id as u32, snapshot.value.to_bits()).is_some(),
-                        "applied {id:?}: {}", snapshot.value);
+                    assert!(
+                        ParameterSnapshot::from_words(id as u32, snapshot.value.to_bits())
+                            .is_some(),
+                        "applied {id:?}: {}",
+                        snapshot.value
+                    );
                 }
             }
         }
@@ -1500,19 +1869,39 @@ mod tests {
         use parameter_view::{DisplaySnapshot, format_display};
         for strip in 0..8 {
             for (mode, expected) in ["OFF", "A", "B", "A -> B"].iter().enumerate() {
-                let snapshot = DisplaySnapshot::from_words(16 + strip, (mode as f32).to_bits()).unwrap();
+                let snapshot =
+                    DisplaySnapshot::from_words(16 + strip, (mode as f32).to_bits()).unwrap();
                 let formatted = format_display(snapshot);
                 assert_eq!(formatted.title, format!("CH {} ROUTE", strip + 1));
-                assert_eq!(&formatted.value_str[..formatted.value_len], expected.as_bytes());
+                assert_eq!(
+                    &formatted.value_str[..formatted.value_len],
+                    expected.as_bytes()
+                );
             }
         }
-        for (id, value) in [(25, 1.0), (25, f32::NAN), (26, 0.0), (24, 3.0), (16, -1.0), (16, 0.5), (16, 4.0), (16, f32::NAN)] {
+        for (id, value) in [
+            (25, 1.0),
+            (25, f32::NAN),
+            (26, 0.0),
+            (24, 3.0),
+            (16, -1.0),
+            (16, 0.5),
+            (16, 4.0),
+            (16, f32::NAN),
+        ] {
             assert!(DisplaySnapshot::from_words(id, value.to_bits()).is_none());
         }
-        for (raw, expected) in [(0.0f32, "PLATEAU PARAM"), (1.0f32, "ROUTING"), (2.0f32, "VELVET PARAM")] {
+        for (raw, expected) in [
+            (0.0f32, "PLATEAU PARAM"),
+            (1.0f32, "ROUTING"),
+            (2.0f32, "VELVET PARAM"),
+        ] {
             let formatted = format_display(DisplaySnapshot::from_words(24, raw.to_bits()).unwrap());
             assert_eq!(formatted.title, "EFX CONTROLS");
-            assert_eq!(&formatted.value_str[..formatted.value_len], expected.as_bytes());
+            assert_eq!(
+                &formatted.value_str[..formatted.value_len],
+                expected.as_bytes()
+            );
         }
         let warning = format_display(DisplaySnapshot::from_words(25, 0.0f32.to_bits()).unwrap());
         assert_eq!(warning.title, "EFX INPUT");
@@ -1566,9 +1955,18 @@ mod tests {
 
     #[test]
     fn sine_range_reduction_terminates_for_extreme_inputs() {
-        for x in [f32::MAX, f32::MIN, f32::INFINITY, f32::NEG_INFINITY, f32::NAN] {
+        for x in [
+            f32::MAX,
+            f32::MIN,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::NAN,
+        ] {
             let result = math::sin(x);
-            assert!(result.is_finite() && result.abs() <= 1.001, "sin({x}) = {result}");
+            assert!(
+                result.is_finite() && result.abs() <= 1.001,
+                "sin({x}) = {result}"
+            );
         }
         for x in [-10.0f32, -3.0, 0.0, 3.0, 10.0] {
             assert!((math::sin(x) - x.sin()).abs() < 0.002);
@@ -1592,8 +1990,10 @@ mod tests {
                 }
             }
             let gain = (output_energy / input_energy).sqrt();
-            assert!((gain - std::f64::consts::FRAC_1_SQRT_2).abs() < 0.015,
-                    "cutoff {cutoff} Hz has gain {gain}");
+            assert!(
+                (gain - std::f64::consts::FRAC_1_SQRT_2).abs() < 0.015,
+                "cutoff {cutoff} Hz has gain {gain}"
+            );
         }
     }
 
@@ -1614,15 +2014,20 @@ mod tests {
                 }
             }
             let gain = (output_energy / input_energy).sqrt();
-            assert!((gain - std::f64::consts::FRAC_1_SQRT_2).abs() < 0.015,
-                    "cutoff {cutoff} Hz has gain {gain}");
+            assert!(
+                (gain - std::f64::consts::FRAC_1_SQRT_2).abs() < 0.015,
+                "cutoff {cutoff} Hz has gain {gain}"
+            );
             filter.clear();
             for frame in 0..10_000 {
                 let input = if frame % 2 == 0 { 1.0 } else { -1.0 };
                 let output = filter.process(input);
                 if frame == 9_999 {
-                    assert!((output.abs() - 1.0).abs() < 0.001,
-                            "Nyquist passband at {cutoff} Hz has gain {}", output.abs());
+                    assert!(
+                        (output.abs() - 1.0).abs() < 0.001,
+                        "Nyquist passband at {cutoff} Hz has gain {}",
+                        output.abs()
+                    );
                 }
             }
         }
@@ -1632,8 +2037,16 @@ mod tests {
     fn plateau_cutoff_updates_preserve_independent_filter_histories() {
         let mut reverb = Box::new(plateau::PlateauReverb::new());
         reverb.init(plateau::PlateauParameters::default());
-        let mut lp = [plateau::OnePoleLP::new(), plateau::OnePoleLP::new(), plateau::OnePoleLP::new()];
-        let mut hp = [plateau::OnePoleHP::new(), plateau::OnePoleHP::new(), plateau::OnePoleHP::new()];
+        let mut lp = [
+            plateau::OnePoleLP::new(),
+            plateau::OnePoleLP::new(),
+            plateau::OnePoleLP::new(),
+        ];
+        let mut hp = [
+            plateau::OnePoleHP::new(),
+            plateau::OnePoleHP::new(),
+            plateau::OnePoleHP::new(),
+        ];
         lp[0].set_cutoff(14_080.0);
         hp[0].set_cutoff(13.75);
         for (low, high) in [(80.0, 6500.0), (900.0, 16000.0), (100.0, 1000.0)] {
@@ -1651,9 +2064,11 @@ mod tests {
             hp[1] = reverb.l_hp;
             hp[2] = reverb.r_hp;
             for frame in 0..512 {
-                let inputs = [if frame % 37 == 0 { 0.5 } else { 0.0 },
+                let inputs = [
+                    if frame % 37 == 0 { 0.5 } else { 0.0 },
                     if frame % 53 == 0 { -0.75 } else { 0.0 },
-                    if frame % 71 == 0 { 1.0 } else { 0.0 }];
+                    if frame % 71 == 0 { 1.0 } else { 0.0 },
+                ];
                 let actual_lp = [&mut reverb.in_lp, &mut reverb.l_lp, &mut reverb.r_lp];
                 for (i, filter) in actual_lp.into_iter().enumerate() {
                     assert_eq!(filter.process(inputs[i]), lp[i].process(inputs[i]));
@@ -1675,14 +2090,24 @@ mod tests {
         let initial = reverb.l_lp.a;
         params.high_cut_hz = 16000.0;
         reverb.set_parameters(params);
-        assert_eq!(reverb.l_lp.a, initial, "the setter must not jump the filter");
-        for _ in 0..20 { reverb.process_sample(0.0, 0.0); }
+        assert_eq!(
+            reverb.l_lp.a, initial,
+            "the setter must not jump the filter"
+        );
+        for _ in 0..20 {
+            reverb.process_sample(0.0, 0.0);
+        }
         let midway = reverb.l_lp.a;
         assert!(midway > initial && midway < 0.8);
         params.high_cut_hz = 1000.0;
         reverb.set_parameters(params);
-        assert_eq!(reverb.l_lp.a, midway, "reversal must start from the applied coefficient");
-        for _ in 0..64 { reverb.process_sample(0.0, 0.0); }
+        assert_eq!(
+            reverb.l_lp.a, midway,
+            "reversal must start from the applied coefficient"
+        );
+        for _ in 0..64 {
+            reverb.process_sample(0.0, 0.0);
+        }
         assert_eq!(reverb.l_lp.a, initial);
         assert_eq!(reverb.r_lp.a, initial);
         params.high_cut_hz = 16000.0;
@@ -1690,7 +2115,10 @@ mod tests {
         reverb.clear();
         let mut target = plateau::OnePoleLP::new();
         target.set_cutoff(16000.0);
-        assert_eq!(reverb.l_lp.a, target.a, "clear must apply the requested cutoff");
+        assert_eq!(
+            reverb.l_lp.a, target.a,
+            "clear must apply the requested cutoff"
+        );
     }
 
     #[test]
@@ -1705,7 +2133,9 @@ mod tests {
         params.low_cut_hz = 1000.0;
         reverb.set_parameters(params);
         assert_eq!(reverb.l_hp.process(-0.2), reference.process(-0.2));
-        for _ in 0..64 { reverb.process_sample(0.0, 0.0); }
+        for _ in 0..64 {
+            reverb.process_sample(0.0, 0.0);
+        }
         reverb.l_hp.clear();
         reference.clear();
         reference.set_cutoff(1000.0);
@@ -1724,9 +2154,21 @@ mod tests {
         expected_p.init(plateau::PlateauParameters::default());
         for i in 0..12000 {
             let signal = if i == 10 { 0.5 } else { 0.0 };
-            let corrupt = if i == 0 { f32::NAN } else if i == 1 { f32::INFINITY } else { signal };
-            assert_eq!(actual_v.process_sample(corrupt, corrupt), expected_v.process_sample(signal, signal));
-            assert_eq!(actual_p.process_sample(corrupt, corrupt), expected_p.process_sample(signal, signal));
+            let corrupt = if i == 0 {
+                f32::NAN
+            } else if i == 1 {
+                f32::INFINITY
+            } else {
+                signal
+            };
+            assert_eq!(
+                actual_v.process_sample(corrupt, corrupt),
+                expected_v.process_sample(signal, signal)
+            );
+            assert_eq!(
+                actual_p.process_sample(corrupt, corrupt),
+                expected_p.process_sample(signal, signal)
+            );
         }
         assert_eq!(math::clamp(f32::NAN, 0.0, 1.0), 0.0);
         assert_eq!(math::soft_clip(f32::NAN), 0.0);
@@ -1740,11 +2182,18 @@ mod tests {
         params.diffusion = 0.0;
         reverb.init(params);
         reverb.process_sample(0.5, 0.5);
-        assert!(reverb.l_apf1.delay.buffer[0].abs() > 0.01 && reverb.r_apf1.delay.buffer[0].abs() > 0.01,
-                "zero diffusion should reach both tanks without the input delay chain");
-        for _ in 0..2500 { reverb.process_sample(0.0, 0.0); }
-        assert!(reverb.in_apf4.delay.buffer.iter().any(|x| *x != 0.0),
-                "bypassed diffusers must continue receiving input");
+        assert!(
+            reverb.l_apf1.delay.buffer[0].abs() > 0.01
+                && reverb.r_apf1.delay.buffer[0].abs() > 0.01,
+            "zero diffusion should reach both tanks without the input delay chain"
+        );
+        for _ in 0..2500 {
+            reverb.process_sample(0.0, 0.0);
+        }
+        assert!(
+            reverb.in_apf4.delay.buffer.iter().any(|x| *x != 0.0),
+            "bypassed diffusers must continue receiving input"
+        );
 
         params.diffusion = 0.5;
         reverb.set_parameters(params);
@@ -1765,14 +2214,19 @@ mod tests {
         let input = |frame: usize| ((frame * 7919 % 127) as f32 - 63.0) / 90.0;
         for frame in 0..10_000 {
             let sample = input(frame);
-            assert_eq!(changed.process_sample(sample, sample), unchanged.process_sample(sample, sample));
+            assert_eq!(
+                changed.process_sample(sample, sample),
+                unchanged.process_sample(sample, sample)
+            );
         }
         params.diffusion = 0.0;
         changed.set_parameters(params);
         let sample = input(10_000);
         let actual = changed.process_sample(sample, sample);
         let reference = unchanged.process_sample(sample, sample);
-        let difference = (actual.0 - reference.0).abs().max((actual.1 - reference.1).abs());
+        let difference = (actual.0 - reference.0)
+            .abs()
+            .max((actual.1 - reference.1).abs());
         assert!(difference < 0.002, "first-frame change {difference}");
     }
 
@@ -1786,27 +2240,66 @@ mod tests {
         assert_eq!(reverb.l_apf1.gain, -initial);
         assert_eq!(reverb.r_apf1.gain, -initial);
         assert_eq!(reverb.r_apf2.gain, initial);
-        assert_eq!([reverb.in_apf1.gain, reverb.in_apf2.gain, reverb.in_apf3.gain, reverb.in_apf4.gain],
-                   [0.75, 0.75, 0.625, 0.625]);
+        assert_eq!(
+            [
+                reverb.in_apf1.gain,
+                reverb.in_apf2.gain,
+                reverb.in_apf3.gain,
+                reverb.in_apf4.gain
+            ],
+            [0.75, 0.75, 0.625, 0.625]
+        );
         params.diffusion = 0.0;
         reverb.set_parameters(params);
-        assert_eq!(reverb.l_apf2.gain, initial, "the setter must not jump the coefficient");
-        for _ in 0..20 { reverb.process_sample(0.0, 0.0); }
+        assert_eq!(
+            reverb.l_apf2.gain, initial,
+            "the setter must not jump the coefficient"
+        );
+        for _ in 0..20 {
+            reverb.process_sample(0.0, 0.0);
+        }
         let halfway = reverb.l_apf2.gain;
         assert!(halfway > 0.0 && halfway < initial);
         params.diffusion = 1.0;
         reverb.set_parameters(params);
-        assert_eq!(reverb.l_apf2.gain, halfway, "reversal must start at the applied gain");
-        for _ in 0..256 { reverb.process_sample(0.0, 0.0); }
-        assert_eq!([reverb.l_apf1.gain, reverb.l_apf2.gain, reverb.r_apf1.gain, reverb.r_apf2.gain],
-                   [-0.7, 0.7, -0.7, 0.7]);
-        assert_eq!([reverb.in_apf1.gain, reverb.in_apf2.gain, reverb.in_apf3.gain, reverb.in_apf4.gain],
-                   [0.75, 0.75, 0.625, 0.625]);
+        assert_eq!(
+            reverb.l_apf2.gain, halfway,
+            "reversal must start at the applied gain"
+        );
+        for _ in 0..256 {
+            reverb.process_sample(0.0, 0.0);
+        }
+        assert_eq!(
+            [
+                reverb.l_apf1.gain,
+                reverb.l_apf2.gain,
+                reverb.r_apf1.gain,
+                reverb.r_apf2.gain
+            ],
+            [-0.7, 0.7, -0.7, 0.7]
+        );
+        assert_eq!(
+            [
+                reverb.in_apf1.gain,
+                reverb.in_apf2.gain,
+                reverb.in_apf3.gain,
+                reverb.in_apf4.gain
+            ],
+            [0.75, 0.75, 0.625, 0.625]
+        );
         params.diffusion = 0.0;
         reverb.set_parameters(params);
         reverb.clear();
-        assert_eq!([reverb.l_apf1.gain, reverb.l_apf2.gain, reverb.r_apf1.gain, reverb.r_apf2.gain],
-                   [0.0; 4], "clear should apply the latest setting");
+        assert_eq!(
+            [
+                reverb.l_apf1.gain,
+                reverb.l_apf2.gain,
+                reverb.r_apf1.gain,
+                reverb.r_apf2.gain
+            ],
+            [0.0; 4],
+            "clear should apply the latest setting"
+        );
     }
 
     #[test]
@@ -1832,7 +2325,10 @@ mod tests {
             let b = diffused_tank.process_sample(input, input);
             difference = difference.max((a.0 - b.0).abs()).max((a.1 - b.1).abs());
         }
-        assert!(difference > 0.001, "tank diffusion did not change the impulse response: {difference}");
+        assert!(
+            difference > 0.001,
+            "tank diffusion did not change the impulse response: {difference}"
+        );
     }
 
     #[test]
@@ -1854,8 +2350,11 @@ mod tests {
                 full.set_parameters(params);
             }
             let input = if frame == 200 { 0.5 } else { 0.0 };
-            assert_eq!(idle.process_sample(input, input), full.process_sample(input, input),
-                       "frame {frame}");
+            assert_eq!(
+                idle.process_sample(input, input),
+                full.process_sample(input, input),
+                "frame {frame}"
+            );
         }
     }
 
@@ -1871,13 +2370,19 @@ mod tests {
         // The first value names the retained line (L/R delay 1, allpass 2,
         // or delay 2); the final value selects the output channel.
         let cases = [
-            (0, 266.0f32, 1.0, false), (0, 2974.0, 1.0, false),
-            (1, 1913.0, -1.0, false), (2, 1996.0, 1.0, false),
-            (3, 1990.0, -1.0, false), (4, 187.0, -1.0, false),
+            (0, 266.0f32, 1.0, false),
+            (0, 2974.0, 1.0, false),
+            (1, 1913.0, -1.0, false),
+            (2, 1996.0, 1.0, false),
+            (3, 1990.0, -1.0, false),
+            (4, 187.0, -1.0, false),
             (5, 1066.0, -1.0, false),
-            (3, 266.0, 1.0, true), (3, 2974.0, 1.0, true),
-            (4, 1913.0, -1.0, true), (5, 1996.0, 1.0, true),
-            (0, 1990.0, -1.0, true), (1, 187.0, -1.0, true),
+            (3, 266.0, 1.0, true),
+            (3, 2974.0, 1.0, true),
+            (4, 1913.0, -1.0, true),
+            (5, 1996.0, 1.0, true),
+            (0, 1990.0, -1.0, true),
+            (1, 187.0, -1.0, true),
             (2, 1066.0, -1.0, true),
         ];
         assert!((2974.0f32 * (48_000.0 / 29_761.0)) as usize > reverb.r_del1.length);
@@ -1900,10 +2405,19 @@ mod tests {
             let mut dc = plateau::OnePoleHP::new();
             dc.set_cutoff(20.0);
             let expected = math::soft_clip(dc.process(sign * 0.5) * 0.5);
-            let (actual, other) = if right_channel { (right, left) } else { (left, right) };
-            assert!(other.abs() < 1e-7, "line {line}, tap {tap}: opposite channel {other}");
-            assert!((actual - expected).abs() < 1e-6,
-                    "line {line}, tap {tap}: actual {actual}, expected {expected}");
+            let (actual, other) = if right_channel {
+                (right, left)
+            } else {
+                (left, right)
+            };
+            assert!(
+                other.abs() < 1e-7,
+                "line {line}, tap {tap}: opposite channel {other}"
+            );
+            assert!(
+                (actual - expected).abs() < 1e-6,
+                "line {line}, tap {tap}: actual {actual}, expected {expected}"
+            );
         }
     }
 
@@ -1962,11 +2476,25 @@ mod tests {
             let l = reverb.l_apf2.delay.buffer[frame];
             let r = reverb.r_apf2.delay.buffer[frame];
             let expected = if frame == 10 { 0.7 } else { 0.0 };
-            assert!((l - expected).abs() < 1e-6, "left first tank delay frame {frame}: {l}");
-            assert!((r - expected).abs() < 1e-6, "right first tank delay frame {frame}: {r}");
+            assert!(
+                (l - expected).abs() < 1e-6,
+                "left first tank delay frame {frame}: {l}"
+            );
+            assert!(
+                (r - expected).abs() < 1e-6,
+                "right first tank delay frame {frame}: {r}"
+            );
             let feedback = if frame == 20 { -0.49 } else { 0.0 };
-            assert!((reverb.l_sum - feedback).abs() < 1e-6, "left cross-feedback frame {frame}: {}", reverb.l_sum);
-            assert!((reverb.r_sum - feedback).abs() < 1e-6, "right cross-feedback frame {frame}: {}", reverb.r_sum);
+            assert!(
+                (reverb.l_sum - feedback).abs() < 1e-6,
+                "left cross-feedback frame {frame}: {}",
+                reverb.l_sum
+            );
+            assert!(
+                (reverb.r_sum - feedback).abs() < 1e-6,
+                "right cross-feedback frame {frame}: {}",
+                reverb.r_sum
+            );
         }
     }
 
@@ -1982,9 +2510,23 @@ mod tests {
         expected_p.init(plateau::PlateauParameters::default());
         for i in 0..12000 {
             let signal = if i == 10 { 0.5 } else { 0.0 };
-            let corrupt = if i == 0 { f32::MAX } else if i == 1 { f32::MIN } else { signal };
-            assert_eq!(actual_v.process_sample(corrupt, corrupt), expected_v.process_sample(signal, signal), "velvet frame {i}");
-            assert_eq!(actual_p.process_sample(corrupt, corrupt), expected_p.process_sample(signal, signal), "plateau frame {i}");
+            let corrupt = if i == 0 {
+                f32::MAX
+            } else if i == 1 {
+                f32::MIN
+            } else {
+                signal
+            };
+            assert_eq!(
+                actual_v.process_sample(corrupt, corrupt),
+                expected_v.process_sample(signal, signal),
+                "velvet frame {i}"
+            );
+            assert_eq!(
+                actual_p.process_sample(corrupt, corrupt),
+                expected_p.process_sample(signal, signal),
+                "plateau frame {i}"
+            );
         }
     }
 
@@ -1993,17 +2535,27 @@ mod tests {
         let mut engine = Box::new(velvet::VelvetDecorrelator::new());
         engine.init(velvet::Parameters::default());
         engine.current.dynamic = false;
-        for delay in [1, velvet::MAX_DELAY_SAMPLES as u32 + 1,
-            2 * velvet::MAX_DELAY_SAMPLES as u32 + 1, u32::MAX] {
+        for delay in [
+            1,
+            velvet::MAX_DELAY_SAMPLES as u32 + 1,
+            2 * velvet::MAX_DELAY_SAMPLES as u32 + 1,
+            u32::MAX,
+        ] {
             engine.reset();
             let d = delay as usize % velvet::MAX_DELAY_SAMPLES;
             let bank = &mut engine.channels[0].banks[engine.active_bank];
             bank.count = 1;
             bank.storage[0] = velvet::Tap { delay, gain: 0.5 };
             engine.process_sample(0.25, 0.0);
-            for _ in 1..d { engine.process_sample(0.0, 0.0); }
+            for _ in 1..d {
+                engine.process_sample(0.0, 0.0);
+            }
             let (left, _) = engine.process_sample(0.0, 0.0);
-            assert_eq!(left.to_bits(), math::soft_clip(0.125).to_bits(), "delay={delay}");
+            assert_eq!(
+                left.to_bits(),
+                math::soft_clip(0.125).to_bits(),
+                "delay={delay}"
+            );
 
             // The aligned two-history path must apply the same wrap to both
             // the direct and cascaded sends, including malformed tap values.
@@ -2013,10 +2565,20 @@ mod tests {
             bank.storage[0] = velvet::Tap { delay, gain: 0.5 };
             let mut cascade = velvet::MonoHistory::new();
             engine.process_shared_mono(&mut cascade, 0.25, -0.5);
-            for _ in 1..d { engine.process_shared_mono(&mut cascade, 0.0, 0.0); }
+            for _ in 1..d {
+                engine.process_shared_mono(&mut cascade, 0.0, 0.0);
+            }
             let ((direct, _), (cascaded, _)) = engine.process_shared_mono(&mut cascade, 0.0, 0.0);
-            assert_eq!(direct.to_bits(), math::soft_clip(0.125).to_bits(), "direct delay={delay}");
-            assert_eq!(cascaded.to_bits(), math::soft_clip(-0.25).to_bits(), "cascade delay={delay}");
+            assert_eq!(
+                direct.to_bits(),
+                math::soft_clip(0.125).to_bits(),
+                "direct delay={delay}"
+            );
+            assert_eq!(
+                cascaded.to_bits(),
+                math::soft_clip(-0.25).to_bits(),
+                "cascade delay={delay}"
+            );
         }
     }
 
@@ -2024,7 +2586,10 @@ mod tests {
     fn invalid_velvet_bank_count_silences_only_its_channel() {
         let mut damaged = Box::new(velvet::VelvetDecorrelator::new());
         let mut reference = Box::new(velvet::VelvetDecorrelator::new());
-        let params = velvet::Parameters { dynamic: false, ..velvet::Parameters::default() };
+        let params = velvet::Parameters {
+            dynamic: false,
+            ..velvet::Parameters::default()
+        };
         damaged.init(params);
         reference.init(params);
         damaged.channels[0].banks[damaged.active_bank].count = usize::MAX;
@@ -2042,18 +2607,34 @@ mod tests {
         let mut reference_history = velvet::MonoHistory::new();
         for frame in 0..5000 {
             let input = (frame as f32 * 0.03).sin() * 0.1 + 0.1;
-            let ((a_l, a_r), (b_l, b_r)) = damaged.process_shared_mono(&mut damaged_history, input, -input);
-            let ((_, expected_a), (_, expected_b)) = reference.process_shared_mono(&mut reference_history, input, -input);
+            let ((a_l, a_r), (b_l, b_r)) =
+                damaged.process_shared_mono(&mut damaged_history, input, -input);
+            let ((_, expected_a), (_, expected_b)) =
+                reference.process_shared_mono(&mut reference_history, input, -input);
             assert_eq!((a_l, b_l), (0.0, 0.0), "corrupt left frame {frame}");
-            assert_eq!((a_r, b_r), (expected_a, expected_b), "valid right frame {frame}");
+            assert_eq!(
+                (a_r, b_r),
+                (expected_a, expected_b),
+                "valid right frame {frame}"
+            );
         }
-        let dynamic = velvet::Parameters { dynamic: true, refresh_seconds: 0.1,
-            transition_ms: 1.0, ..velvet::Parameters::default() };
+        let dynamic = velvet::Parameters {
+            dynamic: true,
+            refresh_seconds: 0.1,
+            transition_ms: 1.0,
+            ..velvet::Parameters::default()
+        };
         damaged.init(dynamic);
         damaged.channels[0].banks[damaged.active_bank].count = usize::MAX;
-        for _ in 0..10_000 { damaged.process_sample(0.1, 0.1); }
+        for _ in 0..10_000 {
+            damaged.process_sample(0.1, 0.1);
+        }
         assert!(damaged.channels[0].banks[damaged.active_bank].count <= velvet::MAX_TAPS);
-        assert_ne!(damaged.process_sample(0.1, 0.1).0, 0.0, "valid regenerated bank stayed silent");
+        assert_ne!(
+            damaged.process_sample(0.1, 0.1).0,
+            0.0,
+            "valid regenerated bank stayed silent"
+        );
     }
 
     #[test]
@@ -2064,7 +2645,10 @@ mod tests {
         for channel in &mut engine.channels {
             let bank = &mut channel.banks[engine.active_bank];
             bank.count = 1;
-            bank.storage[0] = velvet::Tap { delay: (velvet::MAX_DELAY_SAMPLES - 1) as u32, gain: 1.0 };
+            bank.storage[0] = velvet::Tap {
+                delay: (velvet::MAX_DELAY_SAMPLES - 1) as u32,
+                gain: 1.0,
+            };
         }
         assert_eq!(engine.process_sample(0.5, -0.5), (0.0, 0.0));
         for _ in 1..velvet::MAX_DELAY_SAMPLES - 1 {
@@ -2083,7 +2667,9 @@ mod tests {
         params.refresh_seconds = 0.1;
         params.transition_ms = 1.0;
         engine.init(params);
-        for _ in 0..6_000 { assert_eq!(engine.process_sample(0.0, 0.0), (0.0, 0.0)); }
+        for _ in 0..6_000 {
+            assert_eq!(engine.process_sample(0.0, 0.0), (0.0, 0.0));
+        }
         assert!(engine.generation > 2);
         let mut peak = 0.0f32;
         for i in 0..velvet::MAX_DELAY_SAMPLES {
@@ -2118,7 +2704,9 @@ mod tests {
         params.refresh_seconds = 0.1;
         params.transition_ms = 1.0;
         engine.set_parameters(params);
-        for _ in 0..15_000 { engine.process_sample(0.0, 0.0); }
+        for _ in 0..15_000 {
+            engine.process_sample(0.0, 0.0);
+        }
         assert!(engine.generation > 2, "dynamic banks were not regenerated");
         for channel in &engine.channels {
             for bank in &channel.banks {
@@ -2181,23 +2769,33 @@ mod tests {
         params.density = 3000.0;
         edited.set_parameters(params);
         assert_eq!(edited.current.density, 3000.0);
-        assert_eq!(edited.generation, reference.generation, "unchanged count rebuilt a bank");
+        assert_eq!(
+            edited.generation, reference.generation,
+            "unchanged count rebuilt a bank"
+        );
         for frame in 0..16_000 {
             let sample = (frame as f32 * 0.031).sin() * 0.2;
-            assert_eq!(edited.process_sample(sample, sample), reference.process_sample(sample, sample),
-                "equivalent density edit changed audio at frame {frame}");
+            assert_eq!(
+                edited.process_sample(sample, sample),
+                reference.process_sample(sample, sample),
+                "equivalent density edit changed audio at frame {frame}"
+            );
         }
         // A spread change still rebuilds the filter.
         params.length_ms = 90.0;
         let before = edited.generation;
         edited.set_parameters(params);
         assert_ne!(edited.generation, before);
-        for _ in 0..13_000 { edited.process_sample(0.0, 0.0); }
+        for _ in 0..13_000 {
+            edited.process_sample(0.0, 0.0);
+        }
         params.density = 100.0;
         let before = edited.generation;
         edited.set_parameters(params);
         assert_ne!(edited.generation, before, "changed count did not rebuild");
-        for _ in 0..13_000 { edited.process_sample(0.0, 0.0); }
+        for _ in 0..13_000 {
+            edited.process_sample(0.0, 0.0);
+        }
         assert_eq!(edited.channels[0].banks[edited.active_bank].count, 9);
 
         // Rounding can also make two uncapped density requests equivalent.
@@ -2211,11 +2809,16 @@ mod tests {
         params.density = 440.0;
         edited.set_parameters(params);
         assert_ne!(edited.generation, before);
-        for _ in 0..10 { edited.process_sample(0.0, 0.0); }
+        for _ in 0..10 {
+            edited.process_sample(0.0, 0.0);
+        }
         let building = edited.generation;
         params.density = 441.0;
         edited.set_parameters(params);
-        assert_eq!(edited.generation, building, "equivalent edit restarted a pending build");
+        assert_eq!(
+            edited.generation, building,
+            "equivalent edit restarted a pending build"
+        );
     }
 
     #[test]
@@ -2223,7 +2826,7 @@ mod tests {
         let mut vnd = velvet::VelvetDecorrelator::new();
         let mut params = velvet::Parameters::default();
         params.refresh_seconds = 0.05; // 50 ms fast refresh for test
-        params.transition_ms = 10.0;    // 10 ms transition
+        params.transition_ms = 10.0; // 10 ms transition
         vnd.init(params);
 
         // Run audio through multiple renewals and ensure no NaN or blowups
@@ -2310,7 +2913,9 @@ mod tests {
             params.density = 500.0;
             edited.set_parameters(params);
             if settle {
-                for _ in 0..100 { edited.process_sample(0.0, 0.0); }
+                for _ in 0..100 {
+                    edited.process_sample(0.0, 0.0);
+                }
             }
             edited.reset();
             reference.init(params);
@@ -2342,24 +2947,37 @@ mod tests {
         // A maximum-size bank needs time to prepare. Until it is ready the
         // old filter must produce the same output as an unedited instance.
         for i in 0..100 {
-            let before = [edited.channels[0].banks[edited.pending_bank],
-                          edited.channels[1].banks[edited.pending_bank]];
+            let before = [
+                edited.channels[0].banks[edited.pending_bank],
+                edited.channels[1].banks[edited.pending_bank],
+            ];
             let input = (i as f32 * 0.13).sin() * 0.1;
-            assert_eq!(edited.process_sample(input, input), reference.process_sample(input, input));
+            assert_eq!(
+                edited.process_sample(input, input),
+                reference.process_sample(input, input)
+            );
             assert!(!edited.transitioning);
             for c in 0..2 {
                 let after = &edited.channels[c].banks[edited.pending_bank];
-                let changed = before[c].storage.iter().zip(after.storage.iter())
+                let changed = before[c]
+                    .storage
+                    .iter()
+                    .zip(after.storage.iter())
                     .filter(|(a, b)| a.delay != b.delay || a.gain.to_bits() != b.gain.to_bits())
                     .count();
-                assert!(changed <= 1, "frame {i}, channel {c}: {changed} taps changed");
+                assert!(
+                    changed <= 1,
+                    "frame {i}, channel {c}: {changed} taps changed"
+                );
             }
         }
 
         // A newer edit replaces a bank still being built.
         params.density = 200.0;
         edited.set_parameters(params);
-        for _ in 0..500 { edited.process_sample(0.0, 0.0); }
+        for _ in 0..500 {
+            edited.process_sample(0.0, 0.0);
+        }
         assert!(!edited.transitioning);
         assert!(!edited.filter_update_pending);
         assert_eq!(edited.channels[0].banks[edited.active_bank].count, 19);
@@ -2370,8 +2988,11 @@ mod tests {
     fn velvet_maximum_density_builds_normalized_banks_and_renews() {
         let mut effect = Box::new(velvet::VelvetDecorrelator::new());
         let params = velvet::Parameters {
-            length_ms: 100.0, density: 4000.0, refresh_seconds: 0.1,
-            transition_ms: 1.0, ..velvet::Parameters::default()
+            length_ms: 100.0,
+            density: 4000.0,
+            refresh_seconds: 0.1,
+            transition_ms: 1.0,
+            ..velvet::Parameters::default()
         };
         effect.init(params);
         let check_banks = |effect: &velvet::VelvetDecorrelator| {
@@ -2397,8 +3018,13 @@ mod tests {
         }
         assert!(effect.generation > 2, "maximum-density banks did not renew");
         // Wait until neither bank is being rebuilt before checking normalization.
-        effect.set_parameters(velvet::Parameters { dynamic: false, ..params });
-        for _ in 0..1000 { effect.process_sample(0.0, 0.0); }
+        effect.set_parameters(velvet::Parameters {
+            dynamic: false,
+            ..params
+        });
+        for _ in 0..1000 {
+            effect.process_sample(0.0, 0.0);
+        }
         check_banks(&effect);
     }
 
@@ -2409,26 +3035,43 @@ mod tests {
         processor.init();
         let mut tracks = [[0.0f32; 128]; 12];
         for (slot, track) in tracks.iter_mut().enumerate() {
-            processor.channel_routing[slot] = [RoutingMode::SendA, RoutingMode::SendB,
-                RoutingMode::SendAtoB][slot % 3];
+            processor.channel_routing[slot] = [
+                RoutingMode::SendA,
+                RoutingMode::SendB,
+                RoutingMode::SendAtoB,
+            ][slot % 3];
             for (frame, sample) in track.iter_mut().enumerate() {
                 *sample = ((slot as f32 + 1.0) * 1_000_000.0 + frame as f32 * 1000.0)
                     * (1.0 / 2147483648.0);
             }
         }
-        let channels: Vec<_> = tracks.iter().enumerate().map(|(slot, samples)| WeightedChannel {
-            samples, gain: (slot as f32 + 1.0) / 16.0, ramp: None,
-        }).collect();
+        let channels: Vec<_> = tracks
+            .iter()
+            .enumerate()
+            .map(|(slot, samples)| WeightedChannel {
+                samples,
+                gain: (slot as f32 + 1.0) / 16.0,
+                ramp: None,
+            })
+            .collect();
         let mut left = [0.0; 128];
         let mut right = [0.0; 128];
         processor.process_weighted_block(&channels, &mut left, &mut right);
         // Independent ARM/QEMU capture from the synthetic file-mix caller.
         for (frame, expected_l, expected_r) in [
-            (0, 0.007768246, 0.007729655), (63, 0.013850859, 0.001429997),
-            (64, 0.013852504, 0.001430163), (127, 0.013353780, -0.003259216),
+            (0, 0.007768246, 0.007729655),
+            (63, 0.013850859, 0.001429997),
+            (64, 0.013852504, 0.001430163),
+            (127, 0.013353780, -0.003259216),
         ] {
-            assert!((left[frame] - expected_l).abs() < 1e-6, "left frame {frame}");
-            assert!((right[frame] - expected_r).abs() < 1e-6, "right frame {frame}");
+            assert!(
+                (left[frame] - expected_l).abs() < 1e-6,
+                "left frame {frame}"
+            );
+            assert!(
+                (right[frame] - expected_r).abs() < 1e-6,
+                "right frame {frame}"
+            );
         }
     }
 
@@ -2439,38 +3082,70 @@ mod tests {
         let mut reference = Box::new(DualEfxProcessor::new());
         routed.init();
         reference.init();
-        routed.channel_routing[..3].copy_from_slice(&[RoutingMode::SendA, RoutingMode::SendB,
-            RoutingMode::SendAtoB]);
+        routed.channel_routing[..3].copy_from_slice(&[
+            RoutingMode::SendA,
+            RoutingMode::SendB,
+            RoutingMode::SendAtoB,
+        ]);
         assert_eq!(core::mem::size_of::<RoutingWorkspace>(), 3 * 64 * 4);
         let mut storage = Box::new(core::mem::MaybeUninit::<RoutingWorkspace>::uninit());
-        unsafe { core::ptr::write_bytes(storage.as_mut_ptr(), 0xa5, 1); }
+        unsafe {
+            core::ptr::write_bytes(storage.as_mut_ptr(), 0xa5, 1);
+        }
         let workspace = RoutingWorkspace::initialize_in_place(&mut storage);
         let a: Vec<_> = (0..137).map(|i| (i as f32 * 0.04).sin() * 0.1).collect();
         let b: Vec<_> = (0..137).map(|i| (i as f32 * 0.03).cos() * 0.2).collect();
         let c: Vec<_> = (0..137).map(|i| (i as f32 * 0.02).sin() * 0.15).collect();
-        let channels = [WeightedChannel { samples: &a, gain: 2.0, ramp: None },
-            WeightedChannel { samples: &b, gain: 0.5, ramp: None },
-            WeightedChannel { samples: &c, gain: -1.0, ramp: None }];
+        let channels = [
+            WeightedChannel {
+                samples: &a,
+                gain: 2.0,
+                ramp: None,
+            },
+            WeightedChannel {
+                samples: &b,
+                gain: 0.5,
+                ramp: None,
+            },
+            WeightedChannel {
+                samples: &c,
+                gain: -1.0,
+                ramp: None,
+            },
+        ];
         let mut actual = [vec![0.0; 137], vec![0.0; 137]];
         let mut expected = [vec![0.0; 137], vec![0.0; 137]];
         let [ref mut left, ref mut right] = actual;
         routed.process_weighted_with_workspace(&channels, left, right, workspace);
         let [ref mut left, ref mut right] = expected;
-        reference.process_buses(&a.iter().map(|v| v * 2.0).collect::<Vec<_>>(),
+        reference.process_buses(
+            &a.iter().map(|v| v * 2.0).collect::<Vec<_>>(),
             &b.iter().map(|v| v * 0.5).collect::<Vec<_>>(),
-            &c.iter().map(|v| -v).collect::<Vec<_>>(), left, right);
+            &c.iter().map(|v| -v).collect::<Vec<_>>(),
+            left,
+            right,
+        );
         assert_eq!(actual, expected);
 
         // A short next call must not replay buses left by the previous block.
         let short = [0.25, -0.25];
-        let channel = [WeightedChannel { samples: &short, gain: 1.0, ramp: None }];
+        let channel = [WeightedChannel {
+            samples: &short,
+            gain: 1.0,
+            ramp: None,
+        }];
         let mut actual = [[0.0; 9]; 2];
         let mut expected = [[0.0; 9]; 2];
         let [ref mut left, ref mut right] = actual;
         routed.process_weighted_with_workspace(&channel, left, right, workspace);
         let [ref mut left, ref mut right] = expected;
-        reference.process_buses(&[0.25, -0.25, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-            &[0.0; 9], &[0.0; 9], left, right);
+        reference.process_buses(
+            &[0.25, -0.25, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            &[0.0; 9],
+            &[0.0; 9],
+            left,
+            right,
+        );
         assert_eq!(actual, expected);
     }
 
@@ -2492,7 +3167,11 @@ mod tests {
             let (left, right) = immediate.process_sample(input, input);
             reference.push((left, right));
             let (actual_l, actual_r) = delayed.process_sample(input, input);
-            let (expected_l, expected_r) = if i < 48 { (0.0, 0.0) } else { reference[i - 48] };
+            let (expected_l, expected_r) = if i < 48 {
+                (0.0, 0.0)
+            } else {
+                reference[i - 48]
+            };
             assert!((actual_l - expected_l).abs() < 1e-5, "left frame {i}");
             assert!((actual_r - expected_r).abs() < 1e-5, "right frame {i}");
             peak = peak.max(left.abs()).max(right.abs());
@@ -2526,17 +3205,25 @@ mod tests {
         reverb.process_sample(1.0, 1.0);
         let filtered = hp.process(dc.process(1.0));
         assert!((diffuser_input(&reverb) - (filtered + (-1.0 - filtered) / 64.0)).abs() < 1e-6);
-        for _ in 0..15 { reverb.process_sample(1.0, 1.0); hp.process(dc.process(1.0)); }
+        for _ in 0..15 {
+            reverb.process_sample(1.0, 1.0);
+            hp.process(dc.process(1.0));
+        }
         let before_reverse = diffuser_input(&reverb);
         reverb.set_predelay_live(0.0);
         reverb.process_sample(1.0, 1.0);
         let filtered = hp.process(dc.process(1.0));
         let after_reverse = diffuser_input(&reverb);
-        assert!((after_reverse - (before_reverse + (filtered - before_reverse) / 64.0)).abs() < 1e-6);
+        assert!(
+            (after_reverse - (before_reverse + (filtered - before_reverse) / 64.0)).abs() < 1e-6
+        );
         assert!(after_reverse >= before_reverse);
         assert!((after_reverse - before_reverse).abs() <= 2.0 / 64.0);
         let mut filtered = 0.0;
-        for _ in 0..63 { reverb.process_sample(1.0, 1.0); filtered = hp.process(dc.process(1.0)); }
+        for _ in 0..63 {
+            reverb.process_sample(1.0, 1.0);
+            filtered = hp.process(dc.process(1.0));
+        }
         assert_eq!(diffuser_input(&reverb), filtered);
     }
 
@@ -2562,12 +3249,16 @@ mod tests {
         reverb.in_lp.a = 1.0;
         reverb.in_lp.b = 0.0;
         reverb.set_predelay_live(190.0);
-        for _ in 0..8 { reverb.process_sample(1.0, 1.0); }
+        for _ in 0..8 {
+            reverb.process_sample(1.0, 1.0);
+        }
         params = reverb.params;
         params.freeze = true;
         reverb.set_live_parameters(params);
         reverb.set_predelay_live(0.0);
-        for _ in 0..8 { reverb.process_sample(1.0, 1.0); }
+        for _ in 0..8 {
+            reverb.process_sample(1.0, 1.0);
+        }
         params = reverb.params;
         params.freeze = false;
         reverb.set_live_parameters(params);
@@ -2682,13 +3373,23 @@ mod tests {
             (1996.0, reverb.r_del2.buffer.len()),
         ] {
             let tap_samples = (tap * (48_000.0f32 / 29_761.0)) as usize;
-            assert!(tap_samples < capacity, "output tap exceeded retained history");
+            assert!(
+                tap_samples < capacity,
+                "output tap exceeded retained history"
+            );
         }
         params.size = 0.2;
         reverb.set_parameters(params);
-        for delay in [reverb.l_apf1.delay_time, reverb.l_apf2.delay_time,
-                      reverb.r_apf1.delay_time, reverb.r_apf2.delay_time] {
-            assert!(delay >= params.mod_depth as usize, "size 0.2 would clamp modulation");
+        for delay in [
+            reverb.l_apf1.delay_time,
+            reverb.l_apf2.delay_time,
+            reverb.r_apf1.delay_time,
+            reverb.r_apf2.delay_time,
+        ] {
+            assert!(
+                delay >= params.mod_depth as usize,
+                "size 0.2 would clamp modulation"
+            );
         }
     }
 
@@ -2699,7 +3400,9 @@ mod tests {
             for damage in 0..4 {
                 // Predelay and tank delays can represent a one-sample length;
                 // interpolated allpasses require at least two.
-                if damage == 3 && matches!(which, 0 | 6 | 8 | 10 | 12) { continue; }
+                if damage == 3 && matches!(which, 0 | 6 | 8 | 10 | 12) {
+                    continue;
+                }
                 reverb.init(plateau::PlateauParameters::default());
                 reverb.predelay.buffer[0] = 0.25;
                 macro_rules! invalidate {
@@ -2730,13 +3433,20 @@ mod tests {
                 }
                 let position = reverb.predelay.write_pos;
                 let phase = reverb.lfo1.phase;
-                assert_eq!(reverb.process_sample(0.5, 0.5), (0.0, 0.0), "delay {which}, damage {damage}");
+                assert_eq!(
+                    reverb.process_sample(0.5, 0.5),
+                    (0.0, 0.0),
+                    "delay {which}, damage {damage}"
+                );
                 assert_eq!(reverb.predelay.write_pos, position);
                 assert_eq!(reverb.predelay.buffer[0], 0.25);
                 assert_eq!(reverb.lfo1.phase, phase);
                 reverb.init(plateau::PlateauParameters::default());
                 reverb.process_sample(0.5, 0.5);
-                assert_ne!(reverb.predelay.buffer[0], 0.0, "reinitialization failed for delay {which}");
+                assert_ne!(
+                    reverb.predelay.buffer[0], 0.0,
+                    "reinitialization failed for delay {which}"
+                );
             }
         }
 
@@ -2752,17 +3462,28 @@ mod tests {
         let mut reverb = Box::new(plateau::PlateauReverb::new());
         let mut params = plateau::PlateauParameters::default();
         reverb.init(params);
-        let initial = [reverb.in_apf1.delay_time, reverb.in_apf2.delay_time,
-                       reverb.in_apf3.delay_time, reverb.in_apf4.delay_time];
-        let expected = [141.0f32, 107.0, 379.0, 277.0]
-            .map(|time| (time * (48_000.0f32 / 29_761.0)) as usize);
+        let initial = [
+            reverb.in_apf1.delay_time,
+            reverb.in_apf2.delay_time,
+            reverb.in_apf3.delay_time,
+            reverb.in_apf4.delay_time,
+        ];
+        let expected =
+            [141.0f32, 107.0, 379.0, 277.0].map(|time| (time * (48_000.0f32 / 29_761.0)) as usize);
         assert_eq!(initial, expected);
         reverb.in_apf1.delay.write(0.75);
         for size in [0.01, 0.2, 0.55, 1.0, 1.2] {
             params.size = size;
             reverb.set_parameters(params);
-            assert_eq!([reverb.in_apf1.delay_time, reverb.in_apf2.delay_time,
-                        reverb.in_apf3.delay_time, reverb.in_apf4.delay_time], initial);
+            assert_eq!(
+                [
+                    reverb.in_apf1.delay_time,
+                    reverb.in_apf2.delay_time,
+                    reverb.in_apf3.delay_time,
+                    reverb.in_apf4.delay_time
+                ],
+                initial
+            );
             assert_eq!(reverb.in_apf1.delay.read(1), 0.75);
             let expected_tank = (4453.0f32 * ((48_000.0f32 / 29_761.0) * size)) as usize;
             assert_eq!(reverb.l_del1.length, expected_tank, "size {size}");
@@ -2784,7 +3505,8 @@ mod tests {
             let input = (frame as f32 * std::f32::consts::TAU * 250.0 / 48_000.0).sin() * 0.1;
             let output = reverb.process_sample(input, input);
             if frame >= 96_000 {
-                max_step = max_step.max((output.0 - previous.0).abs())
+                max_step = max_step
+                    .max((output.0 - previous.0).abs())
                     .max((output.1 - previous.1).abs());
             }
             previous = output;
@@ -2824,7 +3546,7 @@ mod tests {
 
     #[test]
     fn plateau_freeze_edges_transition_on_both_control_paths() {
-        use parameters::{edit_encoder, ParameterBank};
+        use parameters::{ParameterBank, edit_encoder};
         let (mut live, mut full) = paired_reverb_return();
         let mut previous = (0.0f32, 0.0f32);
         for frame in 0..48_064 {
@@ -2933,8 +3655,14 @@ mod tests {
         // Each allpass consumes the preceding frame's interpolated delay read.
         first.process_sample(0.0, 0.0);
         second.process_sample(0.0, 0.0);
-        assert_ne!(first.l_del2.buffer[1], second.l_del2.buffer[1], "left second allpass");
-        assert_ne!(first.r_del2.buffer[1], second.r_del2.buffer[1], "right second allpass");
+        assert_ne!(
+            first.l_del2.buffer[1], second.l_del2.buffer[1],
+            "left second allpass"
+        );
+        assert_ne!(
+            first.r_del2.buffer[1], second.r_del2.buffer[1],
+            "right second allpass"
+        );
     }
 
     #[test]
@@ -2963,8 +3691,10 @@ mod tests {
                 }
             }
             assert!(energy[0] > 1.0, "tank must be energized for size {size}");
-            assert!(energy[1] > energy[0] * 0.85 && energy[1] < energy[0] * 1.15,
-                "frozen tank energy changed excessively for size {size}: {energy:?}");
+            assert!(
+                energy[1] > energy[0] * 0.85 && energy[1] < energy[0] * 1.15,
+                "frozen tank energy changed excessively for size {size}: {energy:?}"
+            );
         }
     }
 
@@ -2978,20 +3708,33 @@ mod tests {
         fixed.init(params);
         for frame in 0..48_000 {
             let input = (frame as f32 * 0.031).sin() * 0.2;
-            assert_eq!(modulated.process_sample(input, input), fixed.process_sample(input, input));
+            assert_eq!(
+                modulated.process_sample(input, input),
+                fixed.process_sample(input, input)
+            );
         }
         params.freeze = true;
         modulated.set_parameters(params);
         params.mod_depth = 0.0;
         fixed.set_parameters(params);
-        let phases_before = [modulated.lfo1.phase, modulated.lfo2.phase,
-                             modulated.lfo3.phase, modulated.lfo4.phase];
+        let phases_before = [
+            modulated.lfo1.phase,
+            modulated.lfo2.phase,
+            modulated.lfo3.phase,
+            modulated.lfo4.phase,
+        ];
         for frame in 0..20_000 {
-            assert_eq!(modulated.process_sample(0.0, 0.0), fixed.process_sample(0.0, 0.0),
-                "modulation affected frozen output at frame {frame}");
+            assert_eq!(
+                modulated.process_sample(0.0, 0.0),
+                fixed.process_sample(0.0, 0.0),
+                "modulation affected frozen output at frame {frame}"
+            );
         }
         for (before, after) in phases_before.into_iter().zip([
-            modulated.lfo1.phase, modulated.lfo2.phase, modulated.lfo3.phase, modulated.lfo4.phase,
+            modulated.lfo1.phase,
+            modulated.lfo2.phase,
+            modulated.lfo3.phase,
+            modulated.lfo4.phase,
         ]) {
             assert_ne!(after, before, "each LFO must continue advancing");
         }
@@ -3053,7 +3796,10 @@ mod tests {
             let (left, right) = reverb.process_sample(0.0, 0.0);
             peak = peak.max(left.abs()).max(right.abs());
         }
-        assert!(peak < 1e-7, "stale damping state reappeared after freeze: {peak}");
+        assert!(
+            peak < 1e-7,
+            "stale damping state reappeared after freeze: {peak}"
+        );
     }
 
     #[test]
@@ -3072,26 +3818,41 @@ mod tests {
 
         for frame in 0..512 {
             if frame == 160 {
-                params.freeze = true; reverb.set_parameters(params);
-                left.clear(); right.clear(); lp.clear(); hp.clear();
+                params.freeze = true;
+                reverb.set_parameters(params);
+                left.clear();
+                right.clear();
+                lp.clear();
+                hp.clear();
             }
-            if frame == 320 { params.freeze = false; reverb.set_parameters(params); }
+            if frame == 320 {
+                params.freeze = false;
+                reverb.set_parameters(params);
+            }
             let l = if frame % 17 == 0 { 0.75 } else { -0.1 };
             let r = if frame % 23 == 0 { -0.5 } else { 0.2 };
             let (input_l, input_r) = if params.freeze { (0.0, 0.0) } else { (l, r) };
-            let expected = hp.process(lp.process(0.5 * (left.process(input_l) + right.process(input_r))));
+            let expected =
+                hp.process(lp.process(0.5 * (left.process(input_l) + right.process(input_r))));
             let pos = reverb.predelay.write_pos;
             reverb.process_sample(l, r);
             let expected = if params.freeze { 0.0 } else { expected };
-            assert!((reverb.predelay.buffer[pos] - expected).abs() < 1e-6, "frame {frame}");
+            assert!(
+                (reverb.predelay.buffer[pos] - expected).abs() < 1e-6,
+                "frame {frame}"
+            );
         }
         reverb.clear();
         let pos = reverb.predelay.write_pos;
         reverb.process_sample(1.0, 0.0);
         let mut fresh = plateau::OnePoleHP::new();
         fresh.set_cutoff(20.0);
-        lp.clear(); hp.clear();
-        assert_eq!(reverb.predelay.buffer[pos], hp.process(lp.process(fresh.process(0.5))));
+        lp.clear();
+        hp.clear();
+        assert_eq!(
+            reverb.predelay.buffer[pos],
+            hp.process(lp.process(fresh.process(0.5)))
+        );
     }
 
     #[test]
@@ -3109,7 +3870,11 @@ mod tests {
         reverb.set_parameters(params);
         for frame in 0..12_000 {
             let (left, right) = reverb.process_sample(0.0, 0.0);
-            assert_eq!((left, right), (0.0, 0.0), "frozen input leaked at frame {frame}");
+            assert_eq!(
+                (left, right),
+                (0.0, 0.0),
+                "frozen input leaked at frame {frame}"
+            );
         }
         let mut peak = 0.0f32;
         for frame in 0..16_000 {
@@ -3126,8 +3891,13 @@ mod tests {
         let mut storage = Box::<routing::DualEfxProcessor>::new_uninit();
         // Model dirty raw storage without first creating a reference to the
         // processor or relying on its normal constructor.
-        unsafe { std::ptr::write_bytes(storage.as_mut_ptr().cast::<u8>(), 0xa5,
-            std::mem::size_of::<routing::DualEfxProcessor>()) };
+        unsafe {
+            std::ptr::write_bytes(
+                storage.as_mut_ptr().cast::<u8>(),
+                0xa5,
+                std::mem::size_of::<routing::DualEfxProcessor>(),
+            )
+        };
         let zeroed = routing::DualEfxProcessor::initialize_in_place(&mut storage);
         reference.init();
         assert_eq!(zeroed.return_gain_a, 1.0);
@@ -3220,10 +3990,24 @@ mod tests {
                 let mut expected_l = [0.0; 64];
                 let mut expected_r = [0.0; 64];
                 actual.process_buses(&silence, &bad_bus, &impulse, &mut actual_l, &mut actual_r);
-                expected.process_buses(&silence, &silence, &impulse, &mut expected_l, &mut expected_r);
-                assert_eq!(actual_l, expected_l, "left block {block}, corrupt {corrupt}");
-                assert_eq!(actual_r, expected_r, "right block {block}, corrupt {corrupt}");
-                for (&l, &r) in expected_l.iter().zip(&expected_r) { peak = peak.max(l.abs()).max(r.abs()); }
+                expected.process_buses(
+                    &silence,
+                    &silence,
+                    &impulse,
+                    &mut expected_l,
+                    &mut expected_r,
+                );
+                assert_eq!(
+                    actual_l, expected_l,
+                    "left block {block}, corrupt {corrupt}"
+                );
+                assert_eq!(
+                    actual_r, expected_r,
+                    "right block {block}, corrupt {corrupt}"
+                );
+                for (&l, &r) in expected_l.iter().zip(&expected_r) {
+                    peak = peak.max(l.abs()).max(r.abs());
+                }
                 impulse[0] = 0.0;
             }
             assert!(peak > 0.001, "test must observe the cascade");
@@ -3252,8 +4036,11 @@ mod tests {
         for start in (0..145).step_by(64) {
             let end = (start + 64).min(145);
             let short_chunk = short.get(start..end.min(short.len())).unwrap_or(&[]);
-            split.process_block(&[&input[start..end], short_chunk],
-                &mut expected_l[start..end], &mut expected_r[start..end]);
+            split.process_block(
+                &[&input[start..end], short_chunk],
+                &mut expected_l[start..end],
+                &mut expected_r[start..end],
+            );
         }
         assert_eq!(actual_l, expected_l);
         assert_eq!(actual_r, expected_r);
@@ -3282,7 +4069,11 @@ mod tests {
             let mut expected = [[0.0; 64]; 2];
             let mut actual = [[0.0; 64]; 2];
             let [ref mut expected_l, ref mut expected_r] = expected;
-            channels.process_block(&[&inputs[0], &inputs[1], &inputs[2]], expected_l, expected_r);
+            channels.process_block(
+                &[&inputs[0], &inputs[1], &inputs[2]],
+                expected_l,
+                expected_r,
+            );
             let [ref mut actual_l, ref mut actual_r] = actual;
             buses.process_buses(&weighted[0], &weighted[1], &weighted[2], actual_l, actual_r);
             assert_eq!(actual, expected);
@@ -3332,17 +4123,45 @@ mod tests {
         routed.set_channel_routing(0, routing::RoutingMode::SendA);
         routed.set_channel_routing(1, routing::RoutingMode::SendB);
         routed.set_channel_routing(2, routing::RoutingMode::SendAtoB);
-        let a: Vec<_> = (0..145).map(|i| if i == 0 || i == 70 { 0.25 } else { 0.0 }).collect();
-        let b: Vec<_> = (0..145).map(|i| if i == 1 || i == 71 || i == 110 { 0.5 } else { 0.0 }).collect();
-        let c: Vec<_> = (0..145).map(|i| if i == 2 || i == 72 { -0.25 } else { 0.0 }).collect();
+        let a: Vec<_> = (0..145)
+            .map(|i| if i == 0 || i == 70 { 0.25 } else { 0.0 })
+            .collect();
+        let b: Vec<_> = (0..145)
+            .map(|i| {
+                if i == 1 || i == 71 || i == 110 {
+                    0.5
+                } else {
+                    0.0
+                }
+            })
+            .collect();
+        let c: Vec<_> = (0..145)
+            .map(|i| if i == 2 || i == 72 { -0.25 } else { 0.0 })
+            .collect();
         let ramp: Vec<_> = (0..100).map(|i| i as f32 / 100.0).collect();
         let channels = [
-            routing::WeightedChannel { samples: &a, gain: 2.0, ramp: None },
-            routing::WeightedChannel { samples: &b, gain: 0.75, ramp: Some(&ramp) },
-            routing::WeightedChannel { samples: &c, gain: -1.0, ramp: None },
+            routing::WeightedChannel {
+                samples: &a,
+                gain: 2.0,
+                ramp: None,
+            },
+            routing::WeightedChannel {
+                samples: &b,
+                gain: 0.75,
+                ramp: Some(&ramp),
+            },
+            routing::WeightedChannel {
+                samples: &c,
+                gain: -1.0,
+                ramp: None,
+            },
         ];
         let expected_a: Vec<_> = a.iter().map(|x| x * 2.0).collect();
-        let expected_b: Vec<_> = b.iter().enumerate().map(|(i, x)| x * ramp.get(i).copied().unwrap_or(0.0) * 0.75).collect();
+        let expected_b: Vec<_> = b
+            .iter()
+            .enumerate()
+            .map(|(i, x)| x * ramp.get(i).copied().unwrap_or(0.0) * 0.75)
+            .collect();
         let expected_c: Vec<_> = c.iter().map(|x| -x).collect();
         let mut actual = [vec![0.0; 145], vec![0.0; 145]];
         let mut expected = [vec![0.0; 145], vec![0.0; 145]];
@@ -3369,15 +4188,29 @@ mod tests {
         let mut corrupt = [0.0; 512];
         let mut ramp_input = [0.0; 512];
         let mut ramp = [1.0; 512];
-        for i in [0, 64, 128] { valid[i] = 0.5; }
+        for i in [0, 64, 128] {
+            valid[i] = 0.5;
+        }
         corrupt[0] = f32::NAN;
         corrupt[64] = f32::INFINITY;
         ramp_input[128] = 0.25;
         ramp[128] = f32::NAN;
         let channels = [
-            routing::WeightedChannel { samples: &valid, gain: 1.0, ramp: None },
-            routing::WeightedChannel { samples: &corrupt, gain: 1.0, ramp: None },
-            routing::WeightedChannel { samples: &ramp_input, gain: 1.0, ramp: Some(&ramp) },
+            routing::WeightedChannel {
+                samples: &valid,
+                gain: 1.0,
+                ramp: None,
+            },
+            routing::WeightedChannel {
+                samples: &corrupt,
+                gain: 1.0,
+                ramp: None,
+            },
+            routing::WeightedChannel {
+                samples: &ramp_input,
+                gain: 1.0,
+                ramp: Some(&ramp),
+            },
         ];
         let mut actual = [[0.0; 512]; 2];
         let mut reference = [[0.0; 512]; 2];
@@ -3386,18 +4219,29 @@ mod tests {
         let [left, right] = &mut reference;
         reference_processor.process_weighted_block(&channels[..1], left, right);
         assert_eq!(actual, reference);
-        assert!(reference.iter().flatten().any(|sample| sample.abs() > 0.001));
+        assert!(
+            reference
+                .iter()
+                .flatten()
+                .any(|sample| sample.abs() > 0.001)
+        );
     }
 
     #[test]
     fn strip_routing_updates_both_sides_of_paired_strips() {
         let mut processor = Box::new(routing::DualEfxProcessor::new());
-        let expected: [&[usize]; 8] = [&[0], &[1], &[2], &[3], &[4, 5], &[6, 7], &[8, 9], &[10, 11]];
+        let expected: [&[usize]; 8] =
+            [&[0], &[1], &[2], &[3], &[4, 5], &[6, 7], &[8, 9], &[10, 11]];
         for (strip, slots) in expected.iter().enumerate() {
-            processor.channel_routing.fill(routing::RoutingMode::Neither);
+            processor
+                .channel_routing
+                .fill(routing::RoutingMode::Neither);
             processor.set_strip_routing(strip, routing::RoutingMode::SendAtoB);
             for (slot, &mode) in processor.channel_routing.iter().enumerate() {
-                assert_eq!(mode == routing::RoutingMode::SendAtoB, slots.contains(&slot));
+                assert_eq!(
+                    mode == routing::RoutingMode::SendAtoB,
+                    slots.contains(&slot)
+                );
             }
         }
         let before = processor.channel_routing;
@@ -3406,14 +4250,29 @@ mod tests {
         assert_eq!(processor.cycle_strip_routing(8, 1), None);
         for (strip, slots) in expected.iter().enumerate() {
             processor.set_strip_routing(strip, routing::RoutingMode::Neither);
-            for mode in [routing::RoutingMode::SendA, routing::RoutingMode::SendB,
-                         routing::RoutingMode::SendAtoB, routing::RoutingMode::Neither] {
+            for mode in [
+                routing::RoutingMode::SendA,
+                routing::RoutingMode::SendB,
+                routing::RoutingMode::SendAtoB,
+                routing::RoutingMode::Neither,
+            ] {
                 assert_eq!(processor.cycle_strip_routing(strip, 1), Some(mode));
-                for &slot in *slots { assert_eq!(processor.channel_routing[slot], mode); }
+                for &slot in *slots {
+                    assert_eq!(processor.channel_routing[slot], mode);
+                }
             }
-            assert_eq!(processor.cycle_strip_routing(strip, -1), Some(routing::RoutingMode::SendAtoB));
-            assert_eq!(processor.cycle_strip_routing(strip, i32::MIN), Some(routing::RoutingMode::SendAtoB));
-            assert_eq!(processor.cycle_strip_routing(strip, i32::MAX), Some(routing::RoutingMode::SendB));
+            assert_eq!(
+                processor.cycle_strip_routing(strip, -1),
+                Some(routing::RoutingMode::SendAtoB)
+            );
+            assert_eq!(
+                processor.cycle_strip_routing(strip, i32::MIN),
+                Some(routing::RoutingMode::SendAtoB)
+            );
+            assert_eq!(
+                processor.cycle_strip_routing(strip, i32::MAX),
+                Some(routing::RoutingMode::SendB)
+            );
         }
     }
 
@@ -3433,8 +4292,14 @@ mod tests {
         long.process_stereo_send(&input, &input, &mut actual_l, &mut actual_r, true, true);
         for start in (0..145).step_by(64) {
             let end = (start + 64).min(145);
-            split.process_stereo_send(&input[start..end], &input[start..end],
-                &mut expected_l[start..end], &mut expected_r[start..end], true, true);
+            split.process_stereo_send(
+                &input[start..end],
+                &input[start..end],
+                &mut expected_l[start..end],
+                &mut expected_r[start..end],
+                true,
+                true,
+            );
         }
         assert_eq!(actual_l, expected_l);
         assert_eq!(actual_r, expected_r);
@@ -3462,12 +4327,16 @@ mod tests {
             off.process_stereo_send(&input, &input, &mut off_l, &mut off_r, true, true);
             quiet.process_stereo_send(&input, &input, &mut quiet_l, &mut quiet_r, true, true);
             for i in 0..64 {
-                peak_difference = peak_difference.max((quiet_l[i] - off_l[i]).abs())
+                peak_difference = peak_difference
+                    .max((quiet_l[i] - off_l[i]).abs())
                     .max((quiet_r[i] - off_r[i]).abs());
             }
             input[0] = 0.0;
         }
-        assert!(peak_difference > 1e-9, "quiet cascade was lost: {peak_difference}");
+        assert!(
+            peak_difference > 1e-9,
+            "quiet cascade was lost: {peak_difference}"
+        );
     }
 
     #[test]
@@ -3481,16 +4350,52 @@ mod tests {
             let mut actual_r = [0.0; 64];
             let mut expected_l = [0.0; 64];
             let mut expected_r = [0.0; 64];
-            actual.process_stereo_send(&impulse, &silence, &mut actual_l, &mut actual_r, true, true);
-            expected.process_stereo_send(&impulse, &silence, &mut expected_l, &mut expected_r, true, true);
+            actual.process_stereo_send(
+                &impulse,
+                &silence,
+                &mut actual_l,
+                &mut actual_r,
+                true,
+                true,
+            );
+            expected.process_stereo_send(
+                &impulse,
+                &silence,
+                &mut expected_l,
+                &mut expected_r,
+                true,
+                true,
+            );
             let bad = [corrupt; 64];
             let mut peak = 0.0f32;
             for block in 0..200 {
-                actual.process_stereo_send(&bad, &silence, &mut actual_l, &mut actual_r, true, true);
-                expected.process_stereo_send(&silence, &silence, &mut expected_l, &mut expected_r, true, true);
-                assert_eq!(actual_l, expected_l, "left block {block}, corrupt {corrupt}");
-                assert_eq!(actual_r, expected_r, "right block {block}, corrupt {corrupt}");
-                for (&l, &r) in expected_l.iter().zip(&expected_r) { peak = peak.max(l.abs()).max(r.abs()); }
+                actual.process_stereo_send(
+                    &bad,
+                    &silence,
+                    &mut actual_l,
+                    &mut actual_r,
+                    true,
+                    true,
+                );
+                expected.process_stereo_send(
+                    &silence,
+                    &silence,
+                    &mut expected_l,
+                    &mut expected_r,
+                    true,
+                    true,
+                );
+                assert_eq!(
+                    actual_l, expected_l,
+                    "left block {block}, corrupt {corrupt}"
+                );
+                assert_eq!(
+                    actual_r, expected_r,
+                    "right block {block}, corrupt {corrupt}"
+                );
+                for (&l, &r) in expected_l.iter().zip(&expected_r) {
+                    peak = peak.max(l.abs()).max(r.abs());
+                }
             }
             assert!(peak > 0.001, "test must observe the cascade tail");
         }
@@ -3523,7 +4428,13 @@ mod tests {
             let mut expected_l = [0.0; 64];
             let mut expected_r = [0.0; 64];
             switched.process_buses(&silence, &silence, &silence, &mut left, &mut right);
-            reference.process_buses(&silence, &silence, &silence, &mut expected_l, &mut expected_r);
+            reference.process_buses(
+                &silence,
+                &silence,
+                &silence,
+                &mut expected_l,
+                &mut expected_r,
+            );
             assert_eq!(left, expected_l, "left block {block}");
             assert_eq!(right, expected_r, "right block {block}");
         }
@@ -3550,7 +4461,10 @@ mod tests {
                 tail_peak = tail_peak.max(l.abs()).max(r.abs());
             }
         }
-        assert!(tail_peak > 0.001, "closing a send must not cut the reverb tail");
+        assert!(
+            tail_peak > 0.001,
+            "closing a send must not cut the reverb tail"
+        );
     }
 
     #[test]
@@ -3571,7 +4485,10 @@ mod tests {
             }
             input[0] = 0.0;
         }
-        assert!(peak > 0.0000001 && peak < 0.001, "quiet send peak was {peak}");
+        assert!(
+            peak > 0.0000001 && peak < 0.001,
+            "quiet send peak was {peak}"
+        );
     }
 
     #[test]
@@ -3646,22 +4563,50 @@ mod tests {
             let mut right = silence;
             let mut expected_left = silence;
             let mut expected_right = silence;
-            disabled.process_stereo_send(&impulse, &impulse, &mut left, &mut right, enable_a, enable_b);
-            reference.process_stereo_send(&impulse, &impulse, &mut expected_left, &mut expected_right, enable_a, enable_b);
+            disabled.process_stereo_send(
+                &impulse, &impulse, &mut left, &mut right, enable_a, enable_b,
+            );
+            reference.process_stereo_send(
+                &impulse,
+                &impulse,
+                &mut expected_left,
+                &mut expected_right,
+                enable_a,
+                enable_b,
+            );
             // The disabled effects must receive silence even when the bus carries
             // signal, and their output must remain muted while their history ages.
             for _ in 0..4 {
-                disabled.process_stereo_send(&impulse, &impulse, &mut left, &mut right, false, false);
-                reference.process_stereo_send(&silence, &silence, &mut expected_left, &mut expected_right, enable_a, enable_b);
+                disabled
+                    .process_stereo_send(&impulse, &impulse, &mut left, &mut right, false, false);
+                reference.process_stereo_send(
+                    &silence,
+                    &silence,
+                    &mut expected_left,
+                    &mut expected_right,
+                    enable_a,
+                    enable_b,
+                );
                 assert!(left.iter().chain(&right).all(|&sample| sample == 0.0));
             }
             let mut peak = 0.0f32;
             for _ in 0..200 {
-                disabled.process_stereo_send(&silence, &silence, &mut left, &mut right, enable_a, enable_b);
-                reference.process_stereo_send(&silence, &silence, &mut expected_left, &mut expected_right, enable_a, enable_b);
+                disabled.process_stereo_send(
+                    &silence, &silence, &mut left, &mut right, enable_a, enable_b,
+                );
+                reference.process_stereo_send(
+                    &silence,
+                    &silence,
+                    &mut expected_left,
+                    &mut expected_right,
+                    enable_a,
+                    enable_b,
+                );
                 assert_eq!(left, expected_left);
                 assert_eq!(right, expected_right);
-                for &sample in left.iter().chain(&right) { peak = peak.max(sample.abs()); }
+                for &sample in left.iter().chain(&right) {
+                    peak = peak.max(sample.abs());
+                }
             }
             assert!(peak > 0.0001, "comparison must include a reverb tail");
         }
@@ -3720,17 +4665,29 @@ mod tests {
         params.high_cut_hz = f32::INFINITY;
         processor.plateau.set_parameters(params);
         assert_eq!(processor.plateau.params.low_cut_hz, 20.0);
-        assert_eq!(processor.plateau.params.high_cut_hz, plateau::SAMPLE_RATE * 0.49);
-        let formatted = parameters::format_parameter(parameters::EfxParamId::PlatLowCut, &processor);
-        assert_eq!(std::str::from_utf8(&formatted.value_str[..formatted.value_len]).unwrap(), "20.0 Hz");
-        let formatted = parameters::format_parameter(parameters::EfxParamId::PlatHighCut, &processor);
-        assert_eq!(std::str::from_utf8(&formatted.value_str[..formatted.value_len]).unwrap(), "23520.0 Hz");
+        assert_eq!(
+            processor.plateau.params.high_cut_hz,
+            plateau::SAMPLE_RATE * 0.49
+        );
+        let formatted =
+            parameters::format_parameter(parameters::EfxParamId::PlatLowCut, &processor);
+        assert_eq!(
+            std::str::from_utf8(&formatted.value_str[..formatted.value_len]).unwrap(),
+            "20.0 Hz"
+        );
+        let formatted =
+            parameters::format_parameter(parameters::EfxParamId::PlatHighCut, &processor);
+        assert_eq!(
+            std::str::from_utf8(&formatted.value_str[..formatted.value_len]).unwrap(),
+            "23520.0 Hz"
+        );
     }
     #[test]
     fn routed_blocks_match_frames_across_edits_and_path_switches() {
         let mut block = Box::new(routing::DualEfxProcessor::new());
         let mut frames = Box::new(routing::DualEfxProcessor::new());
-        block.init(); frames.init();
+        block.init();
+        frames.init();
         let mut random = 193u32;
         for step in 0..1300 {
             if [2, 80, 300, 700, 1000].contains(&step) {
@@ -3740,23 +4697,43 @@ mod tests {
                 p.transition_ms = 7.0;
                 p.refresh_seconds = 0.1;
                 p.amount = if step == 700 { 0.3 } else { 0.8 };
-                block.velvet.set_parameters(p); frames.velvet.set_parameters(p);
+                block.velvet.set_parameters(p);
+                frames.velvet.set_parameters(p);
             }
             let n = [1, 7, 16, 31, 64][step % 5];
-            let mut a = [0.0; 64]; let mut b = [0.0; 64]; let mut c = [0.0; 64];
+            let mut a = [0.0; 64];
+            let mut b = [0.0; 64];
+            let mut c = [0.0; 64];
             for i in 0..n {
                 random = random.wrapping_mul(1664525).wrapping_add(1013904223);
-                a[i] = if step % 200 < 140 { (random as i32 as f32) / 4294967296.0 } else { 0.0 };
+                a[i] = if step % 200 < 140 {
+                    (random as i32 as f32) / 4294967296.0
+                } else {
+                    0.0
+                };
                 random = random.wrapping_mul(1664525).wrapping_add(1013904223);
                 b[i] = (random as i32 as f32) / 8589934592.0;
                 c[i] = if step % 150 < 100 { -a[i] * 0.37 } else { 0.0 };
             }
-            let mut l = [0.0; 64]; let mut r = [0.0; 64];
+            let mut l = [0.0; 64];
+            let mut r = [0.0; 64];
             if step % 250 >= 200 {
-                let mut el = [0.0; 64]; let mut er = [0.0; 64];
+                let mut el = [0.0; 64];
+                let mut er = [0.0; 64];
                 block.process_stereo_send(&a[..n], &b[..n], &mut l[..n], &mut r[..n], true, true);
-                frames.process_stereo_send(&a[..n], &b[..n], &mut el[..n], &mut er[..n], true, true);
-                assert_eq!((&l[..n], &r[..n]), (&el[..n], &er[..n]), "stereo step {step}");
+                frames.process_stereo_send(
+                    &a[..n],
+                    &b[..n],
+                    &mut el[..n],
+                    &mut er[..n],
+                    true,
+                    true,
+                );
+                assert_eq!(
+                    (&l[..n], &r[..n]),
+                    (&el[..n], &er[..n]),
+                    "stereo step {step}"
+                );
             } else {
                 block.process_buses(&a[..n], &b[..n], &c[..n], &mut l[..n], &mut r[..n]);
                 for i in 0..n {
@@ -3771,21 +4748,38 @@ mod tests {
     fn routed_blocks_preserve_near_ring_end_taps() {
         let mut block = Box::new(routing::DualEfxProcessor::new());
         let mut frames = Box::new(routing::DualEfxProcessor::new());
-        block.init(); frames.init();
+        block.init();
+        frames.init();
         for engine in [&mut block, &mut frames] {
-            let mut p = engine.velvet.current; p.dynamic = false; engine.velvet.set_parameters(p);
+            let mut p = engine.velvet.current;
+            p.dynamic = false;
+            engine.velvet.set_parameters(p);
             for channel in &mut engine.velvet.channels {
                 channel.banks[0].count = 2;
-                channel.banks[0].storage[0] = velvet::Tap { delay: (velvet::MAX_DELAY_SAMPLES - 1) as u32, gain: 0.5 };
-                channel.banks[0].storage[1] = velvet::Tap { delay: u32::MAX, gain: 0.5 };
+                channel.banks[0].storage[0] = velvet::Tap {
+                    delay: (velvet::MAX_DELAY_SAMPLES - 1) as u32,
+                    gain: 0.5,
+                };
+                channel.banks[0].storage[1] = velvet::Tap {
+                    delay: u32::MAX,
+                    gain: 0.5,
+                };
             }
         }
         for step in 0..180 {
             let a = [if step % 13 == 0 { 0.2 } else { 0.0 }; 64];
-            let b = [0.0; 64]; let c = [if step % 23 == 0 { -0.3 } else { 0.0 }; 64];
-            let mut l = [0.0; 64]; let mut r = [0.0; 64];
+            let b = [0.0; 64];
+            let c = [if step % 23 == 0 { -0.3 } else { 0.0 }; 64];
+            let mut l = [0.0; 64];
+            let mut r = [0.0; 64];
             block.process_buses(&a, &b, &c, &mut l, &mut r);
-            for i in 0..64 { assert_eq!((l[i], r[i]), frames.process_bus_sample(a[i], b[i], c[i]), "step {step}, frame {i}"); }
+            for i in 0..64 {
+                assert_eq!(
+                    (l[i], r[i]),
+                    frames.process_bus_sample(a[i], b[i], c[i]),
+                    "step {step}, frame {i}"
+                );
+            }
         }
     }
 }

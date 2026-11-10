@@ -9,7 +9,11 @@ pub const TWO_PI: f32 = 6.28318530717958647692;
 /// The limit leaves 120 dB of headroom above normalized full scale.
 #[inline(always)]
 pub fn audio_input(x: f32) -> f32 {
-    if x >= -1_000_000.0 && x <= 1_000_000.0 { x } else { 0.0 }
+    if x >= -1_000_000.0 && x <= 1_000_000.0 {
+        x
+    } else {
+        0.0
+    }
 }
 
 /// Fast clamp.

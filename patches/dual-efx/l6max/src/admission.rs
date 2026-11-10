@@ -25,18 +25,27 @@ pub struct CallbackAdmission {
 
 impl CallbackAdmission {
     pub const fn new() -> Self {
-        Self { state: AtomicU32::new(0) }
+        Self {
+            state: AtomicU32::new(0),
+        }
     }
 
     /// Makes one strong atomic admission attempt. A closed, occupied, or
     /// invalid state is rejected; callers must handle rejection safely.
     /// The target's atomic implementation may retry and needs deadline qualification.
     pub fn try_enter(&self, path: CallbackPath) -> Option<CallbackLease<'_>> {
-        let bit = match path { CallbackPath::Live => LIVE, CallbackPath::FileMix => FILE_MIX };
+        let bit = match path {
+            CallbackPath::Live => LIVE,
+            CallbackPath::FileMix => FILE_MIX,
+        };
         let state = self.state.load(Ordering::Acquire);
-        if state != 0 && state != RESERVED { return None; }
-        self.state.compare_exchange(state, state | bit, Ordering::AcqRel, Ordering::Acquire)
-            .ok().map(|_| CallbackLease { gate: self, bit })
+        if state != 0 && state != RESERVED {
+            return None;
+        }
+        self.state
+            .compare_exchange(state, state | bit, Ordering::AcqRel, Ordering::Acquire)
+            .ok()
+            .map(|_| CallbackLease { gate: self, bit })
     }
 
     /// Claims the live side while file mixing owns the effect. The caller may
@@ -45,9 +54,13 @@ impl CallbackAdmission {
     /// This model does not establish those resource boundaries in firmware.
     pub fn try_enter_live_bypass(&self) -> Option<LiveBypassLease<'_>> {
         let state = self.state.load(Ordering::Acquire);
-        if state != FILE_MIX && state != (FILE_MIX | RESERVED) { return None; }
-        self.state.compare_exchange(state, state | LIVE, Ordering::AcqRel, Ordering::Acquire)
-            .ok().map(|_| LiveBypassLease { gate: self })
+        if state != FILE_MIX && state != (FILE_MIX | RESERVED) {
+            return None;
+        }
+        self.state
+            .compare_exchange(state, state | LIVE, Ordering::AcqRel, Ordering::Acquire)
+            .ok()
+            .map(|_| LiveBypassLease { gate: self })
     }
 
     /// Stops new leases. Only one selector can hold the close guard; a caller
@@ -56,8 +69,15 @@ impl CallbackAdmission {
     pub fn try_close(&self) -> Option<CloseGuard<'_>> {
         let mut state = self.state.load(Ordering::Acquire);
         loop {
-            if state & !(LIVE | FILE_MIX) != 0 { return None; }
-            match self.state.compare_exchange_weak(state, state | CLOSED, Ordering::AcqRel, Ordering::Acquire) {
+            if state & !(LIVE | FILE_MIX) != 0 {
+                return None;
+            }
+            match self.state.compare_exchange_weak(
+                state,
+                state | CLOSED,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
                 Ok(_) => return Some(CloseGuard { gate: self }),
                 Err(actual) => state = actual,
             }
@@ -69,9 +89,13 @@ impl CallbackAdmission {
     /// No firmware hook or deadline is established by this model.
     pub fn try_reserve_selector(&self) -> Option<SelectorReservation<'_>> {
         let state = self.state.load(Ordering::Acquire);
-        if state & !(LIVE | FILE_MIX) != 0 { return None; }
-        self.state.compare_exchange(state, state | RESERVED, Ordering::AcqRel, Ordering::Acquire)
-            .ok().map(|_| SelectorReservation { gate: self })
+        if state & !(LIVE | FILE_MIX) != 0 {
+            return None;
+        }
+        self.state
+            .compare_exchange(state, state | RESERVED, Ordering::AcqRel, Ordering::Acquire)
+            .ok()
+            .map(|_| SelectorReservation { gate: self })
     }
 }
 
@@ -102,7 +126,9 @@ impl SelectorReservation<'_> {
 
 impl Drop for SelectorReservation<'_> {
     fn drop(&mut self) {
-        self.gate.state.fetch_and(!(RESERVED | CLOSED), Ordering::Release);
+        self.gate
+            .state
+            .fetch_and(!(RESERVED | CLOSED), Ordering::Release);
     }
 }
 
@@ -190,7 +216,9 @@ mod tests {
             let gate = CallbackAdmission::new();
             let live = gate.try_enter(CallbackPath::Live).unwrap();
             let mut selector = gate.try_reserve_selector().unwrap();
-            if close_first { selector.close(); }
+            if close_first {
+                selector.close();
+            }
             drop(selector);
             assert!(gate.try_enter(CallbackPath::FileMix).is_none());
             drop(live);

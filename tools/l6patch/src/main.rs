@@ -15,7 +15,7 @@ use std::{
     path::{Path, PathBuf},
 };
 const USAGE: &str = "Usage: l6patch INPUT_UNPACKED_DIR OUTPUT_DIR [--patch NAME]... [--update-version FOUR_DIGITS] [--experimental-patch-bundle | --experimental-patch-loader] [--experimental-qemu-module-arena]\n\
-Patches: knob-dialog, midi-control, midi-sync, din-mixer-control. Repeat --patch to combine them. MIDI Control and MIDI Sync can be combined. The Patch loader is experimental and unqualified.";
+Patches: knob-dialog, midi-control, midi-sync, din-mixer-control, dual-efx. Repeat --patch to combine them. MIDI Control and MIDI Sync can be combined. The Patch loader is experimental and unqualified.";
 
 const SD_MODULE_BASE: u32 = 0x8011_0000;
 const SD_MODULE_END: u32 = 0x8011_8000;
@@ -56,12 +56,14 @@ fn parse_args() -> Result<Options, Box<dyn std::error::Error>> {
         }
         let value = args.next().ok_or(USAGE)?;
         match flag.as_str() {
-            "--patch" => requested.push(
-                *PATCHES
-                    .iter()
-                    .find(|name| **name == value)
-                    .ok_or_else(|| format!("unknown patch {value}\n{USAGE}"))?,
-            ),
+            "--patch" => {
+                let known = PATCHES.iter().find(|name| **name == value).copied();
+                requested.push(match (known, value.as_str()) {
+                    (Some(name), _) => name,
+                    (None, "dual-efx") => "dual-efx",
+                    _ => return Err(format!("unknown patch {value}\n{USAGE}").into()),
+                });
+            }
             "--update-version" => version = Some(value),
             _ => return Err(USAGE.into()),
         }
@@ -73,6 +75,7 @@ fn parse_args() -> Result<Options, Box<dyn std::error::Error>> {
             PATCHES
                 .into_iter()
                 .filter(|n| requested.contains(n))
+                .chain(requested.iter().copied().filter(|name| *name == "dual-efx"))
                 .collect(),
         )
     };
@@ -309,6 +312,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 } else {
                     "l6max"
                 })
+            } else if *name == "dual-efx" && patch_model == FirmwareModel::L6max {
+                patch_root.join("l6max")
             } else {
                 patch_root
             };
@@ -408,6 +413,42 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 sd_bundle::build_dynamic_v1(&module, memory_len, 0, &handlers, &relocations)?;
             let filename = format!("{}.BIN", name.to_ascii_uppercase());
             fs::write(patch_dir.join(&filename), &file)?;
+            let effect_dispatch_symbols = if *name == "dual-efx" {
+                Some(serde_json::json!({
+                    "dsp_stream_entry_hits": symbol(&symbols, "DSP_STREAM_ENTRY_HITS")?,
+                    "dsp_stream_last_arg0": symbol(&symbols, "DSP_STREAM_LAST_ARG0")?,
+                    "dsp_stream_last_arg1": symbol(&symbols, "DSP_STREAM_LAST_ARG1")?,
+                    "dsp_stream_last_arg2": symbol(&symbols, "DSP_STREAM_LAST_ARG2")?,
+                    "dsp_stream_last_arg3": symbol(&symbols, "DSP_STREAM_LAST_ARG3")?,
+                    "effect_workspace_clear_hits": symbol(&symbols, "EFFECT_WORKSPACE_CLEAR_HITS")?,
+                    "dual_effect_type_set_hits": symbol(&symbols, "DUAL_EFFECT_TYPE_SET_HITS")?,
+                    "dual_effect_type_set_seen": symbol(&symbols, "DUAL_EFFECT_TYPE_SET_SEEN")?,
+                    "dual_effect_callback_hits": symbol(&symbols, "DUAL_EFFECT_CALLBACK_HITS")?,
+                    "room_callback_hits": symbol(&symbols, "ROOM_CALLBACK_HITS")?,
+                    "room_callback_admitted": symbol(&symbols, "ROOM_CALLBACK_ADMITTED")?,
+                    "spring_callback_hits": symbol(&symbols, "SPRING_CALLBACK_HITS")?,
+                    "spring_callback_admitted": symbol(&symbols, "SPRING_CALLBACK_ADMITTED")?,
+                    "dual_effect_callback_original": symbol(&symbols, "DUAL_EFFECT_CALLBACK_ORIGINAL")?,
+                    "dual_effect_callback_context": symbol(&symbols, "DUAL_EFFECT_CALLBACK_CONTEXT")?,
+                    "dual_effect_callback_descriptor": symbol(&symbols, "DUAL_EFFECT_CALLBACK_DESCRIPTOR")?,
+                    "dual_effect_callback_gate": symbol(&symbols, "DUAL_EFFECT_CALLBACK_GATE")?,
+                    "dual_effect_selection_pending": symbol(&symbols, "DUAL_EFFECT_SELECTION_PENDING")?,
+                    "dual_effect_processor_type": symbol(&symbols, "DUAL_EFFECT_PROCESSOR_TYPE")?,
+                    "dual_effect_output_nonzero": symbol(&symbols, "DUAL_EFFECT_OUTPUT_NONZERO")?,
+                    "dual_effect_output_invalid": symbol(&symbols, "DUAL_EFFECT_OUTPUT_INVALID")?,
+                    "dual_effect_room_output_nonzero": symbol(&symbols, "DUAL_EFFECT_ROOM_OUTPUT_NONZERO")?,
+                    "dual_effect_spring_output_nonzero": symbol(&symbols, "DUAL_EFFECT_SPRING_OUTPUT_NONZERO")?,
+                    "dual_effect_routed_callback": symbol(&symbols, "DUAL_EFFECT_ROUTED_CALLBACK")?,
+                    "dual_effect_input_nonzero": symbol(&symbols, "DUAL_EFFECT_INPUT_NONZERO")?,
+                    "dual_effect_send_nonzero": symbol(&symbols, "DUAL_EFFECT_SEND_NONZERO")?,
+                    "dual_effect_edit_event": symbol(&symbols, "DUAL_EFFECT_EDIT_EVENT")?,
+                    "dual_effect_edit_applied": symbol(&symbols, "DUAL_EFFECT_EDIT_APPLIED")?,
+                    "dual_effect_edit_dropped": symbol(&symbols, "DUAL_EFFECT_EDIT_DROPPED")?,
+                    "parameter_handoff": symbol(&symbols, "PARAMETER_HANDOFF")?,
+                }))
+            } else {
+                None
+            };
             reports.push(serde_json::json!({
                 "name": name,
                 "file": format!("PATCHES/{filename}"),
@@ -417,6 +458,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "pass_through_entry_offsets": pass_through,
                 "hooks": handlers.iter().map(|(address, offset, next_offset)| serde_json::json!({"address":format!("{address:#x}"),"entry_offset":offset,"next_slot_offset":next_offset})).collect::<Vec<_>>(),
                 "file_length": file.len(),
+                "effect_dispatch_symbols": effect_dispatch_symbols,
+                "dual_effect_callback_offset": if *name == "dual-efx" {
+                    Some(symbol(&symbols, "dual_effect_callback")?)
+                } else {
+                    None
+                },
             }));
         }
         let report = serde_json::json!({
