@@ -68,18 +68,6 @@ const _: () = assert!(
 pub static DSP_STREAM_ENTRY_HITS: AtomicU32 = AtomicU32::new(0);
 #[cfg_attr(not(sd_dynamic_module), unsafe(link_section = ".effect_workspace_state"))]
 #[unsafe(no_mangle)]
-pub static DSP_STREAM_LAST_ARG0: AtomicU32 = AtomicU32::new(0);
-#[cfg_attr(not(sd_dynamic_module), unsafe(link_section = ".effect_workspace_state"))]
-#[unsafe(no_mangle)]
-pub static DSP_STREAM_LAST_ARG1: AtomicU32 = AtomicU32::new(0);
-#[cfg_attr(not(sd_dynamic_module), unsafe(link_section = ".effect_workspace_state"))]
-#[unsafe(no_mangle)]
-pub static DSP_STREAM_LAST_ARG2: AtomicU32 = AtomicU32::new(0);
-#[cfg_attr(not(sd_dynamic_module), unsafe(link_section = ".effect_workspace_state"))]
-#[unsafe(no_mangle)]
-pub static DSP_STREAM_LAST_ARG3: AtomicU32 = AtomicU32::new(0);
-#[cfg_attr(not(sd_dynamic_module), unsafe(link_section = ".effect_workspace_state"))]
-#[unsafe(no_mangle)]
 pub static EFFECT_WORKSPACE_CLEAR_HITS: AtomicU32 = AtomicU32::new(0);
 #[cfg_attr(not(sd_dynamic_module), unsafe(link_section = ".effect_workspace_state"))]
 #[unsafe(no_mangle)]
@@ -161,10 +149,6 @@ pub static DUAL_EFFECT_PROCESSOR_TYPE: AtomicU32 = AtomicU32::new(0);
 #[cfg(not(sd_dynamic_module))]
 fn reset_static_state() {
     DSP_STREAM_ENTRY_HITS.store(0, Ordering::Relaxed);
-    DSP_STREAM_LAST_ARG0.store(0, Ordering::Relaxed);
-    DSP_STREAM_LAST_ARG1.store(0, Ordering::Relaxed);
-    DSP_STREAM_LAST_ARG2.store(0, Ordering::Relaxed);
-    DSP_STREAM_LAST_ARG3.store(0, Ordering::Relaxed);
     EFFECT_WORKSPACE_CLEAR_HITS.store(0, Ordering::Relaxed);
     DUAL_EFFECT_TYPE_SET_HITS.store(0, Ordering::Relaxed);
     DUAL_EFFECT_TYPE_SET_SEEN.store(0, Ordering::Relaxed);
@@ -486,17 +470,8 @@ pub unsafe fn dual_efx_select_callback(effect_type: u32, bus: u32) {
 }
 
 #[function_entry_hook(dsp_stream_callback)]
-pub unsafe fn dsp_stream_entry_probe(
-    argument_0: u32,
-    argument_1: u32,
-    argument_2: u32,
-    argument_3: u32,
-) {
+pub unsafe fn dsp_stream_entry_probe() {
     DSP_STREAM_ENTRY_HITS.fetch_add(1, Ordering::Relaxed);
-    DSP_STREAM_LAST_ARG0.store(argument_0, Ordering::Relaxed);
-    DSP_STREAM_LAST_ARG1.store(argument_1, Ordering::Relaxed);
-    DSP_STREAM_LAST_ARG2.store(argument_2, Ordering::Relaxed);
-    DSP_STREAM_LAST_ARG3.store(argument_3, Ordering::Relaxed);
 
     #[cfg(not(sd_dynamic_module))]
     unsafe {
@@ -521,7 +496,7 @@ pub unsafe fn dsp_stream_entry_probe(
 
     // This fixed ROM routine runs immediately before the relocated wrapper
     // loads its active callback pointer. Install only after it returns.
-    let continuation = hook_continue(argument_0, argument_1, argument_2, argument_3);
+    let continuation = hook_continue();
     #[cfg(sd_dynamic_module)]
     unsafe {
         let selected = core::ptr::read_volatile(ACTIVE_CALLBACK);

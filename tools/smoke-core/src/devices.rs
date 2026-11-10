@@ -4268,10 +4268,6 @@ impl State {
                         .map_err(Into::into)
                     };
                     let dispatch_hits_offset = read_symbol("dsp_stream_entry_hits")?;
-                    let arg0_offset = read_symbol("dsp_stream_last_arg0")?;
-                    let arg1_offset = read_symbol("dsp_stream_last_arg1")?;
-                    let arg2_offset = read_symbol("dsp_stream_last_arg2")?;
-                    let arg3_offset = read_symbol("dsp_stream_last_arg3")?;
                     let clear_hits_offset = read_symbol("effect_workspace_clear_hits")?;
                     let type_set_hits_offset = read_symbol("dual_effect_type_set_hits")?;
                     let type_set_seen_offset = read_symbol("dual_effect_type_set_seen")?;
@@ -4312,13 +4308,6 @@ impl State {
                             .try_into()
                             .unwrap(),
                     );
-                    let args = [arg0_offset, arg1_offset, arg2_offset, arg3_offset]
-                        .map(|offset| {
-                            qmp.read_memory(0, dual_base + offset, 4)
-                                .map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()))
-                        })
-                        .into_iter()
-                        .collect::<Result<Vec<_>, _>>()?;
                     let clear_hits = u32::from_le_bytes(
                         qmp.read_memory(0, dual_base + clear_hits_offset, 4)?
                             .try_into()
@@ -4460,13 +4449,12 @@ impl State {
                         || ![0x2028_0ab9, 0x2028_2221].contains(&callback_original)
                     {
                         return Err(format!(
-                            "Dual EFX DSP validation failed: dsp_hits={dispatch_hits}, callback_hits={callback_hits} (Room {room_hits}/{room_admitted} admitted, Spring {spring_hits}/{spring_admitted} admitted), type_set_hits={type_set_hits}, type_set_seen={type_set_seen:#x}, input_nonzero={input_nonzero}, send_nonzero={send_nonzero}, output_nonzero={output_nonzero} (Room {room_output_nonzero}, Spring {spring_output_nonzero}), output_invalid={output_invalid}, edits={edit_applied}, pending={edit_event:#010x}, dropped={edit_dropped}, gate={callback_gate:#010x}, selection_pending={selection_pending}, active={active_callback:#010x}, expected={expected_callback:#010x}, original={callback_original:#010x}, routed={routed_callback:#010x}, context={callback_context:#010x}, descriptor={callback_descriptor:#010x}, args={args:08x?}, clear_hits={clear_hits}"
+                            "Dual EFX DSP validation failed: dsp_hits={dispatch_hits}, callback_hits={callback_hits} (Room {room_hits}/{room_admitted} admitted, Spring {spring_hits}/{spring_admitted} admitted), type_set_hits={type_set_hits}, type_set_seen={type_set_seen:#x}, input_nonzero={input_nonzero}, send_nonzero={send_nonzero}, output_nonzero={output_nonzero} (Room {room_output_nonzero}, Spring {spring_output_nonzero}), output_invalid={output_invalid}, edits={edit_applied}, pending={edit_event:#010x}, dropped={edit_dropped}, gate={callback_gate:#010x}, selection_pending={selection_pending}, active={active_callback:#010x}, expected={expected_callback:#010x}, original={callback_original:#010x}, routed={routed_callback:#010x}, context={callback_context:#010x}, descriptor={callback_descriptor:#010x}, clear_hits={clear_hits}"
                         )
                         .into());
                     }
                     effect_observation = Some(json!({
                         "dsp_stream_entry_hits": dispatch_hits,
-                        "dsp_stream_last_args": args,
                         "effect_workspace_clear_hits": clear_hits,
                         "dual_effect_type_set_hits": type_set_hits,
                         "dual_effect_type_set_seen": type_set_seen,
