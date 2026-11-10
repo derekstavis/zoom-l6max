@@ -69,13 +69,14 @@ module file. DIN still requires a static firmware edit. Both commands also gener
 an ordinary update package in their output directory; only the loader update is
 installed persistently.
 
-The file uses format version 8 with a 24-byte header: magic, format version,
-loader ABI, code length, hook count, relocation count, initializer offset, and
-CRC-32. Its body is code followed by 12-byte hook records (function address,
-entry offset, and optional `next` slot offset) and fixed-size relocation records.
-The loader reads the header, allocates exactly the code length, streams code
-into that allocation while processing bounded metadata, validates CRC and hook
-address, performs load-time fixups, and publishes the handler only after
+The file uses format version 1 with a 28-byte header: magic, format version,
+loader ABI, code length, allocated memory length, hook count, relocation
+count, initializer offset, and CRC-32. The current loader requires ABI 1. Its
+body is code followed by 12-byte hook records (function address, entry offset,
+and optional `next` slot offset), then fixed-size relocation records. The
+loader reads the header, allocates the declared memory length, streams code
+into that allocation while processing bounded metadata, validates the CRC and
+hook address, performs load-time fixups, and publishes the handler only after
 validation. It makes no whole-file staging allocation. The CRC covers the
 header except its CRC field plus all declared code and records; trailing bytes
 are rejected. It detects accidental damage, not malicious code.

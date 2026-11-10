@@ -525,20 +525,19 @@ pub mod bundle {
     }
 }
 
-/// Compact, one-patch-per-file dynamic module stream (format 7).
+/// Compact, one-patch-per-file dynamic module stream (format version 1).
 ///
-/// The fixed header is 24 bytes. Code starts immediately after it, followed by
-/// fixed 8-byte hook records and 12-byte relocation records. The CRC covers the
-/// complete file except the checksum word itself. No whole-file staging buffer
+/// The fixed version-1 header is 28 bytes. Code starts immediately after it,
+/// followed by fixed 12-byte hook records and 12-byte relocation records.
+/// The CRC covers the complete file except the checksum word itself. No whole-file staging buffer
 /// is needed: code is read into its final allocation and metadata is processed
 /// one bounded record at a time.
 pub mod dynamic {
     use super::bundle::{self, ReadError, Reader, Relocation};
 
-    pub const HEADER_LEN_V8: usize = 24;
-    pub const HEADER_LEN_V9: usize = 28;
-    pub const FORMAT_VERSION: u16 = 9;
-    pub const LOADER_ABI: u16 = 2;
+    pub const HEADER_LEN_V1: usize = 28;
+    pub const FORMAT_VERSION: u16 = 1;
+    pub const LOADER_ABI: u16 = 1;
     pub const HOOK_RECORD_LEN: usize = 12;
     pub const RELOCATION_RECORD_LEN: usize = 12;
     /// Maximum number of distinct hook sites the resident loader can index.
@@ -760,38 +759,21 @@ pub mod dynamic {
         max_hooks: usize,
         max_relocations: usize,
     ) -> Result<Pending, Error> {
-        let mut header = [0u8; HEADER_LEN_V9];
+        let mut header = [0u8; HEADER_LEN_V1];
         read_exact(reader, &mut header[..8])?;
-        if &header[..4] != b"L6SB" || u16_at(&header, 6) != LOADER_ABI {
+        if &header[..4] != b"L6SB"
+            || u16_at(&header, 4) != FORMAT_VERSION
+            || u16_at(&header, 6) != LOADER_ABI
+        {
             return Err(Error::Invalid);
         }
-        let version = u16_at(&header, 4);
-        let (code_len, memory_len, hook_count, relocation_count, init_offset, crc_offset) =
-            match version {
-                8 => {
-                    read_exact(reader, &mut header[8..HEADER_LEN_V8])?;
-                    (
-                        u32_at(&header, 8) as usize,
-                        u32_at(&header, 8) as usize,
-                        u16_at(&header, 12) as usize,
-                        u16_at(&header, 14) as usize,
-                        u32_at(&header, 16),
-                        20,
-                    )
-                }
-                FORMAT_VERSION => {
-                    read_exact(reader, &mut header[8..HEADER_LEN_V9])?;
-                    (
-                        u32_at(&header, 8) as usize,
-                        u32_at(&header, 12) as usize,
-                        u16_at(&header, 16) as usize,
-                        u16_at(&header, 18) as usize,
-                        u32_at(&header, 20),
-                        24,
-                    )
-                }
-                _ => return Err(Error::Invalid),
-            };
+        read_exact(reader, &mut header[8..])?;
+        let code_len = u32_at(&header, 8) as usize;
+        let memory_len = u32_at(&header, 12) as usize;
+        let hook_count = u16_at(&header, 16) as usize;
+        let relocation_count = u16_at(&header, 18) as usize;
+        let init_offset = u32_at(&header, 20);
+        let crc_offset = 24;
         let expected_crc = u32_at(&header, crc_offset);
         if code_len == 0
             || memory_len < code_len
@@ -892,19 +874,14 @@ pub mod dynamic {
         Ok(header)
     }
 
-    /// CRC-32/ISO-HDLC for a complete v8 file, excluding bytes 20..24.
+    /// CRC-32/ISO-HDLC for a version-1 file, excluding bytes 24..28.
     pub fn checksum(file: &[u8]) -> Option<u32> {
-        if file.len() < HEADER_LEN_V8 || &file[..4] != b"L6SB" {
+        if file.len() < HEADER_LEN_V1 || &file[..4] != b"L6SB" || u16_at(file, 4) != FORMAT_VERSION
+        {
             return None;
         }
-        let version = u16_at(file, 4);
-        let (header_len, crc_offset) = match version {
-            8 => (HEADER_LEN_V8, 20),
-            FORMAT_VERSION if file.len() >= HEADER_LEN_V9 => (HEADER_LEN_V9, 24),
-            _ => return None,
-        };
-        let crc = crc_update(!0u32, &file[..crc_offset]);
-        Some(!crc_update(crc, &file[header_len..]))
+        let crc = crc_update(!0u32, &file[..24]);
+        Some(!crc_update(crc, &file[HEADER_LEN_V1..]))
     }
 }
 
@@ -932,13 +909,14 @@ mod dynamic_stream_tests {
     fn fixture() -> Vec<u8> {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(b"L6SB");
-        bytes.extend_from_slice(&8u16.to_le_bytes());
-        bytes.extend_from_slice(&2u16.to_le_bytes());
-        bytes.extend_from_slice(&12u32.to_le_bytes());
-        bytes.extend_from_slice(&1u16.to_le_bytes());
-        bytes.extend_from_slice(&1u16.to_le_bytes());
-        bytes.extend_from_slice(&0u32.to_le_bytes());
-        bytes.extend_from_slice(&[0; 4]);
+        bytes.extend_from_slice(&FORMAT_VERSION.to_le_bytes());
+        bytes.extend_from_slice(&LOADER_ABI.to_le_bytes());
+        bytes.extend_from_slice(&12u32.to_le_bytes()); // code_len
+        bytes.extend_from_slice(&12u32.to_le_bytes()); // memory_len
+        bytes.extend_from_slice(&1u16.to_le_bytes()); // hooks
+        bytes.extend_from_slice(&1u16.to_le_bytes()); // relocations
+        bytes.extend_from_slice(&0u32.to_le_bytes()); // init_offset
+        bytes.extend_from_slice(&[0; 4]); // CRC
         bytes.extend_from_slice(&[4, 0, 0, 0, 0, 0xbf, 0x70, 0x47, 0, 0, 0, 0]);
         bytes.extend_from_slice(&0x8000_1000u32.to_le_bytes());
         bytes.extend_from_slice(&4u32.to_le_bytes());
@@ -947,7 +925,7 @@ mod dynamic_stream_tests {
         bytes.extend_from_slice(&0u32.to_le_bytes());
         bytes.extend_from_slice(&0u32.to_le_bytes());
         let checksum = dynamic::checksum(&bytes).unwrap();
-        bytes[20..24].copy_from_slice(&checksum.to_le_bytes());
+        bytes[24..28].copy_from_slice(&checksum.to_le_bytes());
         bytes
     }
 
@@ -956,7 +934,7 @@ mod dynamic_stream_tests {
         let bytes = fixture();
         assert_eq!(
             dynamic::checksum(&bytes),
-            Some(u32::from_le_bytes(bytes[20..24].try_into().unwrap()))
+            Some(u32::from_le_bytes(bytes[24..28].try_into().unwrap()))
         );
         let mut reader = Chunks {
             bytes: &bytes,
@@ -982,11 +960,11 @@ mod dynamic_stream_tests {
     }
 
     #[test]
-    fn v9_streams_code_and_relocates_into_zeroed_module_state() {
+    fn v1_streams_code_and_relocates_into_zeroed_module_state() {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(b"L6SB");
-        bytes.extend_from_slice(&9u16.to_le_bytes());
-        bytes.extend_from_slice(&2u16.to_le_bytes());
+        bytes.extend_from_slice(&FORMAT_VERSION.to_le_bytes());
+        bytes.extend_from_slice(&LOADER_ABI.to_le_bytes());
         bytes.extend_from_slice(&4u32.to_le_bytes()); // code_len
         bytes.extend_from_slice(&12u32.to_le_bytes()); // memory_len
         bytes.extend_from_slice(&1u16.to_le_bytes()); // hooks

@@ -431,7 +431,7 @@ unsafe fn find_hook_chain(
     free
 }
 
-/// Load one compact v9 (or compatible v8) module directly into its final heap allocation. Hook
+/// Load one compact version-1 module directly into its final heap allocation. Hook
 /// registrations stay local until the streaming CRC, relocations, and every
 /// site/capacity check pass. The complete module's hook set is published under
 /// one interrupt-masked registry update.

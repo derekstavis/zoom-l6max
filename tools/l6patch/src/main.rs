@@ -405,7 +405,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .into());
             }
             let file =
-                sd_bundle::build_dynamic_v9(&module, memory_len, 0, &handlers, &relocations)?;
+                sd_bundle::build_dynamic_v1(&module, memory_len, 0, &handlers, &relocations)?;
             let filename = format!("{}.BIN", name.to_ascii_uppercase());
             fs::write(patch_dir.join(&filename), &file)?;
             reports.push(serde_json::json!({

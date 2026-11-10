@@ -611,18 +611,9 @@ fn fixture_options(
                     as u32;
                 let code_len = u32::from_le_bytes(original[8..12].try_into().unwrap()) as usize;
                 let version = u16::from_le_bytes(original[4..6].try_into().unwrap());
-                let (header_len, hook_count) = if version == 9 {
-                    (
-                        patch_loader_core::dynamic::HEADER_LEN_V9,
-                        u16::from_le_bytes(original[16..18].try_into().unwrap()) as usize,
-                    )
-                } else {
-                    (
-                        patch_loader_core::dynamic::HEADER_LEN_V8,
-                        u16::from_le_bytes(original[12..14].try_into().unwrap()) as usize,
-                    )
-                };
-                if hook_count != 1 || !matches!(version, 8 | 9) {
+                let header_len = patch_loader_core::dynamic::HEADER_LEN_V1;
+                let hook_count = u16::from_le_bytes(original[16..18].try_into().unwrap()) as usize;
+                if hook_count != 1 || version != patch_loader_core::dynamic::FORMAT_VERSION {
                     return Err("ordered-chain fixture expects one dynamic hook".into());
                 }
                 let mut pass_through_module = original.clone();
@@ -631,8 +622,7 @@ fn fixture_options(
                     .copy_from_slice(&pass_through.to_le_bytes());
                 let checksum = patch_loader_core::dynamic::checksum(&pass_through_module)
                     .ok_or("invalid dynamic fixture checksum")?;
-                let checksum_offset = if version == 9 { 24..28 } else { 20..24 };
-                pass_through_module[checksum_offset].copy_from_slice(&checksum.to_le_bytes());
+                pass_through_module[24..28].copy_from_slice(&checksum.to_le_bytes());
                 let first_path = dir.join("sd-chain-first.BIN");
                 let second_path = dir.join("sd-chain-second.BIN");
                 fs::write(&first_path, pass_through_module).map_err(|e| e.to_string())?;
