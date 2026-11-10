@@ -142,29 +142,29 @@ pub unsafe extern "C" fn sd_reset_registry() {
 
 // Explicit function-pointer conversions avoid loading data from the firmware address.
 unsafe fn mount(drive: u32) -> i32 {
-    unsafe { fw_mount(drive) }
+    unsafe { fs_mount(drive) }
 }
 unsafe fn ready() -> u32 {
-    unsafe { fw_ready() }
+    unsafe { fs_ready() }
 }
 unsafe fn open(handle: *mut u32, path: *const u16) -> i32 {
-    unsafe { fw_open(handle, path, 0, 0x100) }
+    unsafe { fs_open(handle, path, 0, 0x100) }
 }
 unsafe fn find_first(path: *const u16, attributes: u32, info: *mut u8) -> i32 {
-    unsafe { fw_find_first(path, attributes, info) }
+    unsafe { fs_find_first(path, attributes, info) }
 }
 unsafe fn find_next(info: *mut u8) -> i32 {
-    unsafe { fw_find_next(info) }
+    unsafe { fs_find_next(info) }
 }
 unsafe fn find_close(info: *mut u8) -> i32 {
-    unsafe { fw_find_close(info) }
+    unsafe { fs_find_close(info) }
 }
 unsafe fn read(handle: u32, dest: *mut u8, count: u32, actual: *mut u32) -> i32 {
-    unsafe { fw_read(handle, dest, count, actual) }
+    unsafe { fs_read(handle, dest, count, actual) }
 }
 unsafe fn close(handle: u32) {
     unsafe {
-        let _ = fw_close(handle);
+        let _ = fs_close(handle);
     }
 }
 unsafe fn alloc(size: usize) -> *mut u8 {
@@ -725,50 +725,50 @@ unsafe fn after_sd_mount(drive: u32) {
 }
 
 #[cfg(sd_l6)]
-#[function_call_post_hook(fw_mount, at = 0x8000_9a60)]
+#[function_call_post_hook(fs_mount, at = 0x8000_9a60)]
 unsafe fn sd_mount_post_l6_recorder(drive: u32) {
     unsafe { after_sd_mount(drive) };
 }
 
 #[cfg(sd_l6)]
-#[function_call_post_hook(fw_mount, at = 0x8000_9aa0)]
+#[function_call_post_hook(fs_mount, at = 0x8000_9aa0)]
 unsafe fn sd_mount_post_l6_settings(drive: u32) {
     unsafe { after_sd_mount(drive) };
 }
 
 #[cfg(not(sd_l6))]
-#[function_call_post_hook(fw_mount, at = 0x8000_e9fa)]
+#[function_call_post_hook(fs_mount, at = 0x8000_e9fa)]
 unsafe fn sd_mount_post_l6max_recorder_a(drive: u32) {
     unsafe { after_sd_mount(drive) };
 }
 
 #[cfg(not(sd_l6))]
-#[function_call_post_hook(fw_mount, at = 0x8000_ea24)]
+#[function_call_post_hook(fs_mount, at = 0x8000_ea24)]
 unsafe fn sd_mount_post_l6max_recorder_b(drive: u32) {
     unsafe { after_sd_mount(drive) };
 }
 
 #[cfg(not(sd_l6))]
-#[function_call_post_hook(fw_mount, at = 0x8001_0118)]
+#[function_call_post_hook(fs_mount, at = 0x8001_0118)]
 unsafe fn sd_mount_post_l6max_startup(drive: u32) {
     unsafe { after_sd_mount(drive) };
 }
 
 #[cfg(not(sd_l6))]
-#[function_call_post_hook(fw_mount, at = 0x8002_bc7e)]
+#[function_call_post_hook(fs_mount, at = 0x8002_bc7e)]
 unsafe fn sd_mount_post_l6max_patch(drive: u32) {
     unsafe { after_sd_mount(drive) };
 }
 
 #[cfg(not(sd_l6))]
-#[function_call_post_hook(fw_mount, at = 0x8000_ebac)]
+#[function_call_post_hook(fs_mount, at = 0x8000_ebac)]
 unsafe fn sd_mount_post_l6max_factory(drive: u32) {
     unsafe { after_sd_mount(drive) };
 }
 
 #[cfg(sd_l6)]
 #[function_offset_hook(
-    l6_initialize_and_start_scheduler,
+    sys_l6_initialize_and_start_scheduler,
     at = 0x24,
     displaced_len = 4,
     guard_sha256 = "0360cab6934417a2ec4e6d8e81a452db698d5fc5f0965ae39b13d02391dc2132"
@@ -781,7 +781,7 @@ unsafe fn sd_reset_hook() {
 
 #[cfg(not(sd_l6))]
 #[function_offset_hook(
-    main_startup_initialize,
+    sys_main_startup_initialize,
     at = 0,
     displaced_len = 4,
     guard_sha256 = "07f4993f36ec2892ba7daa618956f411293bf2fc693e4a3a2aebb9abd0c2ea04"

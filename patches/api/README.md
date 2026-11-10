@@ -19,16 +19,18 @@ api/
     midi.rs
     mixer.rs
     rtos.rs
-    system.rs
+    sys.rs
   l6max/
     fs.rs
+    cfg.rs
     dsp.rs
     gui.rs
     hooks.rs
     midi.rs
     mixer.rs
+    rec.rs
     rtos.rs
-    system.rs
+    sys.rs
 ```
 
 Each model's `mod.rs` includes its subsystem declarations into one module, so
@@ -39,10 +41,12 @@ and must be checked against the supported image before reuse on another
 firmware version.
 
 FreeRTOS functions keep their upstream names and live in `rtos.rs`, including
-the heap functions `pvPortMalloc` and `vPortFree`. Firmware-owned wrappers use
-the `fw_` prefix, such as `fw_semaphore_create` and the file-service bindings.
-Model startup routines live in `system.rs`; DSP and effect callback
-declarations live in `dsp.rs`.
+the heap functions `pvPortMalloc` and `vPortFree`. Firmware-owned semaphore
+wrappers use the `fw_` prefix, such as `fw_semaphore_create`.
+Model startup routines live in `sys.rs`; recorder callbacks and state live in
+`rec.rs`; configuration and settings bindings live in `cfg.rs`; DSP and effect
+callback declarations live in `dsp.rs`. File-service functions use the `fs_`
+prefix, matching their `fs.rs` module.
 
 The `hooks.rs` files define hookable function entries and their guard,
 continuation, and dynamic-dispatch metadata. Both the static builder and SD

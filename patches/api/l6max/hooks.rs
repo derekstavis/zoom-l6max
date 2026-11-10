@@ -2,13 +2,13 @@
 
 define_function_hooks! {
     firmware_bindings;
-    fw_mount {
+    fs_mount {
         displaced_len: 4,
         guard_sha256: "cfa045938b57940b57930f97cd7cdf3e1a8c3b1ddb72c2609b95b97c1b1921ed",
         continuation: Linear,
         dynamic_dispatch: false,
     };
-    main_startup_initialize {
+    sys_main_startup_initialize {
         displaced_len: 4,
         guard_sha256: "07f4993f36ec2892ba7daa618956f411293bf2fc693e4a3a2aebb9abd0c2ea04",
         continuation: Linear,
@@ -32,7 +32,7 @@ define_function_hooks! {
         continuation: Linear,
         dynamic_dispatch: true,
     };
-    effect_workspace_clear {
+    dsp_effect_workspace_clear {
         displaced_len: 4,
         guard_sha256: "76ec330a358f97b9b7c3a577a461f97ec7d7ef19b6bb25ea9d988c82a13d7b25",
         continuation: Linear,
@@ -50,31 +50,31 @@ define_function_hooks! {
         continuation: Linear,
         dynamic_dispatch: true,
     };
-    recorder_play_start_callback {
+    rec_play_start_callback {
         displaced_len: 6,
         guard_sha256: "a8f15d4890025d07dcc510d06e44a592c054a41e28bb3ed1a68a79d1c915fde6",
         continuation: Linear,
         dynamic_dispatch: true,
     };
-    recorder_play_stop_callback {
+    rec_play_stop_callback {
         displaced_len: 4,
         guard_sha256: "8171b1abec743fbec469239f56b25000f392712d4b58933e1cea2fff94726b2f",
         continuation: Linear,
         dynamic_dispatch: true,
     };
-    recorder_start_callback {
+    rec_start_callback {
         displaced_len: 6,
         guard_sha256: "f14800822781d0e786bb1629bd5b16bba41dfb32b77ff9e2a9e1c103689a737d",
         continuation: RelocatedBl,
         dynamic_dispatch: true,
     };
-    recorder_stop_callback {
+    rec_stop_callback {
         displaced_len: 4,
         guard_sha256: "8171b1abec743fbec469239f56b25000f392712d4b58933e1cea2fff94726b2f",
         continuation: Linear,
         dynamic_dispatch: true,
     };
-    handle_main_button_event {
+    panel_handle_main_button_event {
         displaced_len: 4,
         guard_sha256: "f1231a43486723ba9f8f321e7c7721e9cf5fab829d4319788572fe84e4bb067c",
         continuation: Linear,

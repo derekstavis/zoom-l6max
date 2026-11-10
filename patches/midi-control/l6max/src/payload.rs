@@ -31,7 +31,7 @@ const PAGE_COUNT: u8 = 10;
 
 unsafe fn post_button(event: u32, kind: u32) {
     unsafe {
-        let _ = ui_event_queue_send(0, kind, event, 0, 0);
+        let _ = panel_ui_event_queue_send(0, kind, event, 0, 0);
     }
 }
 
@@ -43,7 +43,7 @@ unsafe fn tap_button(event: u32) {
 }
 
 unsafe fn report_state() {
-    let state = unsafe { variable_read!(recorder_mode) };
+    let state = unsafe { variable_read!(rec_mode) };
     unsafe { midi_send_cc_raw(CC_RECORDER_STATE, u32::from(state)) };
 }
 
@@ -152,12 +152,12 @@ macro_rules! report_after_stock {
     };
 }
 
-report_after_stock!(report_play_start, recorder_play_start_callback);
-report_after_stock!(report_play_stop, recorder_play_stop_callback);
-report_after_stock!(report_record_start, recorder_start_callback);
-report_after_stock!(report_record_stop, recorder_stop_callback);
+report_after_stock!(report_play_start, rec_play_start_callback);
+report_after_stock!(report_play_stop, rec_play_stop_callback);
+report_after_stock!(report_record_start, rec_start_callback);
+report_after_stock!(report_record_stop, rec_stop_callback);
 
-#[function_entry_hook(handle_main_button_event)]
+#[function_entry_hook(panel_handle_main_button_event)]
 pub unsafe fn report_page_button(event: *const u32, context: *mut u32) {
     if !event.is_null() {
         let source = unsafe { core::ptr::read_volatile(event) };

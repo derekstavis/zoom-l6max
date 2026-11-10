@@ -24,6 +24,4 @@ firmware_functions! {
     pub unsafe fn mixer_select_efx_callback(effect_type: u32, bus: u32) at 0x8005_4340;
     pub unsafe fn mixer_apply_channel_parameter(channel: u32, mode: u32, absolute: u32, delta: i32, value: u32) at 0x8005_3b28;
     pub unsafe fn mixer_channel_index(channel: u32) -> u32, at 0x8005_64b0;
-    /// Copies live mixer/global values into the settings image and queues a NOR save.
-    pub unsafe fn settings_request_save() at 0x8000_c168;
 }
