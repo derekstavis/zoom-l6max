@@ -28,11 +28,14 @@ impl<'a> Queue<'a> {
         let head = self.words[0].load(Ordering::Relaxed);
         let tail = self.words[1].load(Ordering::Acquire);
         if head.wrapping_sub(tail) >= CAPACITY {
-            return Err(self.words[2].fetch_add(1, Ordering::Relaxed).wrapping_add(1));
+            return Err(self.words[2]
+                .fetch_add(1, Ordering::Relaxed)
+                .wrapping_add(1));
         }
         let index = (head % CAPACITY) as usize;
         if self.generations {
-            self.words[HEADER_WORDS + CAPACITY as usize + index].store(generation(), Ordering::Relaxed);
+            self.words[HEADER_WORDS + CAPACITY as usize + index]
+                .store(generation(), Ordering::Relaxed);
         }
         self.words[HEADER_WORDS + index].store(item, Ordering::Relaxed);
         let next = head.wrapping_add(1);
@@ -52,7 +55,9 @@ impl<'a> Queue<'a> {
         let item = self.words[HEADER_WORDS + index].load(Ordering::Relaxed);
         let generation = if self.generations {
             self.words[HEADER_WORDS + CAPACITY as usize + index].load(Ordering::Relaxed)
-        } else { 0 };
+        } else {
+            0
+        };
         (item, generation)
     }
 

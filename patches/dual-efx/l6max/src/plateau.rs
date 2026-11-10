@@ -10,7 +10,11 @@
 
 use super::math::*;
 
-pub const SAMPLE_RATE: f32 = if cfg!(experimental_plateau_32k) { 32000.0 } else { 48000.0 };
+pub const SAMPLE_RATE: f32 = if cfg!(experimental_plateau_32k) {
+    32000.0
+} else {
+    48000.0
+};
 const OUTPUT_FADE_SAMPLES: u32 = 64;
 const PREDELAY_FADE_SAMPLES: u32 = 64;
 const DIFFUSION_BYPASS_FADE_SAMPLES: u32 = 256;
@@ -78,7 +82,11 @@ impl<const N: usize> Delay<N> {
 
     #[inline(always)]
     pub fn read(&self, delay: usize) -> f32 {
-        self.read_history(if delay >= self.length { self.length - 1 } else { delay })
+        self.read_history(if delay >= self.length {
+            self.length - 1
+        } else {
+            delay
+        })
     }
 
     // The whole backing ring advances even when the configured delay is short.
@@ -128,7 +136,9 @@ impl<const N: usize> Delay<N> {
     #[inline(always)]
     fn read_tank(&self, fraction: f32) -> f32 {
         let newer = self.read_history(self.length);
-        if fraction == 0.0 { newer } else {
+        if fraction == 0.0 {
+            newer
+        } else {
             let older = self.read_history(self.length + 1);
             newer + fraction * (older - newer)
         }
@@ -196,7 +206,11 @@ pub struct OnePoleLP {
 
 impl OnePoleLP {
     pub const fn new() -> Self {
-        Self { z: 0.0, a: 1.0, b: 0.0 }
+        Self {
+            z: 0.0,
+            a: 1.0,
+            b: 0.0,
+        }
     }
 
     pub fn set_cutoff(&mut self, cutoff_hz: f32) {
@@ -231,7 +245,12 @@ pub struct OnePoleHP {
 
 impl OnePoleHP {
     pub const fn new() -> Self {
-        Self { previous_input: 0.0, previous_output: 0.0, pole: 0.0, gain: 1.0 }
+        Self {
+            previous_input: 0.0,
+            previous_output: 0.0,
+            pole: 0.0,
+            gain: 1.0,
+        }
     }
 
     pub fn set_cutoff(&mut self, cutoff_hz: f32) {
@@ -290,15 +309,15 @@ impl TriangleLFO {
 
 #[derive(Clone, Copy)]
 pub struct PlateauParameters {
-    pub predelay_ms: f32,     // bounded by the selected configuration
-    pub size: f32,             // time scale, bounded by the selected configuration
-    pub decay: f32,            // 0.1 to 0.999 (tail duration)
-    pub low_cut_hz: f32,       // 20.0 to 1000.0 Hz
-    pub high_cut_hz: f32,      // 1000.0 to 18000.0 Hz
-    pub diffusion: f32,        // 0.0 to 1.0
-    pub mod_depth: f32,        // 0.0 to 16.0 samples
-    pub freeze: bool,          // infinite sustain
-    pub wet: f32,              // 0.0 to 1.0
+    pub predelay_ms: f32, // bounded by the selected configuration
+    pub size: f32,        // time scale, bounded by the selected configuration
+    pub decay: f32,       // 0.1 to 0.999 (tail duration)
+    pub low_cut_hz: f32,  // 20.0 to 1000.0 Hz
+    pub high_cut_hz: f32, // 1000.0 to 18000.0 Hz
+    pub diffusion: f32,   // 0.0 to 1.0
+    pub mod_depth: f32,   // 0.0 to 16.0 samples
+    pub freeze: bool,     // infinite sustain
+    pub wet: f32,         // 0.0 to 1.0
 }
 
 impl Default for PlateauParameters {
@@ -537,7 +556,11 @@ impl PlateauReverb {
         self.transition_remaining = 0;
         self.transition_anchor = [0.0; 2];
         self.previous_output = [0.0; 2];
-        self.diffusion_mix = if self.params.diffusion == 0.0 { 0.0 } else { 1.0 };
+        self.diffusion_mix = if self.params.diffusion == 0.0 {
+            0.0
+        } else {
+            1.0
+        };
         self.diffusion_step = 0.0;
         self.diffusion_current = self.params.diffusion;
         self.diffusion_gain_step = 0.0;
@@ -563,7 +586,9 @@ impl PlateauReverb {
         if self.params.size != params.size || self.params.freeze != params.freeze {
             self.begin_output_transition();
         }
-        if params.freeze && !self.params.freeze { self.clear_input_filters(); }
+        if params.freeze && !self.params.freeze {
+            self.clear_input_filters();
+        }
         self.retarget_predelay(params.predelay_ms);
         if params.freeze {
             self.predelay_remaining = 0;
@@ -573,10 +598,14 @@ impl PlateauReverb {
 
         // Plateau scales the tank with size; input diffuser times depend only
         // on sample rate, so changing size does not retime their histories.
-        self.in_apf1.set_delay_samples(141.0 * SR_SCALE, IN_APF1_MAX - 2);
-        self.in_apf2.set_delay_samples(107.0 * SR_SCALE, IN_APF2_MAX - 2);
-        self.in_apf3.set_delay_samples(379.0 * SR_SCALE, IN_APF3_MAX - 2);
-        self.in_apf4.set_delay_samples(277.0 * SR_SCALE, IN_APF4_MAX - 2);
+        self.in_apf1
+            .set_delay_samples(141.0 * SR_SCALE, IN_APF1_MAX - 2);
+        self.in_apf2
+            .set_delay_samples(107.0 * SR_SCALE, IN_APF2_MAX - 2);
+        self.in_apf3
+            .set_delay_samples(379.0 * SR_SCALE, IN_APF3_MAX - 2);
+        self.in_apf4
+            .set_delay_samples(277.0 * SR_SCALE, IN_APF4_MAX - 2);
 
         self.apply_tank_size(params.size);
 
@@ -614,7 +643,10 @@ impl PlateauReverb {
             if self.damping_remaining == 0 {
                 self.apply_damping(self.damping_lp_target, self.damping_hp_target);
             } else {
-                self.apply_damping(self.l_lp.a + self.damping_lp_step, self.l_hp.pole + self.damping_hp_step);
+                self.apply_damping(
+                    self.l_lp.a + self.damping_lp_step,
+                    self.l_hp.pole + self.damping_hp_step,
+                );
             }
         }
     }
@@ -622,24 +654,29 @@ impl PlateauReverb {
     fn retarget_diffusion(&mut self, diffusion: f32) {
         if self.params.diffusion != diffusion {
             let target = if diffusion == 0.0 { 0.0 } else { 1.0 };
-            self.diffusion_step = (target - self.diffusion_mix) / DIFFUSION_BYPASS_FADE_SAMPLES as f32;
-            self.diffusion_gain_step = (diffusion - self.diffusion_current) / DIFFUSION_BYPASS_FADE_SAMPLES as f32;
+            self.diffusion_step =
+                (target - self.diffusion_mix) / DIFFUSION_BYPASS_FADE_SAMPLES as f32;
+            self.diffusion_gain_step =
+                (diffusion - self.diffusion_current) / DIFFUSION_BYPASS_FADE_SAMPLES as f32;
             self.diffusion_remaining = DIFFUSION_BYPASS_FADE_SAMPLES;
         }
     }
 
     fn apply_tank_size(&mut self, size: f32) {
         let scale = SR_SCALE * size;
-        self.l_apf1.set_delay_samples(672.0 * scale, L_APF1_MAX - 32);
+        self.l_apf1
+            .set_delay_samples(672.0 * scale, L_APF1_MAX - 32);
         self.l_del1_fraction = self.l_del1.set_tank_time(4453.0 * scale);
-        self.l_apf2.set_delay_samples(1800.0 * scale, L_APF2_MAX - 2);
+        self.l_apf2
+            .set_delay_samples(1800.0 * scale, L_APF2_MAX - 2);
         self.l_del2_fraction = self.l_del2.set_tank_time(3720.0 * scale);
 
-        self.r_apf1.set_delay_samples(908.0 * scale, R_APF1_MAX - 32);
+        self.r_apf1
+            .set_delay_samples(908.0 * scale, R_APF1_MAX - 32);
         self.r_del1_fraction = self.r_del1.set_tank_time(4217.0 * scale);
-        self.r_apf2.set_delay_samples(2656.0 * scale, R_APF2_MAX - 2);
+        self.r_apf2
+            .set_delay_samples(2656.0 * scale, R_APF2_MAX - 2);
         self.r_del2_fraction = self.r_del2.set_tank_time(3163.0 * scale);
-
     }
 
     pub(crate) fn set_predelay_live(&mut self, value: f32) {
@@ -650,7 +687,9 @@ impl PlateauReverb {
 
     fn retarget_predelay(&mut self, milliseconds: f32) {
         let samples = ((milliseconds / 1000.0) * SAMPLE_RATE) as usize;
-        if samples == self.predelay_samples { return; }
+        if samples == self.predelay_samples {
+            return;
+        }
         if self.params.freeze {
             self.predelay_samples = samples;
             self.predelay_remaining = 0;
@@ -670,7 +709,9 @@ impl PlateauReverb {
 
     pub(crate) fn set_size_live(&mut self, value: f32) {
         let value = clamp(value, 0.01, MAX_SIZE);
-        if self.params.size != value { self.begin_output_transition(); }
+        if self.params.size != value {
+            self.begin_output_transition();
+        }
         self.params.size = value;
         self.apply_tank_size(value);
     }
@@ -700,7 +741,11 @@ impl PlateauReverb {
         if self.diffusion_remaining != 0 {
             self.diffusion_remaining -= 1;
             if self.diffusion_remaining == 0 {
-                self.diffusion_mix = if self.params.diffusion == 0.0 { 0.0 } else { 1.0 };
+                self.diffusion_mix = if self.params.diffusion == 0.0 {
+                    0.0
+                } else {
+                    1.0
+                };
                 self.diffusion_current = self.params.diffusion;
             } else {
                 self.diffusion_mix += self.diffusion_step;
@@ -717,7 +762,9 @@ impl PlateauReverb {
         if self.params.freeze != params.freeze {
             self.begin_output_transition();
         }
-        if params.freeze && !self.params.freeze { self.clear_input_filters(); }
+        if params.freeze && !self.params.freeze {
+            self.clear_input_filters();
+        }
         if params.freeze {
             self.predelay_remaining = 0;
             self.predelay_previous = 0.0;
@@ -755,7 +802,8 @@ impl PlateauReverb {
         self.predelay_previous = if self.params.freeze { 0.0 } else { predelayed };
         // Advance the ring during freeze without retaining audio received
         // while input to the tank is disabled.
-        self.predelay.write(if self.params.freeze { 0.0 } else { mono_in });
+        self.predelay
+            .write(if self.params.freeze { 0.0 } else { mono_in });
 
         // Stop feeding the input filters while frozen; let their history drain.
         if self.params.freeze { 0.0 } else { predelayed }
@@ -778,7 +826,8 @@ impl PlateauReverb {
             || !self.r_apf1.delay.valid(2, R_APF1_MAX)
             || !self.r_del1.valid(1, R_DEL1_MAX - 1)
             || !self.r_apf2.delay.valid(2, R_APF2_MAX)
-            || !self.r_del2.valid(1, R_DEL2_MAX - 1) {
+            || !self.r_del2.valid(1, R_DEL2_MAX - 1)
+        {
             return (0.0, 0.0);
         }
         // Do not let corrupt samples poison the feedback tank.
@@ -787,7 +836,11 @@ impl PlateauReverb {
         // The reference blocks DC on both channels before summing. Their
         // identical linear filters can share one history after the sum.
         // Discard frozen input before filtering so it cannot leak on release.
-        let input = if self.params.freeze { 0.0 } else { 0.5 * in_l + 0.5 * in_r };
+        let input = if self.params.freeze {
+            0.0
+        } else {
+            0.5 * in_l + 0.5 * in_r
+        };
         let filtered = self.input_dc.process(input);
         let filtered = self.in_hp.process(self.in_lp.process(filtered));
         let tank_in = self.process_predelay(filtered);
@@ -800,8 +853,13 @@ impl PlateauReverb {
         let diffused = self.in_apf4.process(diff3);
         // A zero-gain allpass is still a delay. Bypass the input diffusers
         // at zero, but keep their histories advancing for subsequent edits.
-        let diffused = if mix == 0.0 { tank_in } else if mix == 1.0 { diffused }
-            else { tank_in * (1.0 - mix) + diffused * mix };
+        let diffused = if mix == 0.0 {
+            tank_in
+        } else if mix == 1.0 {
+            diffused
+        } else {
+            tank_in * (1.0 - mix) + diffused * mix
+        };
         // The diffusers may still contain pre-freeze audio. Do not inject it
         // into the frozen feedback tank while that history drains.
         let diff_in = if self.params.freeze { 0.0 } else { diffused };
@@ -817,12 +875,20 @@ impl PlateauReverb {
         let frozen = self.params.freeze;
         let depth = if frozen { 0.0 } else { self.params.mod_depth };
         let fraction = |value| if frozen { 0.0 } else { value };
-        let l_mod = self.l_apf1.delay_time as f32 + fraction(self.l_apf1.delay_fraction) + lfo1_val * depth;
-        let l_mod2 = self.l_apf2.delay_time as f32 + fraction(self.l_apf2.delay_fraction) + lfo2_val * depth;
-        let r_mod = self.r_apf1.delay_time as f32 + fraction(self.r_apf1.delay_fraction) + lfo3_val * depth;
-        let r_mod2 = self.r_apf2.delay_time as f32 + fraction(self.r_apf2.delay_fraction) + lfo4_val * depth;
+        let l_mod =
+            self.l_apf1.delay_time as f32 + fraction(self.l_apf1.delay_fraction) + lfo1_val * depth;
+        let l_mod2 =
+            self.l_apf2.delay_time as f32 + fraction(self.l_apf2.delay_fraction) + lfo2_val * depth;
+        let r_mod =
+            self.r_apf1.delay_time as f32 + fraction(self.r_apf1.delay_fraction) + lfo3_val * depth;
+        let r_mod2 =
+            self.r_apf2.delay_time as f32 + fraction(self.r_apf2.delay_fraction) + lfo4_val * depth;
 
-        let decay = if self.params.freeze { 1.0 } else { self.params.decay };
+        let decay = if self.params.freeze {
+            1.0
+        } else {
+            self.params.decay
+        };
         self.advance_damping();
 
         // 4. Left Tank Loop
@@ -835,7 +901,11 @@ impl PlateauReverb {
         // Keep damping history current while bypassed so releasing freeze
         // does not reintroduce samples from before it was engaged.
         let l_damped = self.l_hp.process(self.l_lp.process(l_del1_out));
-        let l_filtered = if self.params.freeze { l_del1_out } else { l_damped };
+        let l_filtered = if self.params.freeze {
+            l_del1_out
+        } else {
+            l_damped
+        };
 
         let l_ap2_out = self.l_apf2.process_modulated(l_filtered * decay, l_mod2);
         let l_del2_out = self.l_del2.read_tank(fraction(self.l_del2_fraction));
@@ -848,7 +918,11 @@ impl PlateauReverb {
         self.r_del1.write(r_ap1_out);
 
         let r_damped = self.r_hp.process(self.r_lp.process(r_del1_out));
-        let r_filtered = if self.params.freeze { r_del1_out } else { r_damped };
+        let r_filtered = if self.params.freeze {
+            r_del1_out
+        } else {
+            r_damped
+        };
 
         let r_ap2_out = self.r_apf2.process_modulated(r_filtered * decay, r_mod2);
         let r_del2_out = self.r_del2.read_tank(fraction(self.r_del2_fraction));
@@ -861,18 +935,14 @@ impl PlateauReverb {
         // Plateau's output tap times scale with sample rate, not tank size.
         let tap = |val: f32| (val * SR_SCALE) as usize;
 
-        let mut out_l = l_ap1_out
-            + self.l_del1.tap(tap(266.0))
-            + self.l_del1.tap(tap(2974.0))
+        let mut out_l = l_ap1_out + self.l_del1.tap(tap(266.0)) + self.l_del1.tap(tap(2974.0))
             - self.l_apf2.delay.tap(tap(1913.0))
             + self.l_del2.tap(tap(1996.0))
             - self.r_del1.tap(tap(1990.0))
             - self.r_apf2.delay.tap(tap(187.0))
             - self.r_del2.tap(tap(1066.0));
 
-        let mut out_r = r_ap1_out
-            + self.r_del1.tap(tap(266.0))
-            + self.r_del1.tap(tap(2974.0))
+        let mut out_r = r_ap1_out + self.r_del1.tap(tap(266.0)) + self.r_del1.tap(tap(2974.0))
             - self.r_apf2.delay.tap(tap(1913.0))
             + self.r_del2.tap(tap(1996.0))
             - self.l_del1.tap(tap(1990.0))
@@ -946,7 +1016,10 @@ impl PlateauReverb {
 
 #[cfg(test)]
 mod tests {
-    use super::{Allpass, Delay, PlateauParameters, PlateauReverb, TriangleLFO, MAX_SIZE, SAMPLE_RATE, SR_SCALE};
+    use super::{
+        Allpass, Delay, MAX_SIZE, PlateauParameters, PlateauReverb, SAMPLE_RATE, SR_SCALE,
+        TriangleLFO,
+    };
 
     #[test]
     fn triangle_modulation_starts_at_reference_phase() {
@@ -954,7 +1027,9 @@ mod tests {
         // Multistomp core, sampled across its first wrap.
         let mut lfo = TriangleLFO::new(SAMPLE_RATE / 8.0);
         let expected = [-1.0, -0.5, 0.0, 0.5, 1.0, 0.5, 0.0, -0.5, -1.0, -0.5];
-        for value in expected { assert_eq!(lfo.step(), value); }
+        for value in expected {
+            assert_eq!(lfo.step(), value);
+        }
     }
 
     #[test]
@@ -963,7 +1038,10 @@ mod tests {
         // 16-sample ring, gain 0.5 and delay 3, processing a unit impulse.
         for (delay, expected) in [
             (3.0, [-0.5, 0.0, 0.0, 0.0, 0.75, 0.0, 0.0, 0.0, 0.375, 0.0]),
-            (3.5, [-0.5, 0.0, 0.0, 0.0, 0.375, 0.375, 0.0, 0.0, 0.09375, 0.1875]),
+            (
+                3.5,
+                [-0.5, 0.0, 0.0, 0.0, 0.375, 0.375, 0.0, 0.0, 0.09375, 0.1875],
+            ),
         ] {
             let mut ap = Allpass::<16>::new(0.5, 3);
             ap.set_delay_samples(delay, 14);
@@ -977,11 +1055,26 @@ mod tests {
     fn modulated_allpass_uses_the_preceding_delay_read() {
         // Same reference, changing its fractional delay before each frame.
         let times = [3.0, 3.5, 2.25, 4.0, 3.0, 2.5, 3.75, 2.0, 3.0, 4.0, 2.5, 3.0];
-        let expected = [-0.5, 0.0, 0.0, 0.5625, 0.0, 0.0, 0.140625, 0.0703125,
-                        0.0, 0.0, 0.0, 0.017578125];
+        let expected = [
+            -0.5,
+            0.0,
+            0.0,
+            0.5625,
+            0.0,
+            0.0,
+            0.140625,
+            0.0703125,
+            0.0,
+            0.0,
+            0.0,
+            0.017578125,
+        ];
         let mut ap = Allpass::<16>::new(0.5, 3);
         for (frame, (delay, expected)) in times.into_iter().zip(expected).enumerate() {
-            assert_eq!(ap.process_modulated(if frame == 0 { 1.0 } else { 0.0 }, delay), expected);
+            assert_eq!(
+                ap.process_modulated(if frame == 0 { 1.0 } else { 0.0 }, delay),
+                expected
+            );
         }
     }
 
@@ -1004,25 +1097,61 @@ mod tests {
     #[test]
     fn configured_size_retains_reference_fractions() {
         let mut reverb = Box::new(PlateauReverb::new());
-        let params = PlateauParameters { size: 1.0, ..PlateauParameters::default() };
+        let params = PlateauParameters {
+            size: 1.0,
+            ..PlateauParameters::default()
+        };
         reverb.init(params);
         let expected = 4453.0 * SR_SCALE;
-        assert_eq!(reverb.l_del1.length as f32 + reverb.l_del1_fraction, expected);
+        assert_eq!(
+            reverb.l_del1.length as f32 + reverb.l_del1_fraction,
+            expected
+        );
         let expected_apf = 141.0 * SR_SCALE;
-        assert_eq!(reverb.in_apf1.delay_time as f32 + reverb.in_apf1.delay_fraction, expected_apf);
+        assert_eq!(
+            reverb.in_apf1.delay_time as f32 + reverb.in_apf1.delay_fraction,
+            expected_apf
+        );
         let expected_mod_apf = 2656.0 * SR_SCALE;
-        assert_eq!(reverb.r_apf2.delay_time as f32 + reverb.r_apf2.delay_fraction, expected_mod_apf);
+        assert_eq!(
+            reverb.r_apf2.delay_time as f32 + reverb.r_apf2.delay_fraction,
+            expected_mod_apf
+        );
         reverb.set_size_live(MAX_SIZE);
         let scale = SR_SCALE * MAX_SIZE;
         for (actual, expected) in [
-            (reverb.l_apf1.delay_time as f32 + reverb.l_apf1.delay_fraction, 672.0 * scale),
-            (reverb.l_apf2.delay_time as f32 + reverb.l_apf2.delay_fraction, 1800.0 * scale),
-            (reverb.r_apf1.delay_time as f32 + reverb.r_apf1.delay_fraction, 908.0 * scale),
-            (reverb.r_apf2.delay_time as f32 + reverb.r_apf2.delay_fraction, 2656.0 * scale),
-            (reverb.l_del1.length as f32 + reverb.l_del1_fraction, 4453.0 * scale),
-            (reverb.l_del2.length as f32 + reverb.l_del2_fraction, 3720.0 * scale),
-            (reverb.r_del1.length as f32 + reverb.r_del1_fraction, 4217.0 * scale),
-            (reverb.r_del2.length as f32 + reverb.r_del2_fraction, 3163.0 * scale),
+            (
+                reverb.l_apf1.delay_time as f32 + reverb.l_apf1.delay_fraction,
+                672.0 * scale,
+            ),
+            (
+                reverb.l_apf2.delay_time as f32 + reverb.l_apf2.delay_fraction,
+                1800.0 * scale,
+            ),
+            (
+                reverb.r_apf1.delay_time as f32 + reverb.r_apf1.delay_fraction,
+                908.0 * scale,
+            ),
+            (
+                reverb.r_apf2.delay_time as f32 + reverb.r_apf2.delay_fraction,
+                2656.0 * scale,
+            ),
+            (
+                reverb.l_del1.length as f32 + reverb.l_del1_fraction,
+                4453.0 * scale,
+            ),
+            (
+                reverb.l_del2.length as f32 + reverb.l_del2_fraction,
+                3720.0 * scale,
+            ),
+            (
+                reverb.r_del1.length as f32 + reverb.r_del1_fraction,
+                4217.0 * scale,
+            ),
+            (
+                reverb.r_del2.length as f32 + reverb.r_del2_fraction,
+                3163.0 * scale,
+            ),
         ] {
             assert_eq!(actual, expected);
         }
@@ -1032,17 +1161,37 @@ mod tests {
     #[test]
     fn full_range_32k_experiment_retains_delays_and_renders() {
         let mut reverb = Box::new(PlateauReverb::new());
-        let params = PlateauParameters { size: 4.0, predelay_ms: 500.0,
-            mod_depth: 16.0, ..PlateauParameters::default() };
+        let params = PlateauParameters {
+            size: 4.0,
+            predelay_ms: 500.0,
+            mod_depth: 16.0,
+            ..PlateauParameters::default()
+        };
         reverb.init(params);
         assert_eq!(reverb.params.size, 4.0);
         assert_eq!(reverb.predelay_samples, 16_000);
         assert!(reverb.predelay_samples < reverb.predelay.buffer.len());
         for (delay, fraction, capacity) in [
-            (reverb.l_apf1.delay_time, reverb.l_apf1.delay_fraction, reverb.l_apf1.delay.buffer.len()),
-            (reverb.l_apf2.delay_time, reverb.l_apf2.delay_fraction, reverb.l_apf2.delay.buffer.len()),
-            (reverb.r_apf1.delay_time, reverb.r_apf1.delay_fraction, reverb.r_apf1.delay.buffer.len()),
-            (reverb.r_apf2.delay_time, reverb.r_apf2.delay_fraction, reverb.r_apf2.delay.buffer.len()),
+            (
+                reverb.l_apf1.delay_time,
+                reverb.l_apf1.delay_fraction,
+                reverb.l_apf1.delay.buffer.len(),
+            ),
+            (
+                reverb.l_apf2.delay_time,
+                reverb.l_apf2.delay_fraction,
+                reverb.l_apf2.delay.buffer.len(),
+            ),
+            (
+                reverb.r_apf1.delay_time,
+                reverb.r_apf1.delay_fraction,
+                reverb.r_apf1.delay.buffer.len(),
+            ),
+            (
+                reverb.r_apf2.delay_time,
+                reverb.r_apf2.delay_fraction,
+                reverb.r_apf2.delay.buffer.len(),
+            ),
         ] {
             assert!(delay > params.mod_depth as usize);
             assert!(delay as f32 + fraction + params.mod_depth <= (capacity - 2) as f32);
@@ -1054,13 +1203,17 @@ mod tests {
             (2974.0, reverb.r_del1.buffer.len()),
             (1913.0, reverb.r_apf2.delay.buffer.len()),
             (1996.0, reverb.r_del2.buffer.len()),
-        ] { assert!(((tap * SR_SCALE) as usize) < capacity); }
+        ] {
+            assert!(((tap * SR_SCALE) as usize) < capacity);
+        }
         let mut peak = 0.0f32;
         for frame in 0..96_000 {
             let input = if frame == 0 { 0.1 } else { 0.0 };
             let (left, right) = reverb.process_sample(input, input);
             assert!(left.is_finite() && right.is_finite());
-            if frame < 16_000 { assert_eq!((left, right), (0.0, 0.0)); }
+            if frame < 16_000 {
+                assert_eq!((left, right), (0.0, 0.0));
+            }
             peak = peak.max(left.abs()).max(right.abs());
         }
         assert!(peak > 0.0001);
@@ -1075,9 +1228,20 @@ mod tests {
         // Short-delay reference exercises the just-written sample as well as
         // interpolation; ordinary Plateau settings are longer.
         let times = [0.0, 0.5, 1.0, 0.25, 0.0, 1.5, 0.75, 0.0, 2.0, 1.0, 0.5, 0.0];
-        let expected = [-0.5, 0.75, 0.5625, 0.375, 0.2109375, 0.10546875,
-                        0.146484375, 0.0578613281, 0.0289306641, 0.0732421875,
-                        0.014465332, 0.0219268799];
+        let expected = [
+            -0.5,
+            0.75,
+            0.5625,
+            0.375,
+            0.2109375,
+            0.10546875,
+            0.146484375,
+            0.0578613281,
+            0.0289306641,
+            0.0732421875,
+            0.014465332,
+            0.0219268799,
+        ];
         let mut ap = Allpass::<16>::new(0.5, 0);
         for (frame, (delay, expected)) in times.into_iter().zip(expected).enumerate() {
             let actual = ap.process_modulated(if frame == 0 { 1.0 } else { 0.0 }, delay);

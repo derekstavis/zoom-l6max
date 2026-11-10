@@ -1,0 +1,72 @@
+version = 1
+name = "sd-dual-efx-shared-hook-chain"
+models = ["l6max"]
+backends = ["headless"]
+state = "dual-efx-room"
+card = "empty"
+gdb = true
+sd_patches = ["dual-efx", "knob-dialog"]
+sd_bundle_mode = "knob-dialog-first"
+
+[[audio_input]]
+channel = 1
+loop-tone = { hz = 440.0, seconds = 1.0, amplitude = 0.1 }
+
+[[step]]
+action = "audio-input-transport"
+command = "play"
+
+[[step]]
+action = "wait"
+until = "mixer-ready"
+guest_timeout_ms = 60000
+wall_timeout_s = 300
+
+[[step]]
+action = "expect-sd-patch"
+loaded = true
+
+[[step]]
+action = "press"
+control = "efx-select"
+
+[[step]]
+action = "delay"
+guest_ms = 3000
+guest_timeout_ms = 10000
+wall_timeout_s = 60
+
+[[step]]
+action = "press"
+control = "efx-select"
+
+[[step]]
+action = "delay"
+guest_ms = 3000
+guest_timeout_ms = 10000
+wall_timeout_s = 60
+
+[[step]]
+action = "expect-sd-patch"
+loaded = true
+callbacks_active = true
+chain_count = 2
+
+[[step]]
+action = "press"
+control = "efx-select"
+
+[[step]]
+action = "delay"
+guest_ms = 3000
+guest_timeout_ms = 10000
+wall_timeout_s = 60
+
+[[step]]
+action = "expect-sd-patch"
+loaded = true
+stock_passthrough = true
+
+[[step]]
+action = "expect-heap"
+minimum_free = 131072

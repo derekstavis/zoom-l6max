@@ -251,7 +251,7 @@ pub fn build_dynamic_v1(
             + relocations.len() * 12,
     );
     output.extend_from_slice(b"L6SB");
-    output.extend_from_slice(&patch_loader_core::dynamic::FORMAT_VERSION.to_le_bytes());
+    output.extend_from_slice(&8u16.to_le_bytes());
     output.extend_from_slice(&patch_loader_core::dynamic::LOADER_ABI.to_le_bytes());
     output.extend_from_slice(
         &u32::try_from(payload.len())
@@ -271,6 +271,97 @@ pub fn build_dynamic_v1(
     }
     output.extend_from_slice(&relocation_table);
     let checksum = patch_loader_core::dynamic::checksum(&output).ok_or("short v1 file")?;
+    output[24..28].copy_from_slice(&checksum.to_le_bytes());
+    Ok(output)
+}
+
+/// Encode one dynamic module with a streamed code image and a larger writable
+/// allocation. Bytes between `code_len` and `memory_len` are zeroed by the
+/// loader and are not stored in the SD file.
+pub fn build_dynamic_v9(
+    payload: &[u8],
+    memory_len: usize,
+    init_offset: u32,
+    hooks: &[(u32, u32, u32)],
+    relocations: &[Relocation],
+) -> Result<Vec<u8>, String> {
+    if payload.is_empty()
+        || memory_len < payload.len()
+        || memory_len > u32::MAX as usize
+        || init_offset & 1 != 0
+        || (init_offset != 0 && init_offset as usize >= payload.len())
+        || hooks.len() > u16::MAX as usize
+        || relocations.len() > u16::MAX as usize
+    {
+        return Err("invalid dynamic module header values".into());
+    }
+    let mut ordered_hooks = hooks.to_vec();
+    ordered_hooks.sort_unstable_by_key(|entry| entry.0);
+    if ordered_hooks.iter().any(|(address, offset, next_offset)| {
+        address & 1 != 0
+            || offset & 1 != 0
+            || *offset as usize >= payload.len()
+            || (*next_offset != u32::MAX
+                && (next_offset & 3 != 0 || *next_offset as usize + 4 > payload.len()))
+    }) || ordered_hooks.windows(2).any(|pair| pair[0].0 == pair[1].0)
+    {
+        return Err("invalid or duplicate function-entry hook".into());
+    }
+
+    let mut relocation_table = Vec::with_capacity(relocations.len() * 12);
+    for relocation in relocations {
+        let (kind, first, second) = match relocation {
+            Relocation::Abs32 { offset } => (1u32, *offset, 0u32),
+            Relocation::ThumbMov32 {
+                low_offset,
+                high_offset,
+            } => (2u32, *low_offset, *high_offset),
+        };
+        let offsets = if kind == 1 {
+            [Some(first), None]
+        } else {
+            [Some(first), Some(second)]
+        };
+        for offset in offsets.into_iter().flatten() {
+            if offset & 1 != 0 || offset as usize + 4 > payload.len() {
+                return Err("relocation outside or misaligned in patch code".into());
+            }
+        }
+        if kind == 2 && (second <= first || second - first > 16) {
+            return Err("invalid Thumb MOVW/MOVT relocation pair".into());
+        }
+        relocation_table.extend_from_slice(&kind.to_le_bytes());
+        relocation_table.extend_from_slice(&first.to_le_bytes());
+        relocation_table.extend_from_slice(&second.to_le_bytes());
+    }
+
+    let mut output = Vec::with_capacity(
+        patch_loader_core::dynamic::HEADER_LEN_V9
+            + payload.len()
+            + hooks.len() * 12
+            + relocations.len() * 12,
+    );
+    output.extend_from_slice(b"L6SB");
+    output.extend_from_slice(&patch_loader_core::dynamic::FORMAT_VERSION.to_le_bytes());
+    output.extend_from_slice(&patch_loader_core::dynamic::LOADER_ABI.to_le_bytes());
+    output.extend_from_slice(
+        &u32::try_from(payload.len())
+            .map_err(|_| "dynamic module too large")?
+            .to_le_bytes(),
+    );
+    output.extend_from_slice(&(memory_len as u32).to_le_bytes());
+    output.extend_from_slice(&(hooks.len() as u16).to_le_bytes());
+    output.extend_from_slice(&(relocations.len() as u16).to_le_bytes());
+    output.extend_from_slice(&init_offset.to_le_bytes());
+    output.extend_from_slice(&[0; 4]);
+    output.extend_from_slice(payload);
+    for (address, entry_offset, next_offset) in ordered_hooks {
+        output.extend_from_slice(&address.to_le_bytes());
+        output.extend_from_slice(&entry_offset.to_le_bytes());
+        output.extend_from_slice(&next_offset.to_le_bytes());
+    }
+    output.extend_from_slice(&relocation_table);
+    let checksum = patch_loader_core::dynamic::checksum(&output).ok_or("short v9 file")?;
     output[24..28].copy_from_slice(&checksum.to_le_bytes());
     Ok(output)
 }
@@ -402,6 +493,24 @@ mod tests {
             u16::from_le_bytes(file[4..6].try_into().unwrap()),
             patch_loader_core::dynamic::FORMAT_VERSION
         );
+        assert_eq!(u32::from_le_bytes(file[8..12].try_into().unwrap()), 4);
+        assert_eq!(
+            u32::from_le_bytes(file[12..16].try_into().unwrap()),
+            0x48000
+        );
+        assert_eq!(&file[28..32], &payload);
+        assert_eq!(
+            patch_loader_core::dynamic::checksum(&file),
+            Some(u32::from_le_bytes(file[24..28].try_into().unwrap()))
+        );
+    }
+
+    #[test]
+    fn emits_v9_state_length_without_storing_zero_fill() {
+        let payload = [0x00, 0xbf, 0x70, 0x47];
+        let file = build_dynamic_v9(&payload, 0x48000, 0, &[(0x8000_1000, 0, 0)], &[]).unwrap();
+        assert_eq!(file.len(), 28 + payload.len() + 12);
+        assert_eq!(u16::from_le_bytes(file[4..6].try_into().unwrap()), 9);
         assert_eq!(u32::from_le_bytes(file[8..12].try_into().unwrap()), 4);
         assert_eq!(
             u32::from_le_bytes(file[12..16].try_into().unwrap()),

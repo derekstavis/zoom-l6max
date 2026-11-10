@@ -238,6 +238,14 @@ pub enum Action {
         loaded: bool,
         #[serde(default)]
         chain_count: Option<u8>,
+        #[serde(default)]
+        callbacks_active: bool,
+        #[serde(default)]
+        stock_passthrough: bool,
+    },
+    DualEfxParameterEdit {
+        encoder: usize,
+        steps: i32,
     },
     ExpectHeap {
         minimum_free: u32,
@@ -441,6 +449,7 @@ impl Scenario {
                 "corrupt",
                 "corrupt-first",
                 "ordered-chain",
+                "knob-dialog-first",
             ]
             .contains(&mode.as_str())
                 || value.sd_patches.is_none()
@@ -838,10 +847,22 @@ impl Scenario {
             if let Action::ExpectSdPatch {
                 loaded,
                 chain_count,
+                callbacks_active,
+                stock_passthrough,
             } = &step.action
                 && (value.sd_patches.is_none()
                     || *loaded && value.sd_patches.as_ref().is_some_and(Vec::is_empty)
-                    || chain_count.is_some_and(|count| count == 0 || count > 8))
+                    || chain_count.is_some_and(|count| count == 0 || count > 8)
+                    || *callbacks_active
+                        && !value
+                            .sd_patches
+                            .as_ref()
+                            .is_some_and(|patches| patches.iter().any(|name| name == "dual-efx"))
+                    || *stock_passthrough
+                        && !value
+                            .sd_patches
+                            .as_ref()
+                            .is_some_and(|patches| patches.iter().any(|name| name == "dual-efx")))
             {
                 return Err("expect-patch-loader requires an Patch loader fixture (and a selected patch when loaded=true)".into());
             }
@@ -943,6 +964,7 @@ impl Scenario {
                 | Action::SoundPadPlayback { .. }
                 | Action::ExpectMemory { .. }
                 | Action::ExpectSdPatch { .. }
+                | Action::DualEfxParameterEdit { .. }
                 | Action::ExpectHeap { .. }
                 | Action::HoldChord { .. }
                 | Action::AudioCallbacks
@@ -1101,6 +1123,17 @@ impl Scenario {
                 {
                     return Err(
                         "encoder channel must be positive, steps must be nonzero and at most 120"
+                            .into(),
+                    );
+                }
+                Action::DualEfxParameterEdit { encoder, steps }
+                    if *encoder == 0
+                        || *encoder > 8
+                        || *steps == 0
+                        || steps.unsigned_abs() > 120 =>
+                {
+                    return Err(
+                        "dual-efx-parameter-edit needs encoder 1..8 and nonzero steps up to 120"
                             .into(),
                     );
                 }

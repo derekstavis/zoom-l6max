@@ -32,10 +32,22 @@ impl EfxParamId {
     pub fn from_index(index: u32) -> Option<Self> {
         use EfxParamId::*;
         Some(match index {
-            0 => VndAmount, 1 => VndTimeSpread, 2 => VndDensity, 3 => VndDecay,
-            4 => VndRefresh, 5 => VndMode, 6 => PlatPreDelay, 7 => PlatSize,
-            8 => PlatDecay, 9 => PlatLowCut, 10 => PlatHighCut, 11 => PlatDiffusion,
-            12 => PlatModDepth, 13 => PlatFreeze, 14 => GlobalCascade, 15 => VndTransition,
+            0 => VndAmount,
+            1 => VndTimeSpread,
+            2 => VndDensity,
+            3 => VndDecay,
+            4 => VndRefresh,
+            5 => VndMode,
+            6 => PlatPreDelay,
+            7 => PlatSize,
+            8 => PlatDecay,
+            9 => PlatLowCut,
+            10 => PlatHighCut,
+            11 => PlatDiffusion,
+            12 => PlatModDepth,
+            13 => PlatFreeze,
+            14 => GlobalCascade,
+            15 => VndTransition,
             _ => return None,
         })
     }
@@ -65,10 +77,31 @@ impl ParameterSnapshot {
             VndDecay => (-120.0, 0.0),
             VndRefresh => (0.1, 60.0),
             VndTransition => (1.0, 54000.0),
-            PlatPreDelay => (0.0, if cfg!(experimental_plateau_32k) { 500.0 } else { 190.0 }),
-            PlatSize => (0.01f32 * 100.0, if cfg!(experimental_plateau_32k) { 400.0 } else { 1.2f32 * 100.0 }),
+            PlatPreDelay => (
+                0.0,
+                if cfg!(experimental_plateau_32k) {
+                    500.0
+                } else {
+                    190.0
+                },
+            ),
+            PlatSize => (
+                0.01f32 * 100.0,
+                if cfg!(experimental_plateau_32k) {
+                    400.0
+                } else {
+                    1.2f32 * 100.0
+                },
+            ),
             PlatDecay => (0.1f32 * 100.0, 0.999f32 * 100.0),
-            PlatLowCut | PlatHighCut => (20.0, if cfg!(experimental_plateau_32k) { 32000.0 * 0.49 } else { 48000.0 * 0.49 }),
+            PlatLowCut | PlatHighCut => (
+                20.0,
+                if cfg!(experimental_plateau_32k) {
+                    32000.0 * 0.49
+                } else {
+                    48000.0 * 0.49
+                },
+            ),
             PlatModDepth => (0.0, 16.0),
             VndMode | PlatFreeze => {
                 return (value == 0.0 || value == 1.0).then_some(Self { id, value });
@@ -98,9 +131,18 @@ impl DisplaySnapshot {
         }
         if index == 24 {
             return match f32::from_bits(bits) {
-                0.0 => Some(Self::Page { routing: false, velvet: false }),
-                1.0 => Some(Self::Page { routing: true, velvet: false }),
-                2.0 => Some(Self::Page { routing: false, velvet: true }),
+                0.0 => Some(Self::Page {
+                    routing: false,
+                    velvet: false,
+                }),
+                1.0 => Some(Self::Page {
+                    routing: true,
+                    velvet: false,
+                }),
+                2.0 => Some(Self::Page {
+                    routing: false,
+                    velvet: true,
+                }),
                 _ => None,
             };
         }
@@ -112,7 +154,10 @@ impl DisplaySnapshot {
         if strip >= 8 || ![0.0, 1.0, 2.0, 3.0].contains(&value) {
             return None;
         }
-        Some(Self::Route { strip: strip as u8, mode: value as u8 })
+        Some(Self::Route {
+            strip: strip as u8,
+            mode: value as u8,
+        })
     }
 }
 
@@ -204,16 +249,35 @@ pub fn format_display(snapshot: DisplaySnapshot) -> FormattedParam {
         }
         DisplaySnapshot::Page { routing, velvet } => {
             let mut formatted = FormattedParam::new("EFX CONTROLS");
-            let value: &[u8] = if routing { b"ROUTING" } else if velvet { b"VELVET PARAM" } else { b"PLATEAU PARAM" };
+            let value: &[u8] = if routing {
+                b"ROUTING"
+            } else if velvet {
+                b"VELVET PARAM"
+            } else {
+                b"PLATEAU PARAM"
+            };
             formatted.value_len = append_str(&mut formatted.value_str, 0, value);
             formatted
         }
         DisplaySnapshot::Route { strip, mode } => {
-            let titles = ["CH 1 ROUTE", "CH 2 ROUTE", "CH 3 ROUTE", "CH 4 ROUTE",
-                          "CH 5 ROUTE", "CH 6 ROUTE", "CH 7 ROUTE", "CH 8 ROUTE"];
+            let titles = [
+                "CH 1 ROUTE",
+                "CH 2 ROUTE",
+                "CH 3 ROUTE",
+                "CH 4 ROUTE",
+                "CH 5 ROUTE",
+                "CH 6 ROUTE",
+                "CH 7 ROUTE",
+                "CH 8 ROUTE",
+            ];
             let values: [&[u8]; 4] = [b"OFF", b"A", b"B", b"A -> B"];
-            let mut formatted = FormattedParam::new(titles.get(strip as usize).copied().unwrap_or("ROUTE"));
-            formatted.value_len = append_str(&mut formatted.value_str, 0, values.get(mode as usize).copied().unwrap_or(b"?"));
+            let mut formatted =
+                FormattedParam::new(titles.get(strip as usize).copied().unwrap_or("ROUTE"));
+            formatted.value_len = append_str(
+                &mut formatted.value_str,
+                0,
+                values.get(mode as usize).copied().unwrap_or(b"?"),
+            );
             formatted
         }
     }
@@ -231,7 +295,15 @@ pub fn format_snapshot(snapshot: ParameterSnapshot) -> FormattedParam {
         VndTransition => ("VND TRANSITION", b" ms"),
         VndMode => {
             let mut p = FormattedParam::new("VND MODE");
-            p.value_len = append_str(&mut p.value_str, 0, if snapshot.value != 0.0 { b"DYNAMIC" } else { b"STATIC" });
+            p.value_len = append_str(
+                &mut p.value_str,
+                0,
+                if snapshot.value != 0.0 {
+                    b"DYNAMIC"
+                } else {
+                    b"STATIC"
+                },
+            );
             return p;
         }
         PlatPreDelay => ("PLATEAU PREDELAY", b" ms"),
@@ -243,7 +315,15 @@ pub fn format_snapshot(snapshot: ParameterSnapshot) -> FormattedParam {
         PlatModDepth => ("PLATEAU MOD DEPTH", b" samples"),
         PlatFreeze => {
             let mut p = FormattedParam::new("PLATEAU FREEZE");
-            p.value_len = append_str(&mut p.value_str, 0, if snapshot.value != 0.0 { b"FROZEN" } else { b"OFF" });
+            p.value_len = append_str(
+                &mut p.value_str,
+                0,
+                if snapshot.value != 0.0 {
+                    b"FROZEN"
+                } else {
+                    b"OFF"
+                },
+            );
             return p;
         }
         GlobalCascade => ("A -> B CASCADE", b" %"),
