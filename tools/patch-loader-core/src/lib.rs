@@ -909,8 +909,8 @@ mod dynamic_stream_tests {
     fn fixture() -> Vec<u8> {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(b"L6SB");
-        bytes.extend_from_slice(&FORMAT_VERSION.to_le_bytes());
-        bytes.extend_from_slice(&LOADER_ABI.to_le_bytes());
+        bytes.extend_from_slice(&dynamic::FORMAT_VERSION.to_le_bytes());
+        bytes.extend_from_slice(&dynamic::LOADER_ABI.to_le_bytes());
         bytes.extend_from_slice(&12u32.to_le_bytes()); // code_len
         bytes.extend_from_slice(&12u32.to_le_bytes()); // memory_len
         bytes.extend_from_slice(&1u16.to_le_bytes()); // hooks
@@ -963,8 +963,8 @@ mod dynamic_stream_tests {
     fn v1_streams_code_and_relocates_into_zeroed_module_state() {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(b"L6SB");
-        bytes.extend_from_slice(&FORMAT_VERSION.to_le_bytes());
-        bytes.extend_from_slice(&LOADER_ABI.to_le_bytes());
+        bytes.extend_from_slice(&dynamic::FORMAT_VERSION.to_le_bytes());
+        bytes.extend_from_slice(&dynamic::LOADER_ABI.to_le_bytes());
         bytes.extend_from_slice(&4u32.to_le_bytes()); // code_len
         bytes.extend_from_slice(&12u32.to_le_bytes()); // memory_len
         bytes.extend_from_slice(&1u16.to_le_bytes()); // hooks
@@ -1054,7 +1054,7 @@ mod dynamic_stream_tests {
     #[test]
     fn streaming_parser_rejects_corruption_and_bad_counts() {
         let mut bytes = fixture();
-        bytes[20] ^= 0x80;
+        bytes[24] ^= 0x80;
         let mut reader = Chunks {
             bytes: &bytes,
             chunk: 5,
