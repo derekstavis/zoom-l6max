@@ -1,7 +1,10 @@
-// L6max MAIN 1.10 effect callback declarations.
+// L6max MAIN 1.10 DSP and effect callback bindings.
 
 firmware_functions! {
-    /// Clears the stock shared effect workspace before publishing an effect callback.
+    /// Audio-path helper invoked before the active effect callback; it reads its stream state from globals.
+    pub unsafe fn dsp_stream_callback() at 0x8006_6180;
+
+    /// Clears the shared stock effect workspace before publishing an effect callback.
     pub unsafe fn effect_workspace_clear() at 0x8002_4678;
 
     /// Room effect callback selected by L6max MAIN 1.10.
