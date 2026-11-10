@@ -4,6 +4,7 @@ SECTIONS {
   .text : {
     KEEP(*(.text.patch_hook))
     KEEP(*(.text.*_hook))
+    KEEP(*(.text.patch_module_init))
     *(.text*)
     *(.rodata*)
     *(.data*)

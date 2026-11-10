@@ -36,13 +36,440 @@ guest_timeout_ms = 10000
 wall_timeout_s = 60
 
 [[step]]
-action = "dual-efx-parameter-edit"
-encoder = 1
+action = "select-mode"
+mode = "efx"
+
+[[step]]
+action = "dual-efx-state"
+expected_effect_type = 1
+expected_edit_mode = false
+
+[[step]]
+action = "checkpoint"
+name = "dual-efx-room-selected"
+
+[[step]]
+action = "checkpoint"
+name = "dual-efx-plateau-before-edit"
+
+[[step]]
+action = "hold"
+control = "efx-select"
+duration_ms = 1000
+
+[[step]]
+action = "dual-efx-state"
+expected_effect_type = 1
+expected_edit_mode = true
+
+[[step]]
+action = "delay"
+guest_ms = 100
+
+[[step]]
+action = "checkpoint"
+name = "dual-efx-plateau-edit-mode"
+
+[[step]]
+action = "encoder"
+channel = 1
 steps = 1
+
+[[step]]
+action = "delay"
+guest_ms = 300
+
+[[step]]
+action = "checkpoint"
+name = "dual-efx-plateau-parameter-value"
+
+[[step]]
+action = "dual-efx-state"
+expected_effect_type = 1
+expected_edit_mode = true
+minimum_parameter_edits = 1
+expected_parameter_id = 6
+expected_parameter_value = 12.0
+
+[[step]]
+action = "expect-display"
+checkpoint = "dual-efx-room-selected"
+changed = true
+
+[[step]]
+action = "delay"
+guest_ms = 2500
+
+[[step]]
+action = "expect-display"
+checkpoint = "dual-efx-room-selected"
+changed = false
+
+[[step]]
+action = "encoder"
+channel = 2
+steps = 1
+
+[[step]]
+action = "delay"
+guest_ms = 100
+
+[[step]]
+action = "dual-efx-state"
+expected_effect_type = 1
+expected_edit_mode = true
+minimum_parameter_edits = 2
+expected_parameter_id = 7
+expected_parameter_value = 1.02
+
+[[step]]
+action = "encoder"
+channel = 3
+steps = 1
+
+[[step]]
+action = "delay"
+guest_ms = 100
+
+[[step]]
+action = "dual-efx-state"
+expected_effect_type = 1
+expected_edit_mode = true
+minimum_parameter_edits = 3
+expected_parameter_id = 8
+expected_parameter_value = 0.87
+
+[[step]]
+action = "encoder"
+channel = 4
+steps = 1
+
+[[step]]
+action = "delay"
+guest_ms = 100
+
+[[step]]
+action = "dual-efx-state"
+expected_effect_type = 1
+expected_edit_mode = true
+minimum_parameter_edits = 4
+expected_parameter_id = 9
+expected_parameter_value = 100.0
+
+[[step]]
+action = "encoder"
+channel = 5
+steps = 1
+
+[[step]]
+action = "delay"
+guest_ms = 100
+
+[[step]]
+action = "dual-efx-state"
+expected_effect_type = 1
+expected_edit_mode = true
+minimum_parameter_edits = 5
+expected_parameter_id = 10
+expected_parameter_value = 6750.0
+
+[[step]]
+action = "encoder"
+channel = 6
+steps = 1
+
+[[step]]
+action = "delay"
+guest_ms = 100
+
+[[step]]
+action = "dual-efx-state"
+expected_effect_type = 1
+expected_edit_mode = true
+minimum_parameter_edits = 6
+expected_parameter_id = 11
+expected_parameter_value = 0.8
+
+[[step]]
+action = "encoder"
+channel = 7
+steps = 1
+
+[[step]]
+action = "delay"
+guest_ms = 100
+
+[[step]]
+action = "dual-efx-state"
+expected_effect_type = 1
+expected_edit_mode = true
+minimum_parameter_edits = 7
+expected_parameter_id = 12
+expected_parameter_value = 8.25
+
+[[step]]
+action = "encoder"
+channel = 8
+steps = 1
+
+[[step]]
+action = "delay"
+guest_ms = 100
+
+[[step]]
+action = "dual-efx-state"
+expected_effect_type = 1
+expected_edit_mode = true
+minimum_parameter_edits = 8
+expected_parameter_id = 13
+expected_parameter_value = 1.0
+
+[[step]]
+action = "hold"
+control = "efx-select"
+duration_ms = 1000
+
+[[step]]
+action = "dual-efx-state"
+expected_effect_type = 1
+expected_edit_mode = false
 
 [[step]]
 action = "press"
 control = "efx-select"
+
+[[step]]
+action = "delay"
+guest_ms = 500
+
+[[step]]
+action = "dual-efx-state"
+expected_effect_type = 2
+expected_edit_mode = false
+
+[[step]]
+action = "delay"
+guest_ms = 3000
+
+[[step]]
+action = "checkpoint"
+name = "before-dual-efx-edit"
+
+[[step]]
+action = "hold"
+control = "efx-select"
+duration_ms = 1000
+
+[[step]]
+action = "dual-efx-state"
+expected_effect_type = 2
+expected_edit_mode = true
+
+[[step]]
+action = "delay"
+guest_ms = 100
+
+[[step]]
+action = "checkpoint"
+name = "dual-efx-edit-mode"
+
+[[step]]
+action = "expect-display"
+checkpoint = "before-dual-efx-edit"
+changed = true
+
+[[step]]
+action = "encoder"
+channel = 2
+steps = 1
+
+[[step]]
+action = "delay"
+guest_ms = 300
+
+[[step]]
+action = "checkpoint"
+name = "dual-efx-parameter-value-300ms"
+
+[[step]]
+action = "delay"
+guest_ms = 200
+
+[[step]]
+action = "checkpoint"
+name = "dual-efx-parameter-value-500ms"
+
+[[step]]
+action = "delay"
+guest_ms = 200
+
+[[step]]
+action = "checkpoint"
+name = "dual-efx-parameter-value-700ms"
+
+[[step]]
+action = "delay"
+guest_ms = 400
+
+[[step]]
+action = "checkpoint"
+name = "dual-efx-parameter-value"
+
+[[step]]
+action = "dual-efx-state"
+expected_effect_type = 2
+expected_edit_mode = true
+minimum_parameter_edits = 1
+expected_parameter_id = 1
+expected_parameter_value = 28.5625
+
+[[step]]
+action = "expect-display"
+checkpoint = "dual-efx-edit-mode"
+changed = true
+
+[[step]]
+action = "delay"
+guest_ms = 2500
+
+[[step]]
+action = "expect-display"
+checkpoint = "before-dual-efx-edit"
+changed = false
+
+[[step]]
+action = "checkpoint"
+name = "dual-efx-parameter-timeout"
+
+[[step]]
+action = "encoder"
+channel = 1
+steps = -1
+
+[[step]]
+action = "delay"
+guest_ms = 100
+
+[[step]]
+action = "dual-efx-state"
+expected_effect_type = 2
+expected_edit_mode = true
+minimum_parameter_edits = 2
+expected_parameter_id = 0
+expected_parameter_value = 0.98
+
+[[step]]
+action = "encoder"
+channel = 3
+steps = 1
+
+[[step]]
+action = "delay"
+guest_ms = 100
+
+[[step]]
+action = "dual-efx-state"
+expected_effect_type = 2
+expected_edit_mode = true
+minimum_parameter_edits = 3
+expected_parameter_id = 2
+expected_parameter_value = 1138.435
+
+[[step]]
+action = "encoder"
+channel = 4
+steps = 1
+
+[[step]]
+action = "delay"
+guest_ms = 100
+
+[[step]]
+action = "dual-efx-state"
+expected_effect_type = 2
+expected_edit_mode = true
+minimum_parameter_edits = 4
+expected_parameter_id = 3
+expected_parameter_value = -58.0
+
+[[step]]
+action = "encoder"
+channel = 5
+steps = 1
+
+[[step]]
+action = "delay"
+guest_ms = 100
+
+[[step]]
+action = "dual-efx-state"
+expected_effect_type = 2
+expected_edit_mode = true
+minimum_parameter_edits = 5
+expected_parameter_id = 4
+expected_parameter_value = 5.5
+
+[[step]]
+action = "encoder"
+channel = 6
+steps = -1
+
+[[step]]
+action = "delay"
+guest_ms = 100
+
+[[step]]
+action = "dual-efx-state"
+expected_effect_type = 2
+expected_edit_mode = true
+minimum_parameter_edits = 6
+expected_parameter_id = 5
+expected_parameter_value = 0.0
+
+[[step]]
+action = "encoder"
+channel = 7
+steps = 1
+
+[[step]]
+action = "delay"
+guest_ms = 100
+
+[[step]]
+action = "dual-efx-state"
+expected_effect_type = 2
+expected_edit_mode = true
+minimum_parameter_edits = 7
+expected_parameter_id = 15
+expected_parameter_value = 275.0
+
+[[step]]
+action = "encoder"
+channel = 8
+steps = -1
+
+[[step]]
+action = "delay"
+guest_ms = 100
+
+[[step]]
+action = "dual-efx-state"
+expected_effect_type = 2
+expected_edit_mode = true
+minimum_parameter_edits = 8
+expected_parameter_id = 14
+expected_parameter_value = 0.9
+
+[[step]]
+action = "hold"
+control = "efx-select"
+duration_ms = 1000
+
+[[step]]
+action = "dual-efx-state"
+expected_effect_type = 2
+expected_edit_mode = false
+
 
 [[step]]
 action = "delay"

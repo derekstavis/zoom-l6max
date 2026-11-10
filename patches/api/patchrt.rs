@@ -17,6 +17,134 @@ pub mod __continuations {
     include!(concat!(env!("OUT_DIR"), "/continuations.rs"));
 }
 
+/// Registry passed to dynamic-module initializers. Entries are kept by the
+/// resident Patch loader in its fixed registry block and are cleared on reset.
+/// A module can publish an API table or resolve one published by an earlier
+/// file in the SD-card filename order.
+pub mod runtime_api {
+    pub const MAGIC: u32 = 0x4c36_4150; // "L6AP"
+    pub const ABI_VERSION: u16 = 1;
+    pub const CAPACITY: usize = 7;
+
+    #[repr(C)]
+    #[derive(Clone, Copy, Default)]
+    pub struct Entry {
+        pub id: u32,
+        pub version: u16,
+        pub size: u16,
+        pub address: u32,
+        pub reserved: u32,
+    }
+
+    #[repr(C)]
+    pub struct Registry {
+        pub magic: u32,
+        pub abi_version: u16,
+        pub count: u16,
+        pub reserved: u64,
+        pub entries: [Entry; CAPACITY],
+    }
+
+    impl Registry {
+        pub const fn empty() -> Self {
+            Self {
+                magic: MAGIC,
+                abi_version: ABI_VERSION,
+                count: 0,
+                reserved: 0,
+                entries: [Entry {
+                    id: 0,
+                    version: 0,
+                    size: 0,
+                    address: 0,
+                    reserved: 0,
+                }; CAPACITY],
+            }
+        }
+
+        /// Publish one API table during module initialization. The loader runs
+        /// initializers serially before publishing that module's hooks.
+        pub unsafe fn register(
+            registry: *mut Self,
+            id: u32,
+            version: u16,
+            size: u16,
+            address: u32,
+        ) -> bool {
+            if registry.is_null() || id == 0 || version == 0 || size == 0 || address == 0 {
+                return false;
+            }
+            let registry = unsafe { &mut *registry };
+            if registry.magic != MAGIC || registry.abi_version != ABI_VERSION {
+                return false;
+            }
+            let count = usize::from(registry.count);
+            if count > CAPACITY
+                || registry.entries[..count]
+                    .iter()
+                    .any(|entry| entry.id == id && entry.version == version)
+            {
+                return false;
+            }
+            let Some(entry) = registry.entries.get_mut(count) else {
+                return false;
+            };
+            *entry = Entry {
+                id,
+                version,
+                size,
+                address,
+                reserved: 0,
+            };
+            registry.count += 1;
+            true
+        }
+
+        /// Resolve an API with an exact version and at least the requested
+        /// table size. Callers must treat the returned address as untrusted
+        /// until checking the provider-specific table fields.
+        pub unsafe fn resolve(
+            registry: *const Self,
+            id: u32,
+            version: u16,
+            minimum_size: u16,
+        ) -> Option<u32> {
+            if registry.is_null() {
+                return None;
+            }
+            let registry = unsafe { &*registry };
+            if registry.magic != MAGIC || registry.abi_version != ABI_VERSION {
+                return None;
+            }
+            let count = usize::from(registry.count);
+            if count > CAPACITY {
+                return None;
+            }
+            registry.entries[..count]
+                .iter()
+                .find(|entry| {
+                    entry.id == id && entry.version == version && entry.size >= minimum_size
+                })
+                .map(|entry| entry.address)
+        }
+    }
+
+    pub const KNOB_DIALOG_ID: u32 = u32::from_le_bytes(*b"KDLG");
+    pub const KNOB_DIALOG_VERSION: u16 = 1;
+
+    /// Stable cross-module interface. `show` copies both strings before
+    /// returning; the caller may pass temporary buffers. `prepare` must be
+    /// called from a UI task before `show` is later called from an audio task.
+    #[repr(C)]
+    pub struct KnobDialogV1 {
+        pub size: u32,
+        pub prepare: unsafe extern "C" fn() -> u32,
+        pub show: unsafe extern "C" fn(*const u8, u32, *const u8, u32) -> u32,
+    }
+}
+
+const _: [(); 128] = [(); core::mem::size_of::<runtime_api::Registry>()];
+
 /// Default terminal handler for patch payloads.
 ///
 /// This is deliberately independent of firmware services: a panic can happen

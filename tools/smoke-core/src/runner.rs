@@ -522,6 +522,21 @@ impl Runner {
                         steps,
                     }));
                 }
+                Action::DualEfxState {
+                    expected_effect_type,
+                    expected_edit_mode,
+                    minimum_parameter_edits,
+                    expected_parameter_id,
+                    expected_parameter_value,
+                } => {
+                    return Ok(Progress::Device(devices::Operation::DualEfxState {
+                        expected_effect_type,
+                        expected_edit_mode,
+                        minimum_parameter_edits,
+                        expected_parameter_id,
+                        expected_parameter_value,
+                    }));
+                }
                 Action::ExpectHeap { minimum_free } => {
                     return Ok(Progress::Device(devices::Operation::ExpectHeap {
                         minimum_free,

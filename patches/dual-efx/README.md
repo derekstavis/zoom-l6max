@@ -1,7 +1,9 @@
 # Dual-EFX: Velvet Noise Decorrelator & Plateau Reverb
 
 **Experimental in-progress port:** The patch can be built into a firmware
-update or loaded as an SD module. It uses the shared L6max hook API to follow
+update or loaded as an SD module. Its dynamic version supports live parameter
+editing on the recorder screen and uses the shared knob-dialog service for
+parameter feedback. It uses the shared L6max hook API to follow
 the stock effect workspace clear, callback selection, type update, and DSP
 stream paths. The `DualEfxProcessor` lives in the stock shared effect workspace;
 the patch replaces the Room and Spring callbacks with its own processing
@@ -11,7 +13,7 @@ output. Emulator smoke cases observe nonzero input, send, and output samples
 for both effects, and confirm the stock callback resumes for other effects.
 These are L6max MAIN 1.10 emulator observations; physical memory ownership,
 signal mapping, callback concurrency, audio quality, and timing still need
-qualification. The inspector and extended encoder controls are not connected.
+qualification.
 
 Replaces the stock mono/reconstructed send effects with high-end modern DSP engines:
 1. **Velvet Noise Decorrelator (VND)** (Effect A):
@@ -32,7 +34,10 @@ Replaces the stock mono/reconstructed send effects with high-end modern DSP engi
 3. **Dual Concurrent Send & Routing Matrix**:
    Allows running both effects simultaneously with flexible per-channel routing (`Neither`, `Send A`, `Send B`, `Send A -> B` [cascade]) and optional Pre-AINR (AI Noise Reduction) chaining.
 4. **Extended Parameter Control**:
-   Expands beyond the stock 2-parameter limitation using all 8 physical channel encoders and the L6max OLED display for live parameter feedback.
+   Expands beyond the stock 2-parameter limitation using all 8 physical channel
+   encoders. In dynamic mode, a long press on EFX SEL enters or exits parameter
+   edit mode; encoder turns update the selected Room or Spring DSP bank, and
+   the shared knob-dialog patch displays the parameter name and value.
 
 ## Model Support
 
@@ -55,8 +60,14 @@ bytes, before the compiled module code:
 | Cascade history | 19,208 | Separate mono sample history |
 | Other fields and alignment | 104 | Routing, parameters, and control state |
 
-The dynamic module currently occupies about 25.5 KiB. DSP state is initialized
-in place in the stock shared effect workspace at `0x80d00000`, whose observed
+The Dual EFX dynamic module currently requests about 28.2 KiB for code and
+module state. Its `module.json` requires knob-dialog's `KDLG` v1 API, so the SD
+bundle builder includes that provider once and places it before Dual EFX. The
+dialog API table and text mailbox live in knob-dialog's module allocation;
+Dual EFX stores only the resolved API address. The loader's fixed 128-byte API
+registry is part of its reserved registry area and does not allocate from the
+FreeRTOS heap. DSP state is initialized in place in the stock shared effect
+workspace at `0x80d00000`, whose observed
 span is 768,000 bytes. This avoids allocating the 283 KiB processor from the
 FreeRTOS heap. The SD smoke fixture reports a 167,528-byte heap low-water mark
 while requiring at least 131,072 bytes free. The stock firmware also clears and
@@ -105,14 +116,16 @@ firmware; the dynamic stream hook interposes only when Room or Spring is active.
 The old `hooks.tsv` call-site hook at `0x8000277c` was removed because it
 intercepts effect selection and parameter handling, not audio processing.
 
-The firmware knob hook preserves stock behavior on the recorder screen. In a
-different window it queues EFX encoder turns for the audio callback, choosing
-Velvet or Plateau from the selected stock effect. The dynamic module saves
-accepted parameter edits in its loader allocation so they survive workspace
-reinitialization. This event path is compiled but is not exercised by the
-current emulator case; the dedicated inspector and routing controls remain
-unconnected. The standalone inspector parameter model maps encoders 1–8 as
-follows:
+On the recorder screen, a short EFX SEL tap retains stock Room/Spring selection.
+A long hold toggles edit mode without changing the selected effect. Encoder
+turns are queued for the audio callback, which updates the selected DSP bank
+and publishes the applied value through knob-dialog's versioned runtime API.
+The SD bundle declares knob-dialog as a dependency and loads it once before
+Dual EFX; Dual EFX stores only the resolved API address. Accepted parameter
+edits are retained in the Dual EFX module allocation across effect-workspace
+reinitialization. The emulator smoke case verifies all 16 encoder mappings,
+checks the resulting DSP values, and captures the dialog and timeout
+screenshots. The encoders map as follows:
 
 | Encoder | Velvet bank | Plateau bank |
 | --- | --- | --- |
@@ -128,9 +141,10 @@ follows:
 The Velvet refresh control spans 0.1–60 seconds.
 
 For the two on/off settings, clockwise selects on and counterclockwise selects
-off. The model and value formatter are host-tested. A dedicated inspector
-screen, display presentation, bank selection and routing controls are not
-connected, so users do not yet have an integrated UI for these parameters.
+off. The active stock effect selects the Velvet or Plateau bank, so no extra
+bank-selection screen is needed. Parameter editing uses the recorder screen
+and the shared transient dialog; per-channel routing controls are still not
+exposed in the UI.
 Plateau holds its tank modulation delays fixed while frozen to preserve the
 tail, and resumes modulation when freeze is released.
 The default 48 kHz Plateau size range is 0.01–1.2 and predelay is 0–190 ms; the
@@ -174,8 +188,9 @@ cargo test --offline --locked -p l6dsp-tests
 ```
 
 The `sd-dual-efx-emulator` smoke case builds and loads the dynamic patch,
-exercises Room and Spring selection, and checks that reconstructed input and
-output samples are nonzero and finite while the heap stays above its threshold.
-It does not compare the emitted waveform to a reference, test the inspector,
-prove callback exclusion across every firmware path, or qualify target timing
-and hardware behavior.
+exercises all eight encoder mappings for both DSP banks, verifies the resulting
+parameter values, captures the dialog text, and checks that it times out back
+to the recorder screen. It also checks that reconstructed input and output
+samples are nonzero and finite while the heap stays above its threshold. It
+does not compare the emitted waveform to a reference, prove callback exclusion
+across every firmware path, or qualify target timing and hardware behavior.

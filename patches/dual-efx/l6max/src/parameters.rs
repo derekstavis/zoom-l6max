@@ -96,8 +96,8 @@ impl ParameterHandoff {
 }
 
 /// Applies one inspector encoder turn to the DSP state and returns the value
-/// to present. The caller must provide exclusive access to the processor;
-/// firmware event delivery and synchronization are not implemented here.
+/// to present. The caller must provide exclusive access to the processor. The
+/// payload handles firmware event delivery and callback synchronization.
 pub fn edit_encoder(
     processor: &mut super::routing::DualEfxProcessor,
     bank: ParameterBank,

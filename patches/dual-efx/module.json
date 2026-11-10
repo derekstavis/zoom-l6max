@@ -1,0 +1,7 @@
+{
+  "name": "dual-efx",
+  "provides": [],
+  "requires": [
+    { "id": "KDLG", "version": 1 }
+  ]
+}

@@ -8,7 +8,7 @@ pub mod patch_api;
 #[cfg(sd_composed)]
 use crate::patch_api;
 use core::ptr::{read_volatile as read, write_volatile as write};
-use core::sync::atomic::{AtomicU8, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
 use patch_api::function_call_post_hook;
 
 #[cfg(not(sd_composed))]
@@ -68,6 +68,189 @@ const MODE_TITLES: [&[u8]; MODE_COUNT as usize] = [
     b"High", b"Freq", b"Mid", b"Low", b"Aux1", b"Aux2", b"Efx", b"Sub-Mix", b"Pan",
     b"Level",
 ];
+
+// External patches publish copied ASCII strings through this one-slot
+// mailbox. Atomic words plus a nonblocking writer claim let an audio task
+// update it without calling GUI code or waiting for the display task.
+const EXTERNAL_TEXT_BYTES: usize = 24;
+#[cfg(sd_dynamic_module)]
+struct ExternalTextRequest {
+    sequence: AtomicU32,
+    title_len: AtomicU32,
+    value_len: AtomicU32,
+    words: [AtomicU32; 12],
+}
+#[cfg(sd_dynamic_module)]
+impl ExternalTextRequest {
+    const fn new() -> Self {
+        Self {
+            sequence: AtomicU32::new(0),
+            title_len: AtomicU32::new(0),
+            value_len: AtomicU32::new(0),
+            words: [const { AtomicU32::new(0) }; 12],
+        }
+    }
+}
+#[cfg(sd_dynamic_module)]
+static EXTERNAL_TEXT: ExternalTextRequest = ExternalTextRequest::new();
+#[cfg(sd_dynamic_module)]
+static EXTERNAL_TEXT_WRITER: AtomicBool = AtomicBool::new(false);
+#[cfg(sd_dynamic_module)]
+static EXTERNAL_TEXT_PENDING: AtomicU8 = AtomicU8::new(0);
+#[cfg(sd_dynamic_module)]
+static EXTERNAL_TEXT_ACTIVE: AtomicU8 = AtomicU8::new(0);
+
+#[cfg(sd_dynamic_module)]
+static KNOB_DIALOG_API: patch_api::runtime_api::KnobDialogV1 =
+    patch_api::runtime_api::KnobDialogV1 {
+        size: core::mem::size_of::<patch_api::runtime_api::KnobDialogV1>() as u32,
+        prepare: knob_dialog_api_prepare,
+        show: knob_dialog_api_show,
+    };
+
+/// Register the display service before any module can hook the mixer path.
+/// The module loader passes the shared registry in r0 and checks this result
+/// before publishing hook entries.
+#[cfg(sd_dynamic_module)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn patch_module_init(
+    registry: *mut patch_api::runtime_api::Registry,
+) -> u32 {
+    let address = core::ptr::addr_of!(KNOB_DIALOG_API) as u32;
+    if unsafe {
+        patch_api::runtime_api::Registry::register(
+            registry,
+            patch_api::runtime_api::KNOB_DIALOG_ID,
+            patch_api::runtime_api::KNOB_DIALOG_VERSION,
+            core::mem::size_of::<patch_api::runtime_api::KnobDialogV1>() as u16,
+            address,
+        )
+    } {
+        0
+    } else {
+        1
+    }
+}
+
+#[cfg(sd_dynamic_module)]
+unsafe extern "C" fn knob_dialog_api_prepare() -> u32 {
+    u32::from(!unsafe { ensure_state() }.is_null())
+}
+
+#[cfg(sd_dynamic_module)]
+unsafe extern "C" fn knob_dialog_api_show(
+    title: *const u8,
+    title_len: u32,
+    value: *const u8,
+    value_len: u32,
+) -> u32 {
+    u32::from(unsafe { publish_external_text(title, title_len, value, value_len) })
+}
+
+#[cfg(sd_dynamic_module)]
+unsafe fn publish_external_text(
+    title: *const u8,
+    title_len: u32,
+    value: *const u8,
+    value_len: u32,
+) -> bool {
+    let title_len = title_len as usize;
+    let value_len = value_len as usize;
+    if title.is_null()
+        || value.is_null()
+        || title_len == 0
+        || title_len >= EXTERNAL_TEXT_BYTES
+        || value_len == 0
+        || value_len >= EXTERNAL_TEXT_BYTES
+        || EXTERNAL_TEXT_WRITER
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
+    {
+        return false;
+    }
+
+    let previous = EXTERNAL_TEXT.sequence.load(Ordering::Relaxed) & !1;
+    EXTERNAL_TEXT
+        .sequence
+        .store(previous.wrapping_add(1), Ordering::Release);
+    EXTERNAL_TEXT.title_len.store(title_len as u32, Ordering::Relaxed);
+    EXTERNAL_TEXT.value_len.store(value_len as u32, Ordering::Relaxed);
+    for word_index in 0..12 {
+        let start = if word_index < 6 {
+            word_index * 4
+        } else {
+            (word_index - 6) * 4
+        };
+        let (source, length) = if word_index < 6 {
+            (title, title_len)
+        } else {
+            (value, value_len)
+        };
+        let mut packed = 0u32;
+        for byte_index in 0..4 {
+            let index = start + byte_index;
+            if index < length {
+                packed |= u32::from(unsafe { core::ptr::read_volatile(source.add(index)) })
+                    << (byte_index * 8);
+            }
+        }
+        EXTERNAL_TEXT.words[word_index].store(packed, Ordering::Relaxed);
+    }
+    EXTERNAL_TEXT
+        .sequence
+        .store(previous.wrapping_add(2), Ordering::Release);
+    EXTERNAL_TEXT_PENDING.store(1, Ordering::Release);
+    EXTERNAL_TEXT_ACTIVE.store(1, Ordering::Release);
+    // A caller-provided value supersedes any generic knob label queued by
+    // the post-call hook for the same physical turn.
+    let state = unsafe { state() };
+    if !state.is_null() {
+        unsafe { (*state).pending.store(NO_PENDING_EVENT, Ordering::Release) };
+    }
+    EXTERNAL_TEXT_WRITER.store(false, Ordering::Release);
+    true
+}
+
+#[cfg(sd_dynamic_module)]
+unsafe fn take_external_text() -> Option<([u16; 24], [u16; 24])> {
+    if EXTERNAL_TEXT_PENDING.swap(0, Ordering::AcqRel) == 0 {
+        return None;
+    }
+    let before = EXTERNAL_TEXT.sequence.load(Ordering::Acquire);
+    if before & 1 != 0 {
+        EXTERNAL_TEXT_PENDING.store(1, Ordering::Release);
+        return None;
+    }
+    let title_len = EXTERNAL_TEXT.title_len.load(Ordering::Relaxed) as usize;
+    let value_len = EXTERNAL_TEXT.value_len.load(Ordering::Relaxed) as usize;
+    if title_len == 0
+        || title_len >= EXTERNAL_TEXT_BYTES
+        || value_len == 0
+        || value_len >= EXTERNAL_TEXT_BYTES
+    {
+        return None;
+    }
+    let mut title = [0u16; 24];
+    let mut value = [0u16; 24];
+    for index in 0..title_len {
+        let word = EXTERNAL_TEXT.words[index / 4].load(Ordering::Relaxed);
+        title[index] = ((word >> ((index % 4) * 8)) & 0xff) as u16;
+    }
+    for index in 0..value_len {
+        let word = EXTERNAL_TEXT.words[6 + index / 4].load(Ordering::Relaxed);
+        value[index] = ((word >> ((index % 4) * 8)) & 0xff) as u16;
+    }
+    if EXTERNAL_TEXT.sequence.load(Ordering::Acquire) != before {
+        EXTERNAL_TEXT_PENDING.store(1, Ordering::Release);
+        return None;
+    }
+    Some((title, value))
+}
+
+#[cfg(not(sd_dynamic_module))]
+unsafe fn take_external_text() -> Option<([u16; 24], [u16; 24])> {
+    None
+}
 
 unsafe fn language_tables() -> (*mut u32, *mut u16) {
     unsafe {
@@ -311,6 +494,8 @@ unsafe fn restore_scene(discard_pending: bool) {
             write(background, stock_layer);
         }
         write(core::ptr::addr_of_mut!((*pointer).ticks), 0);
+        #[cfg(sd_dynamic_module)]
+        EXTERNAL_TEXT_ACTIVE.store(0, Ordering::Release);
         if discard_pending {
             (*pointer)
                 .pending
@@ -409,6 +594,11 @@ pub unsafe extern "C" fn knob_dialog_display_tick() {
             } else {
                 (*pointer).pending.store(NO_PENDING_EVENT, Ordering::Relaxed);
             }
+            #[cfg(sd_dynamic_module)]
+            {
+                EXTERNAL_TEXT_PENDING.store(0, Ordering::Release);
+                EXTERNAL_TEXT_ACTIVE.store(0, Ordering::Release);
+            }
             return;
         }
         if notification_active.read() == 0 && notification_busy.read() == 0 {
@@ -440,6 +630,10 @@ pub unsafe fn knob_changed(
         }
         // Only the normal recorder window: leave setup and modal dialogs alone.
         if current_window.read() != GUI_RECORDER_WINDOW {
+            return;
+        }
+        #[cfg(sd_dynamic_module)]
+        if EXTERNAL_TEXT_ACTIVE.load(Ordering::Acquire) != 0 {
             return;
         }
         let active = state();

@@ -9,9 +9,9 @@ use patch_api::function_entry_hook;
 mod firmware;
 use firmware as firmware_bindings;
 use firmware_bindings::{
-    current_window, dsp_stream_callback, effect_workspace_clear, main_startup_initialize,
-    mixer_apply_channel_parameter, mixer_get_efx_type, mixer_select_efx_callback,
-    mixer_set_efx_type,
+    current_window, dsp_stream_callback, effect_workspace_clear, handle_main_button_event,
+    main_startup_initialize, mixer_apply_channel_parameter, mixer_get_efx_type,
+    mixer_select_efx_callback, mixer_set_efx_type, x_task_get_tick_count,
 };
 #[path = "../../../api/l6max/hooks.rs"]
 mod hook_catalog;
@@ -51,6 +51,69 @@ const ACTIVE_CALLBACK: *mut u32 = 0x202a_6f20 as *mut u32;
 #[cfg(sd_dynamic_module)]
 #[unsafe(no_mangle)]
 pub static PARAMETER_HANDOFF: parameters::ParameterHandoff = parameters::ParameterHandoff::new();
+
+#[cfg(sd_dynamic_module)]
+static KNOB_DIALOG_API_ADDRESS: AtomicU32 = AtomicU32::new(0);
+
+/// Require the shared dialog service before publishing any Dual EFX hooks.
+/// This makes the SD file dependency explicit and rejects a missing or
+/// incompatible knob-dialog provider without leaving partial hook chains.
+#[cfg(sd_dynamic_module)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn patch_module_init(
+    registry: *mut patch_api::runtime_api::Registry,
+) -> u32 {
+    let Some(address) = (unsafe {
+        patch_api::runtime_api::Registry::resolve(
+            registry,
+            patch_api::runtime_api::KNOB_DIALOG_ID,
+            patch_api::runtime_api::KNOB_DIALOG_VERSION,
+            core::mem::size_of::<patch_api::runtime_api::KnobDialogV1>() as u16,
+        )
+    }) else {
+        return 1;
+    };
+    let api = unsafe { &*(address as *const patch_api::runtime_api::KnobDialogV1) };
+    if api.size < core::mem::size_of::<patch_api::runtime_api::KnobDialogV1>() as u32
+        || api.prepare as usize == 0
+        || api.show as usize == 0
+    {
+        return 1;
+    }
+    KNOB_DIALOG_API_ADDRESS.store(address, Ordering::Release);
+    0
+}
+
+#[cfg(sd_dynamic_module)]
+unsafe fn prepare_parameter_dialog() {
+    let address = KNOB_DIALOG_API_ADDRESS.load(Ordering::Acquire);
+    if address != 0 {
+        let api = unsafe { &*(address as *const patch_api::runtime_api::KnobDialogV1) };
+        let _ = unsafe { (api.prepare)() };
+    }
+}
+
+#[cfg(sd_dynamic_module)]
+unsafe fn show_parameter_dialog(
+    id: parameters::EfxParamId,
+    processor: &DualEfxProcessor,
+) {
+    let address = KNOB_DIALOG_API_ADDRESS.load(Ordering::Acquire);
+    if address == 0 {
+        return;
+    }
+    let api = unsafe { &*(address as *const patch_api::runtime_api::KnobDialogV1) };
+    let formatted = parameters::format_parameter(id, processor);
+    let title = formatted.title.as_bytes();
+    let _ = unsafe {
+        (api.show)(
+            title.as_ptr(),
+            title.len() as u32,
+            formatted.value_str.as_ptr(),
+            formatted.value_len as u32,
+        )
+    };
+}
 
 /// DSP state occupies stock's cleared shared effect workspace, not the heap.
 /// Its bounds are checked against the observed L6max effect-buffer span.
@@ -153,6 +216,74 @@ pub static DUAL_EFFECT_SELECTION_PENDING: AtomicU32 = AtomicU32::new(0);
 #[cfg_attr(not(sd_dynamic_module), unsafe(link_section = ".effect_workspace_state"))]
 #[unsafe(no_mangle)]
 pub static DUAL_EFFECT_PROCESSOR_TYPE: AtomicU32 = AtomicU32::new(0);
+#[cfg(sd_dynamic_module)]
+#[unsafe(no_mangle)]
+pub static DUAL_EFFECT_PARAMETER_EDIT_MODE: AtomicU32 = AtomicU32::new(0);
+#[cfg(sd_dynamic_module)]
+static DUAL_EFFECT_EFX_BUTTON_DOWN_TICK: AtomicU32 = AtomicU32::new(0);
+
+#[cfg(sd_dynamic_module)]
+unsafe fn show_edit_mode(enabled: bool) {
+    let address = KNOB_DIALOG_API_ADDRESS.load(Ordering::Acquire);
+    if address == 0 {
+        return;
+    }
+    let api = unsafe { &*(address as *const patch_api::runtime_api::KnobDialogV1) };
+    let title = b"DUAL EFX EDIT";
+    let value = if enabled { b"ON".as_slice() } else { b"OFF".as_slice() };
+    let _ = unsafe { (api.prepare)() };
+    let _ = unsafe {
+        (api.show)(
+            title.as_ptr(),
+            title.len() as u32,
+            value.as_ptr(),
+            value.len() as u32,
+        )
+    };
+}
+
+/// Delay EFX selection until the release edge distinguishes a tap from a hold.
+#[cfg(sd_dynamic_module)]
+#[function_entry_hook(handle_main_button_event)]
+pub unsafe fn dual_efx_edit_button_event(event: *const u32, context: *mut u32) {
+    if !event.is_null() {
+        let source = unsafe { core::ptr::read_volatile(event) };
+        let kind = unsafe { core::ptr::read_volatile(event.add(1)) };
+        let code = unsafe { core::ptr::read_volatile(event.add(2)) };
+        if source == 0
+            && code == 36
+            && unsafe { current_window.read() } == 0x8020_0408
+        {
+            if kind == 0 {
+                // Delay the stock selection until the matching release tells
+                // us whether this was a tap or a sustained hold.
+                DUAL_EFFECT_EFX_BUTTON_DOWN_TICK
+                    .store(unsafe { x_task_get_tick_count() }.wrapping_add(1), Ordering::Release);
+                return hook_done();
+            }
+            if kind == 1 {
+                let down = DUAL_EFFECT_EFX_BUTTON_DOWN_TICK.swap(0, Ordering::AcqRel);
+                if down != 0 {
+                    let elapsed = unsafe { x_task_get_tick_count() }.wrapping_sub(down - 1);
+                    if elapsed >= 500 {
+                        let enabled = DUAL_EFFECT_PARAMETER_EDIT_MODE.fetch_xor(1, Ordering::AcqRel) == 0;
+                        unsafe { show_edit_mode(enabled) };
+                        return hook_done();
+                    }
+                    // Replay the press edge after deciding this was a tap.
+                    // The stock handler selects on press, while the physical
+                    // press was held back until we could distinguish a hold.
+                    let event_kind = unsafe { event.add(1) as *mut u32 };
+                    unsafe { core::ptr::write_volatile(event_kind, 0) };
+                    let _ = hook_continue(event, context);
+                    unsafe { core::ptr::write_volatile(event_kind, 1) };
+                    return hook_done();
+                }
+            }
+        }
+    }
+    hook_continue(event, context)
+}
 
 /// Static payloads put their small control state in the beginning of stock's
 /// shared effect workspace. The stock selector clears it before each change,
@@ -361,7 +492,16 @@ pub unsafe fn dual_efx_parameter_edit(
     value: u32,
 ) {
     let window = unsafe { current_window.read() };
-    if window == 0x8020_0408 || mode != 6 || channel >= 8 || delta == 0 {
+    #[cfg(sd_dynamic_module)]
+    let recorder_edit_enabled = window == 0x8020_0408
+        && DUAL_EFFECT_PARAMETER_EDIT_MODE.load(Ordering::Acquire) != 0;
+    #[cfg(not(sd_dynamic_module))]
+    let recorder_edit_enabled = false;
+    if (window == 0x8020_0408 && !recorder_edit_enabled)
+        || mode != 6
+        || channel >= 8
+        || delta == 0
+    {
         return hook_continue(channel, mode, absolute, delta, value);
     }
 
@@ -370,6 +510,10 @@ pub unsafe fn dual_efx_parameter_edit(
         2 => parameters::ParameterBank::Velvet,
         _ => return hook_continue(channel, mode, absolute, delta, value),
     };
+    #[cfg(sd_dynamic_module)]
+    unsafe {
+        prepare_parameter_dialog();
+    }
     let step = delta.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
     let encoded = ((bank == parameters::ParameterBank::Plateau) as u32) << 31
         | (channel << 24)
@@ -630,7 +774,10 @@ unsafe fn process_effect_block(descriptor: *mut u8) -> bool {
         let delta = ((edit >> 8) as u16 as i16) as i32;
         if let Some(id) = parameters::edit_encoder(processor, bank, encoder, delta) {
             #[cfg(sd_dynamic_module)]
-            PARAMETER_HANDOFF.record(id, processor);
+            {
+                PARAMETER_HANDOFF.record(id, processor);
+                unsafe { show_parameter_dialog(id, processor) };
+            }
             DUAL_EFFECT_EDIT_APPLIED.fetch_add(1, Ordering::Relaxed);
         }
     }

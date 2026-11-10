@@ -247,6 +247,18 @@ pub enum Action {
         encoder: usize,
         steps: i32,
     },
+    DualEfxState {
+        #[serde(default)]
+        expected_effect_type: Option<u8>,
+        #[serde(default)]
+        expected_edit_mode: Option<bool>,
+        #[serde(default)]
+        minimum_parameter_edits: Option<u32>,
+        #[serde(default)]
+        expected_parameter_id: Option<u8>,
+        #[serde(default)]
+        expected_parameter_value: Option<f32>,
+    },
     ExpectHeap {
         minimum_free: u32,
     },
@@ -965,6 +977,7 @@ impl Scenario {
                 | Action::ExpectMemory { .. }
                 | Action::ExpectSdPatch { .. }
                 | Action::DualEfxParameterEdit { .. }
+                | Action::DualEfxState { .. }
                 | Action::ExpectHeap { .. }
                 | Action::HoldChord { .. }
                 | Action::AudioCallbacks
@@ -1137,6 +1150,7 @@ impl Scenario {
                             .into(),
                     );
                 }
+                Action::DualEfxState { .. } => {}
                 Action::ExpectRingLevel { channel, min, max } if *channel == 0 || min > max => {
                     return Err("ring level assertion needs a channel and min <= max".into());
                 }

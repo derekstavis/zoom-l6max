@@ -75,6 +75,13 @@ pub enum Operation {
         encoder: usize,
         steps: i32,
     },
+    DualEfxState {
+        expected_effect_type: Option<u8>,
+        expected_edit_mode: Option<bool>,
+        minimum_parameter_edits: Option<u32>,
+        expected_parameter_id: Option<u8>,
+        expected_parameter_value: Option<f32>,
+    },
     ExpectHeap {
         minimum_free: u32,
     },
@@ -3642,6 +3649,24 @@ impl State {
                 Ok(dual_efx_parameter_edit(options, session, encoder, steps)
                     .map_err(std::io::Error::other)?)
             }
+            Operation::DualEfxState {
+                expected_effect_type,
+                expected_edit_mode,
+                minimum_parameter_edits,
+                expected_parameter_id,
+                expected_parameter_value,
+            } => {
+                Ok(dual_efx_state(
+                    options,
+                    session,
+                    expected_effect_type,
+                    expected_edit_mode,
+                    minimum_parameter_edits,
+                    expected_parameter_id,
+                    expected_parameter_value,
+                )
+                .map_err(std::io::Error::other)?)
+            }
             Operation::ExpectSdPatch {
                 loaded,
                 chain_count,
@@ -4031,6 +4056,37 @@ impl State {
                             .find(|patch| patch["memory_length"].as_u64() == Some(size as u64))
                             .and_then(|patch| patch["effect_dispatch_symbols"].as_object())
                     };
+                    let mutable_ranges_for_size = |size: usize| {
+                        let patch = patch_report["patches"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .find(|patch| patch["memory_length"].as_u64() == Some(size as u64));
+                        let mut ranges = patch
+                            .and_then(|patch| patch["effect_dispatch_symbols"].as_object())
+                            .into_iter()
+                            .flat_map(|symbols| symbols.iter())
+                            .filter_map(|(name, value)| {
+                                Some((
+                                    usize::try_from(value.as_u64()?).ok()?,
+                                    if name == "parameter_handoff" { 64 } else { 4 },
+                                ))
+                            })
+                            .collect::<Vec<_>>();
+                        if let Some(code_len) = patch
+                            .and_then(|patch| patch["payload_length"].as_u64())
+                            .and_then(|length| usize::try_from(length).ok())
+                            && code_len < size
+                        {
+                            // The loader zeroes this NOBITS tail before module
+                            // initialization. Once running, it is module-owned
+                            // writable state, so runtime byte comparison must
+                            // not mistake legitimate initialization for code
+                            // corruption.
+                            ranges.push((code_len, size - code_len));
+                        }
+                        ranges
+                    };
                     let callback_symbols = symbols_for_size(loaded_len as usize);
                     let pass_through_entry_offset = if ordered_chain {
                         Some(
@@ -4107,16 +4163,8 @@ impl State {
                                         "hook {index} does not match any module's hook metadata"
                                     )
                                 })?;
-                        let mutable_symbol_ranges = symbols_for_size(module_payload.len())
-                            .into_iter()
-                            .flat_map(|symbols| symbols.iter())
-                            .filter_map(|(name, value)| {
-                                Some((
-                                    usize::try_from(value.as_u64()?).ok()?,
-                                    if name == "parameter_handoff" { 64 } else { 4 },
-                                ))
-                            })
-                            .collect::<Vec<_>>();
+                        let mutable_symbol_ranges =
+                            mutable_ranges_for_size(module_payload.len());
                         let expected_next =
                             chain_links.get(index + 1).map_or(fallback, |next| next.0);
                         let actual_next = u32::from_le_bytes(
@@ -4185,16 +4233,8 @@ impl State {
                         .iter()
                         .find(|(module_payload, _, _)| module_payload.len() == loaded_len as usize)
                     {
-                        let mutable_symbol_ranges = symbols_for_size(latest_payload.len())
-                            .into_iter()
-                            .flat_map(|symbols| symbols.iter())
-                            .filter_map(|(name, value)| {
-                                Some((
-                                    usize::try_from(value.as_u64()?).ok()?,
-                                    if name == "parameter_handoff" { 64 } else { 4 },
-                                ))
-                            })
-                            .collect::<Vec<_>>();
+                        let mutable_symbol_ranges =
+                            mutable_ranges_for_size(latest_payload.len());
                         let mut expected = latest_payload.clone();
                         patch_loader_core::bundle::relocate(
                             &mut expected,
@@ -5768,6 +5808,105 @@ fn dual_efx_parameter_edit(
         }
         thread::sleep(Duration::from_millis(10));
     }
+}
+
+fn dual_efx_state(
+    options: &Options,
+    session: &Session,
+    expected_effect_type: Option<u8>,
+    expected_edit_mode: Option<bool>,
+    minimum_parameter_edits: Option<u32>,
+    expected_parameter_id: Option<u8>,
+    expected_parameter_value: Option<f32>,
+) -> Result<Value, String> {
+    if session.engine.model() != l6fw::Model::L6max {
+        return Err("Dual EFX state checks require L6max".into());
+    }
+    let root = sd_fixture_root(options)?;
+    let report: Value = serde_json::from_slice(
+        &fs::read(root.join("sd-patches-build/patch.json")).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    let symbols = report["patches"]
+        .as_array()
+        .and_then(|patches| patches.iter().find(|patch| patch["name"] == "dual-efx"))
+        .and_then(|patch| patch["effect_dispatch_symbols"].as_object())
+        .ok_or("Dual EFX debug symbols are missing from its module report")?;
+    let offset = |name: &str| -> Result<u32, String> {
+        symbols[name]
+            .as_u64()
+            .and_then(|value| u32::try_from(value).ok())
+            .ok_or_else(|| format!("Dual EFX symbol {name} is missing"))
+    };
+    const MODULE_REGISTRY: u32 = 0x8021_8000;
+    let qmp = &session.engine.management[0];
+    let module_base = u32::from_le_bytes(
+        qmp.read_memory(0, MODULE_REGISTRY + 160, 4)
+            .map_err(|error| error.to_string())?
+            .try_into()
+            .unwrap(),
+    );
+    if module_base == 0 {
+        return Err("Dual EFX module is not loaded".into());
+    }
+    let effect_type = qmp
+        .read_memory(0, 0x8046_00b2, 1)
+        .map_err(|error| error.to_string())?
+        .first()
+        .copied();
+    let edit_mode = u32::from_le_bytes(
+        qmp.read_memory(0, module_base + offset("dual_effect_parameter_edit_mode")?, 4)
+            .map_err(|error| error.to_string())?
+            .try_into()
+            .unwrap(),
+    );
+    let applied = u32::from_le_bytes(
+        qmp.read_memory(0, module_base + offset("dual_effect_edit_applied")?, 4)
+            .map_err(|error| error.to_string())?
+            .try_into()
+            .unwrap(),
+    );
+    let parameter = if let Some(parameter_id) = expected_parameter_id {
+        if parameter_id >= 16 {
+            return Err(format!("Dual EFX parameter id {parameter_id} is out of range"));
+        }
+        let handoff_offset = offset("parameter_handoff")? + u32::from(parameter_id) * 4;
+        Some(f32::from_bits(u32::from_le_bytes(
+            qmp.read_memory(0, module_base + handoff_offset, 4)
+                .map_err(|error| error.to_string())?
+                .try_into()
+                .unwrap(),
+        )))
+    } else {
+        None
+    };
+    if expected_effect_type.is_some_and(|expected| effect_type != Some(expected)) {
+        return Err(format!(
+            "Dual EFX selected effect is {effect_type:?}, expected {expected_effect_type:?}"
+        ));
+    }
+    if expected_edit_mode.is_some_and(|expected| edit_mode != u32::from(expected)) {
+        return Err(format!(
+            "Dual EFX parameter edit mode is {edit_mode}, expected {expected_edit_mode:?}"
+        ));
+    }
+    if minimum_parameter_edits.is_some_and(|minimum| applied < minimum) {
+        return Err(format!(
+            "Dual EFX applied {applied} parameter edits, expected at least {minimum_parameter_edits:?}"
+        ));
+    }
+    if expected_parameter_value.is_some() && parameter.is_none() {
+        return Err("Dual EFX parameter value requires expected_parameter_id".into());
+    }
+    if let (Some(expected), Some(actual)) = (expected_parameter_value, parameter) {
+        let tolerance = 0.01_f32.max(expected.abs() * 0.0001);
+        if !actual.is_finite() || (actual - expected).abs() > tolerance {
+            return Err(format!(
+                "Dual EFX parameter {expected_parameter_id:?} is {actual}, expected {expected}"
+            ));
+        }
+    }
+    Ok(json!({"effect_type":effect_type,"edit_mode":edit_mode,"parameter_edits_applied":applied,"parameter_id":expected_parameter_id,"parameter_value":parameter}))
 }
 
 fn sd_fixture_edits(options: &Options, main: &[u8], model: l6fw::Model) -> Result<SdEdits, String> {
