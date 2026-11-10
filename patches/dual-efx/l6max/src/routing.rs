@@ -48,7 +48,9 @@ pub struct RoutingWorkspace {
 
 impl RoutingWorkspace {
     pub const fn new() -> Self {
-        Self { buses: [[0.0; BLOCK_SIZE]; 3] }
+        Self {
+            buses: [[0.0; BLOCK_SIZE]; 3],
+        }
     }
 
     /// Initializes caller-owned storage without constructing a large stack value.
@@ -83,7 +85,9 @@ pub struct IdlePlateau {
 
 impl IdlePlateau {
     pub const fn new() -> Self {
-        Self { inner: PlateauReverb::new(), pristine: false,
+        Self {
+            inner: PlateauReverb::new(),
+            pristine: false,
             #[cfg(experimental_plateau_32k)]
             rate: super::plateau_rate::PlateauRate::new(),
         }
@@ -105,7 +109,9 @@ impl IdlePlateau {
 
     pub fn set_parameters(&mut self, params: PlateauParameters) {
         #[cfg(experimental_plateau_32k)]
-        if params.freeze && !self.inner.params.freeze { self.rate.clear_input(); }
+        if params.freeze && !self.inner.params.freeze {
+            self.rate.clear_input();
+        }
         self.inner.set_parameters(params);
     }
 
@@ -114,15 +120,23 @@ impl IdlePlateau {
         self.inner.set_parameters_fresh(params);
     }
 
-    pub(crate) fn set_predelay_live(&mut self, value: f32) { self.inner.set_predelay_live(value); }
-    pub(crate) fn set_size_live(&mut self, value: f32) { self.inner.set_size_live(value); }
-    pub(crate) fn set_diffusion_live(&mut self, value: f32) { self.inner.set_diffusion_live(value); }
+    pub(crate) fn set_predelay_live(&mut self, value: f32) {
+        self.inner.set_predelay_live(value);
+    }
+    pub(crate) fn set_size_live(&mut self, value: f32) {
+        self.inner.set_size_live(value);
+    }
+    pub(crate) fn set_diffusion_live(&mut self, value: f32) {
+        self.inner.set_diffusion_live(value);
+    }
 
     /// Update controls consumed directly per sample, without recalculating
     /// delay lengths or filter coefficients on the audio task.
     pub(crate) fn set_live_parameters(&mut self, params: PlateauParameters) {
         #[cfg(experimental_plateau_32k)]
-        if params.freeze && !self.inner.params.freeze { self.rate.clear_input(); }
+        if params.freeze && !self.inner.params.freeze {
+            self.rate.clear_input();
+        }
         self.inner.set_live_parameters(params);
     }
 
@@ -131,8 +145,13 @@ impl IdlePlateau {
         {
             let inner = &mut self.inner;
             let pristine = &mut self.pristine;
-            let (l, r) = if inner.params.freeze { (0.0, 0.0) } else { (l, r) };
-            self.rate.process(l, r, |l, r| Self::process_internal(inner, pristine, l, r))
+            let (l, r) = if inner.params.freeze {
+                (0.0, 0.0)
+            } else {
+                (l, r)
+            };
+            self.rate
+                .process(l, r, |l, r| Self::process_internal(inner, pristine, l, r))
         }
         #[cfg(not(experimental_plateau_32k))]
         {
@@ -141,7 +160,12 @@ impl IdlePlateau {
     }
 
     #[inline(always)]
-    fn process_internal(inner: &mut PlateauReverb, pristine: &mut bool, l: f32, r: f32) -> (f32, f32) {
+    fn process_internal(
+        inner: &mut PlateauReverb,
+        pristine: &mut bool,
+        l: f32,
+        r: f32,
+    ) -> (f32, f32) {
         // Requiring positive zero preserves the ordinary path for signed zero.
         if *pristine && l.to_bits() == 0 && r.to_bits() == 0 {
             inner.advance_pristine();
@@ -287,8 +311,12 @@ impl DualEfxProcessor {
     // Only live encoder edits request a fade. Direct field writes retain their
     // existing immediate behavior, including initialization and restoration.
     pub(crate) fn set_cascade_gain_smooth(&mut self, gain: f32) {
-        if gain == self.cascade_gain { return; }
-        if self.cascade_remaining == 0 || self.cascade_gain.to_bits() != self.cascade_target.to_bits() {
+        if gain == self.cascade_gain {
+            return;
+        }
+        if self.cascade_remaining == 0
+            || self.cascade_gain.to_bits() != self.cascade_target.to_bits()
+        {
             self.cascade_current = self.cascade_gain;
         }
         self.cascade_gain = gain;
@@ -299,7 +327,9 @@ impl DualEfxProcessor {
 
     #[inline(always)]
     fn advance_cascade_gain(&mut self) -> f32 {
-        if self.cascade_remaining == 0 || self.cascade_gain.to_bits() != self.cascade_target.to_bits() {
+        if self.cascade_remaining == 0
+            || self.cascade_gain.to_bits() != self.cascade_target.to_bits()
+        {
             self.cascade_remaining = 0;
             return self.cascade_gain;
         }
@@ -317,10 +347,18 @@ impl DualEfxProcessor {
     /// - `channels`: slice of channel input buffers [ch][frame].
     /// - `out_l`, `out_r`: destination buffers for the wet effect return to master bus.
     pub fn process_block(&mut self, channels: &[&[f32]], out_l: &mut [f32], out_r: &mut [f32]) {
-        let mut weighted = [WeightedChannel { samples: &[], gain: 0.0, ramp: None }; MAX_CHANNELS];
+        let mut weighted = [WeightedChannel {
+            samples: &[],
+            gain: 0.0,
+            ramp: None,
+        }; MAX_CHANNELS];
         let count = channels.len().min(MAX_CHANNELS);
         for ch in 0..count {
-            weighted[ch] = WeightedChannel { samples: channels[ch], gain: self.channel_send[ch], ramp: None };
+            weighted[ch] = WeightedChannel {
+                samples: channels[ch],
+                gain: self.channel_send[ch],
+                ramp: None,
+            };
         }
         self.process_weighted_block(&weighted[..count], out_l, out_r);
     }
@@ -329,14 +367,25 @@ impl DualEfxProcessor {
     /// Samples and optional ramps shorter than the output contribute silence
     /// beyond their lengths; effects still run to preserve their tails. Invalid
     /// or extreme weighted contributions are discarded before bus summation.
-    pub fn process_weighted_block(&mut self, channels: &[WeightedChannel<'_>], out_l: &mut [f32], out_r: &mut [f32]) {
+    pub fn process_weighted_block(
+        &mut self,
+        channels: &[WeightedChannel<'_>],
+        out_l: &mut [f32],
+        out_r: &mut [f32],
+    ) {
         let mut workspace = RoutingWorkspace::new();
         self.process_weighted_with_workspace(channels, out_l, out_r, &mut workspace);
     }
 
     /// Routes weighted channels using caller-owned scratch, avoiding the
     /// block-sized temporary buses in the caller's stack frame.
-    pub fn process_weighted_with_workspace(&mut self, channels: &[WeightedChannel<'_>], out_l: &mut [f32], out_r: &mut [f32], workspace: &mut RoutingWorkspace) {
+    pub fn process_weighted_with_workspace(
+        &mut self,
+        channels: &[WeightedChannel<'_>],
+        out_l: &mut [f32],
+        out_r: &mut [f32],
+        workspace: &mut RoutingWorkspace,
+    ) {
         let frames = out_l.len().min(out_r.len());
         let mut offset = 0;
         while offset < frames {
@@ -372,8 +421,11 @@ impl DualEfxProcessor {
             }
 
             self.process_buses(
-                &send_a[..n], &send_b[..n], &send_cascade[..n],
-                &mut out_l[offset..offset + n], &mut out_r[offset..offset + n],
+                &send_a[..n],
+                &send_b[..n],
+                &send_cascade[..n],
+                &mut out_l[offset..offset + n],
+                &mut out_r[offset..offset + n],
             );
             offset += n;
         }
@@ -390,8 +442,12 @@ impl DualEfxProcessor {
         out_l: &mut [f32],
         out_r: &mut [f32],
     ) {
-        let frames = send_a.len().min(send_b.len()).min(send_cascade.len())
-            .min(out_l.len()).min(out_r.len());
+        let frames = send_a
+            .len()
+            .min(send_b.len())
+            .min(send_cascade.len())
+            .min(out_l.len())
+            .min(out_r.len());
         if frames == 0 {
             return;
         }
@@ -403,10 +459,16 @@ impl DualEfxProcessor {
     /// Processes one frame, allowing firmware control updates to remain
     /// interleaved with audio frames.
     #[inline(always)]
-    pub fn process_bus_sample(&mut self, send_a: f32, send_b: f32, send_cascade: f32) -> (f32, f32) {
+    pub fn process_bus_sample(
+        &mut self,
+        send_a: f32,
+        send_b: f32,
+        send_cascade: f32,
+    ) -> (f32, f32) {
         let cascade_gain = self.advance_cascade_gain();
-        let ((a_l, a_r), (cascade_l, cascade_r)) = self.velvet
-            .process_shared_mono(&mut self.cascade_history, send_a, send_cascade);
+        let ((a_l, a_r), (cascade_l, cascade_r)) =
+            self.velvet
+                .process_shared_mono(&mut self.cascade_history, send_a, send_cascade);
         // Reject a corrupt direct send before it can contaminate the separate
         // cascade contribution to the reverb.
         let send_b = super::math::audio_input(send_b);
@@ -415,8 +477,12 @@ impl DualEfxProcessor {
             send_b + cascade_r * cascade_gain,
         );
         (
-            super::math::soft_clip((a_l + cascade_l) * self.return_gain_a + wet_b_l * self.return_gain_b),
-            super::math::soft_clip((a_r + cascade_r) * self.return_gain_a + wet_b_r * self.return_gain_b),
+            super::math::soft_clip(
+                (a_l + cascade_l) * self.return_gain_a + wet_b_l * self.return_gain_b,
+            ),
+            super::math::soft_clip(
+                (a_r + cascade_r) * self.return_gain_a + wet_b_r * self.return_gain_b,
+            ),
         )
     }
 
@@ -447,16 +513,8 @@ impl DualEfxProcessor {
             // This path does not route the separate cascade history, but it
             // must continue advancing so a later bus switch cannot replay it.
             self.cascade_history.silence();
-            let cascade_l = if enable_a {
-                a_l * cascade_gain
-            } else {
-                0.0
-            };
-            let cascade_r = if enable_a {
-                a_r * cascade_gain
-            } else {
-                0.0
-            };
+            let cascade_l = if enable_a { a_l * cascade_gain } else { 0.0 };
+            let cascade_r = if enable_a { a_r * cascade_gain } else { 0.0 };
             let (b_l, b_r) = if enable_b {
                 self.plateau
                     .process_sample(in_l + cascade_l, in_r + cascade_r)

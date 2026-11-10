@@ -470,6 +470,13 @@ fn prepare_sd_patch(root: &Path, fixture: &mut Fixture, dir: &Path) -> Result<()
             .arg(&source)
             .arg(output)
             .arg(option);
+        if option == "--experimental-patch-loader"
+            && patches.iter().any(|patch| patch == "dual-efx")
+        {
+            // The Dual EFX state does not fit the firmware's measured heap.
+            // Use the explicitly emulator-only reserved arena for this test.
+            cmd.arg("--experimental-qemu-module-arena");
+        }
         for patch in selected {
             cmd.arg("--patch").arg(patch);
         }
@@ -648,12 +655,52 @@ fn fixture_options(
                     path: "PATCHES/AAA.BIN".into(),
                     content: sd_image::spec::Content::Copy(corrupt),
                 });
+            } else if fixture.sd_bundle_mode.as_deref() == Some("knob-dialog-first") {
+                let report: serde_json::Value = serde_json::from_slice(
+                    &fs::read(bundle_dir.parent().unwrap().join("patch.json"))
+                        .map_err(|e| e.to_string())?,
+                )
+                .map_err(|e| e.to_string())?;
+                let mut named = report["patches"]
+                    .as_array()
+                    .ok_or("dynamic module report has no patch list")?
+                    .iter()
+                    .map(|patch| {
+                        let name = patch["name"].as_str().ok_or("patch has no name")?;
+                        let file = patch["file"]
+                            .as_str()
+                            .and_then(|file| Path::new(file).file_name())
+                            .ok_or("patch has no output filename")?
+                            .to_string_lossy()
+                            .into_owned();
+                        let priority = match name {
+                            "knob-dialog" => "01",
+                            "dual-efx" => "02",
+                            _ => {
+                                return Err(format!(
+                                    "unexpected patch in combination fixture: {name}"
+                                ));
+                            }
+                        };
+                        Ok((format!("{priority}-{file}"), bundle_dir.join(file)))
+                    })
+                    .collect::<Result<Vec<_>, String>>()?;
+                named.sort_by(|left, right| left.0.cmp(&right.0));
+                for (filename, source) in named {
+                    card.file.push(sd_image::spec::File {
+                        path: format!("PATCHES/{filename}"),
+                        content: sd_image::spec::Content::Copy(source),
+                    });
+                }
             }
             for entry in files {
                 if !entry.file_type().map_err(|e| e.to_string())?.is_file() {
                     continue;
                 }
                 if fixture.sd_bundle_mode.as_deref() == Some("ordered-chain") {
+                    continue;
+                }
+                if fixture.sd_bundle_mode.as_deref() == Some("knob-dialog-first") {
                     continue;
                 }
                 let filename = entry.file_name().to_string_lossy().into_owned();

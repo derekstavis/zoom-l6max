@@ -24,9 +24,9 @@ fn wrap_out_of_range_delay(delay: usize) -> usize {
 #[inline(always)]
 fn history_index(write_position: usize, delay: usize) -> usize {
     // For in-range positions and delays, add one ring only on underflow.
-    write_position.wrapping_sub(delay).wrapping_add(
-        MAX_DELAY_SAMPLES & 0usize.wrapping_sub((write_position < delay) as usize),
-    )
+    write_position
+        .wrapping_sub(delay)
+        .wrapping_add(MAX_DELAY_SAMPLES & 0usize.wrapping_sub((write_position < delay) as usize))
 }
 
 #[derive(Clone, Copy)]
@@ -37,7 +37,10 @@ pub struct Tap {
 
 impl Tap {
     pub const fn zero() -> Self {
-        Self { delay: 0, gain: 0.0 }
+        Self {
+            delay: 0,
+            gain: 0.0,
+        }
     }
 }
 
@@ -65,7 +68,11 @@ pub(crate) struct MonoHistory {
 
 impl MonoHistory {
     pub(crate) const fn new() -> Self {
-        Self { delay_line: [0.0; MAX_DELAY_SAMPLES], write_position: 0, nonzero_samples: 0 }
+        Self {
+            delay_line: [0.0; MAX_DELAY_SAMPLES],
+            write_position: 0,
+            nonzero_samples: 0,
+        }
     }
 
     pub(crate) fn clear(&mut self) {
@@ -94,7 +101,9 @@ impl MonoHistory {
     pub(crate) fn silence(&mut self) {
         // Do not index or advance a damaged history. Reinitialization is
         // required before it can be used again.
-        if self.write_position >= MAX_DELAY_SAMPLES { return; }
+        if self.write_position >= MAX_DELAY_SAMPLES {
+            return;
+        }
         self.write(0.0);
         self.advance();
     }
@@ -127,9 +136,17 @@ struct BankBuild {
 impl BankBuild {
     const fn new() -> Self {
         Self {
-            bank: 0, count: 0, index: 0, tail: 0, phase: 0,
-            random: [0; 2], previous: [0; 2], energy: [0.0; 2],
-            scale: [0.0; 2], grid: 0.0, decay_db: 0.0,
+            bank: 0,
+            count: 0,
+            index: 0,
+            tail: 0,
+            phase: 0,
+            random: [0; 2],
+            previous: [0; 2],
+            energy: [0.0; 2],
+            scale: [0.0; 2],
+            grid: 0.0,
+            decay_db: 0.0,
         }
     }
 }
@@ -265,7 +282,9 @@ impl VelvetDecorrelator {
         let initialized = self.channels[0].banks[0].count != 0;
         // A rejected edit must not try to rebuild through an invalid bank.
         // Initialization starts with zeroed storage and sets banks in reset.
-        if initialized && !self.valid_banks() { return; }
+        if initialized && !self.valid_banks() {
+            return;
+        }
         params.amount = clamp(params.amount, 0.0, 1.0);
         params.length_ms = clamp(params.length_ms, 1.0, 100.0);
         params.density = clamp(params.density, 10.0, 4000.0);
@@ -361,10 +380,18 @@ impl VelvetDecorrelator {
     fn start_build(&mut self, bank: usize, generations: [u64; 2]) {
         let count = self.tap_count(self.current.density);
         self.build = BankBuild {
-            bank, count, index: 0, tail: self.current_tail_samples, phase: 1,
-            random: [mixed_seed(self.current.seed, 0, generations[0]),
-                     mixed_seed(self.current.seed, 1, generations[1])],
-            previous: [0; 2], energy: [0.0; 2], scale: [0.0; 2],
+            bank,
+            count,
+            index: 0,
+            tail: self.current_tail_samples,
+            phase: 1,
+            random: [
+                mixed_seed(self.current.seed, 0, generations[0]),
+                mixed_seed(self.current.seed, 1, generations[1]),
+            ],
+            previous: [0; 2],
+            energy: [0.0; 2],
+            scale: [0.0; 2],
             grid: self.current_tail_samples as f32 / (count - 1) as f32,
             decay_db: self.current.decay_db,
         };
@@ -390,9 +417,13 @@ impl VelvetDecorrelator {
                     let lower = build.previous[c] + 1;
                     let upper = (build.tail - (build.count - 1 - i)) as u32;
                     let proposed = (centre + jitter + 0.5) as i32;
-                    if proposed < lower as i32 { lower }
-                    else if proposed > upper as i32 { upper }
-                    else { proposed as u32 }
+                    if proposed < lower as i32 {
+                        lower
+                    } else if proposed > upper as i32 {
+                        upper
+                    } else {
+                        proposed as u32
+                    }
                 };
                 build.previous[c] = delay;
                 let progress = delay as f32 / build.tail as f32;
@@ -440,10 +471,16 @@ impl VelvetDecorrelator {
         // this bank rather than convolving an incomplete or unrelated table.
         let taps = bank.storage.get(..bank.count).unwrap_or(&[]);
         // A corrupt position cannot safely address the history. Fail closed.
-        if wp >= size { return 0.0; }
+        if wp >= size {
+            return 0.0;
+        }
         for tap in taps {
             let delay = tap.delay as usize;
-            let d = if delay < size { delay } else { wrap_out_of_range_delay(delay) };
+            let d = if delay < size {
+                delay
+            } else {
+                wrap_out_of_range_delay(delay)
+            };
             let read = history_index(wp, d);
             // SAFETY: wp is in range and d is normalized to the ring
             // length, so their wrapped difference indexes delay_line.
@@ -471,12 +508,22 @@ impl VelvetDecorrelator {
         let wp = ca.write_position;
         let mut sum_a = 0.0f32;
         let mut sum_b = 0.0f32;
-        let taps = ca.banks[bank].storage.get(..ca.banks[bank].count).unwrap_or(&[]);
-        if ca.nonzero_samples != 0 && history.nonzero_samples != 0
-            && wp == history.write_position && wp < MAX_DELAY_SAMPLES {
+        let taps = ca.banks[bank]
+            .storage
+            .get(..ca.banks[bank].count)
+            .unwrap_or(&[]);
+        if ca.nonzero_samples != 0
+            && history.nonzero_samples != 0
+            && wp == history.write_position
+            && wp < MAX_DELAY_SAMPLES
+        {
             for tap in taps {
                 let delay = tap.delay as usize;
-                let d = if delay < MAX_DELAY_SAMPLES { delay } else { wrap_out_of_range_delay(delay) };
+                let d = if delay < MAX_DELAY_SAMPLES {
+                    delay
+                } else {
+                    wrap_out_of_range_delay(delay)
+                };
                 let read = history_index(wp, d);
                 // SAFETY: wp is checked above and d is normalized to the
                 // ring length. Their wrapped difference is therefore less
@@ -489,7 +536,11 @@ impl VelvetDecorrelator {
         } else if ca.nonzero_samples != 0 && history.nonzero_samples != 0 {
             for tap in taps {
                 let delay = tap.delay as usize;
-                let d = if delay < MAX_DELAY_SAMPLES { delay } else { wrap_out_of_range_delay(delay) };
+                let d = if delay < MAX_DELAY_SAMPLES {
+                    delay
+                } else {
+                    wrap_out_of_range_delay(delay)
+                };
                 let ra = history_index(wp, d);
                 let rb = history_index(history.write_position, d);
                 sum_a += tap.gain * ca.delay_line[ra];
@@ -508,17 +559,16 @@ impl VelvetDecorrelator {
     pub fn process_sample(&mut self, in_l: f32, in_r: f32) -> (f32, f32) {
         // Validate both before touching either channel, so a damaged cursor
         // cannot cause a partial frame or a bounds panic in the callback.
-        if !self.valid_banks() || self.channels[0].write_position >= MAX_DELAY_SAMPLES
-            || self.channels[1].write_position >= MAX_DELAY_SAMPLES {
+        if !self.valid_banks()
+            || self.channels[0].write_position >= MAX_DELAY_SAMPLES
+            || self.channels[1].write_position >= MAX_DELAY_SAMPLES
+        {
             return (0.0, 0.0);
         }
         let amount = self.advance_amount();
         let (old_weight, new_weight) = self.transition_weights();
 
-        let inputs = [
-            audio_input(in_l),
-            audio_input(in_r),
-        ];
+        let inputs = [audio_input(in_l), audio_input(in_r)];
         let mut outputs = [0.0f32; 2];
 
         for c in 0..2 {
@@ -535,9 +585,19 @@ impl VelvetDecorrelator {
             let wet = if self.channels[c].nonzero_samples == 0 {
                 0.0
             } else {
-                let mut wet = Self::convolve(&self.channels[c].banks[self.active_bank], &self.channels[c].delay_line, self.channels[c].write_position);
+                let mut wet = Self::convolve(
+                    &self.channels[c].banks[self.active_bank],
+                    &self.channels[c].delay_line,
+                    self.channels[c].write_position,
+                );
                 if self.transitioning {
-                    wet = old_weight * wet + new_weight * Self::convolve(&self.channels[c].banks[self.pending_bank], &self.channels[c].delay_line, self.channels[c].write_position);
+                    wet = old_weight * wet
+                        + new_weight
+                            * Self::convolve(
+                                &self.channels[c].banks[self.pending_bank],
+                                &self.channels[c].delay_line,
+                                self.channels[c].write_position,
+                            );
                 }
                 wet
             };
@@ -565,9 +625,11 @@ impl VelvetDecorrelator {
         in_a: f32,
         in_b: f32,
     ) -> ((f32, f32), (f32, f32)) {
-        if !self.valid_banks() || self.channels[0].write_position >= MAX_DELAY_SAMPLES
+        if !self.valid_banks()
+            || self.channels[0].write_position >= MAX_DELAY_SAMPLES
             || self.channels[1].write_position >= MAX_DELAY_SAMPLES
-            || history.write_position >= MAX_DELAY_SAMPLES {
+            || history.write_position >= MAX_DELAY_SAMPLES
+        {
             return ((0.0, 0.0), (0.0, 0.0));
         }
         let amount = self.advance_amount();
@@ -595,7 +657,11 @@ impl VelvetDecorrelator {
             }
             out_a[c] = soft_clip(wa * amount);
             out_b[c] = soft_clip(wb * amount);
-            ca.write_position = if wp + 1 >= MAX_DELAY_SAMPLES { 0 } else { wp + 1 };
+            ca.write_position = if wp + 1 >= MAX_DELAY_SAMPLES {
+                0
+            } else {
+                wp + 1
+            };
         }
         history.advance();
         self.advance_filter();
@@ -626,16 +692,18 @@ impl VelvetDecorrelator {
             if self.current.dynamic && self.samples_until_transition > 0 {
                 self.samples_until_transition -= 1;
             }
-            if self.build.phase == 0 && (self.filter_update_pending
-                || (self.current.dynamic && self.samples_until_transition == 0)) {
+            if self.build.phase == 0
+                && (self.filter_update_pending
+                    || (self.current.dynamic && self.samples_until_transition == 0))
+            {
                 self.filter_update_pending = false;
                 self.transitioning = true;
                 self.transition_position = 0;
                 self.active_transition_samples = self.transition_samples;
                 // Compute once per fade, with a nonzero divisor even if a
                 // future caller allows a one-sample transition.
-                self.transition_phase_step = PI_2
-                    / self.active_transition_samples.saturating_sub(1).max(1) as f32;
+                self.transition_phase_step =
+                    PI_2 / self.active_transition_samples.saturating_sub(1).max(1) as f32;
             }
         }
 
@@ -686,19 +754,30 @@ mod tests {
             [[76, -375, -711, -890], [-167, -430, 724, -896]],
         ];
         let mut engine = Box::new(VelvetDecorrelator::new());
-        engine.init(Parameters { length_ms: 25.0, density: 400.0,
-            refresh_seconds: 0.1, transition_ms: 1.0, dynamic: true,
-            ..Parameters::default() });
+        engine.init(Parameters {
+            length_ms: 25.0,
+            density: 400.0,
+            refresh_seconds: 0.1,
+            transition_ms: 1.0,
+            dynamic: true,
+            ..Parameters::default()
+        });
         for (bank, expected_channels) in expected.iter().enumerate() {
             if bank != 0 {
                 let frames = if bank == 1 { 4848 } else { 4800 };
-                for _ in 0..frames { engine.advance_filter(); }
+                for _ in 0..frames {
+                    engine.advance_filter();
+                }
             }
             for (c, expected_taps) in expected_channels.iter().enumerate() {
                 let actual = &engine.channels[c].banks[engine.active_bank];
                 let selected = [1, 3, 5, 7].map(|i| {
                     let tap = actual.storage[i];
-                    if tap.gain < 0.0 { -(tap.delay as i32) } else { tap.delay as i32 }
+                    if tap.gain < 0.0 {
+                        -(tap.delay as i32)
+                    } else {
+                        tap.delay as i32
+                    }
                 });
                 assert_eq!(&selected, expected_taps, "bank {bank}, channel {c}");
             }
@@ -708,19 +787,30 @@ mod tests {
     #[test]
     fn maximum_density_renewal_stays_on_schedule_after_long_fades() {
         let mut effect = Box::new(VelvetDecorrelator::new());
-        effect.init(Parameters { length_ms: 100.0, density: 4000.0,
-            refresh_seconds: 0.1, transition_ms: 90.0, dynamic: true,
-            ..Parameters::default() });
+        effect.init(Parameters {
+            length_ms: 100.0,
+            density: 4000.0,
+            refresh_seconds: 0.1,
+            transition_ms: 90.0,
+            dynamic: true,
+            ..Parameters::default()
+        });
         assert_eq!(effect.channels[0].banks[0].count, MAX_TAPS);
         let mut starts = Vec::new();
         for frame in 0..(effect.refresh_samples * 4) {
             let was_transitioning = effect.transitioning;
             effect.advance_filter();
-            if !was_transitioning && effect.transitioning { starts.push(frame); }
+            if !was_transitioning && effect.transitioning {
+                starts.push(frame);
+            }
         }
         assert!(starts.len() >= 3, "too few transitions: {starts:?}");
         for pair in starts.windows(2) {
-            assert_eq!(pair[1] - pair[0], effect.refresh_samples, "transition starts: {starts:?}");
+            assert_eq!(
+                pair[1] - pair[0],
+                effect.refresh_samples,
+                "transition starts: {starts:?}"
+            );
         }
     }
 
@@ -728,8 +818,12 @@ mod tests {
     fn changing_fade_length_during_renewal_preserves_start_cadence() {
         for (initial_ms, next_ms) in [(90.0, 5.0), (5.0, 90.0)] {
             let mut effect = Box::new(VelvetDecorrelator::new());
-            let mut params = Parameters { refresh_seconds: 0.1, transition_ms: initial_ms,
-                dynamic: true, ..Parameters::default() };
+            let mut params = Parameters {
+                refresh_seconds: 0.1,
+                transition_ms: initial_ms,
+                dynamic: true,
+                ..Parameters::default()
+            };
             effect.init(params);
             let mut first_start = None;
             let mut second_start = None;
@@ -738,8 +832,12 @@ mod tests {
                 let was_transitioning = effect.transitioning;
                 effect.advance_filter();
                 if !was_transitioning && effect.transitioning {
-                    if first_start.is_none() { first_start = Some(frame); }
-                    else { second_start = Some(frame); break; }
+                    if first_start.is_none() {
+                        first_start = Some(frame);
+                    } else {
+                        second_start = Some(frame);
+                        break;
+                    }
                 }
                 if effect.transitioning && effect.transition_position > 1 && !edited {
                     params.transition_ms = next_ms;
@@ -748,16 +846,28 @@ mod tests {
                 }
             }
             assert!(edited);
-            assert_eq!(second_start.unwrap() - first_start.unwrap(), effect.refresh_samples,
-                "initial fade {initial_ms} ms, new fade {next_ms} ms");
+            assert_eq!(
+                second_start.unwrap() - first_start.unwrap(),
+                effect.refresh_samples,
+                "initial fade {initial_ms} ms, new fade {next_ms} ms"
+            );
         }
     }
 
     #[test]
     fn batched_normalization_preserves_banks_and_bounds_each_step() {
-        for (length_ms, density) in [(25.0, 100.0), (25.0, 400.0), (95.0, 3000.0), (100.0, 4000.0)] {
+        for (length_ms, density) in [
+            (25.0, 100.0),
+            (25.0, 400.0),
+            (95.0, 3000.0),
+            (100.0, 4000.0),
+        ] {
             let mut effect = Box::new(VelvetDecorrelator::new());
-            effect.init(Parameters { length_ms, density, ..Parameters::default() });
+            effect.init(Parameters {
+                length_ms,
+                density,
+                ..Parameters::default()
+            });
             let expected = [effect.channels[0].banks[1], effect.channels[1].banks[1]];
             let count = expected[0].count;
             effect.start_build(1, [1, 1]);
@@ -779,7 +889,10 @@ mod tests {
                 steps += 1;
                 for c in 0..2 {
                     let after = &effect.channels[c].banks[1];
-                    let changed = before[c].storage.iter().zip(after.storage.iter())
+                    let changed = before[c]
+                        .storage
+                        .iter()
+                        .zip(after.storage.iter())
                         .filter(|(a, b)| a.delay != b.delay || a.gain.to_bits() != b.gain.to_bits())
                         .count();
                     assert!(changed <= if phase == 1 { 1 } else { 8 });
@@ -789,10 +902,16 @@ mod tests {
             let sequential = sequential.unwrap();
             for c in 0..2 {
                 let actual = &effect.channels[c].banks[1];
-                for ((a, b), reference) in actual.storage[..count].iter()
-                    .zip(&expected[c].storage[..count]).zip(&sequential[c].storage[..count]) {
+                for ((a, b), reference) in actual.storage[..count]
+                    .iter()
+                    .zip(&expected[c].storage[..count])
+                    .zip(&sequential[c].storage[..count])
+                {
                     assert_eq!((a.delay, a.gain.to_bits()), (b.delay, b.gain.to_bits()));
-                    assert_eq!((a.delay, a.gain.to_bits()), (reference.delay, reference.gain.to_bits()));
+                    assert_eq!(
+                        (a.delay, a.gain.to_bits()),
+                        (reference.delay, reference.gain.to_bits())
+                    );
                 }
             }
         }
@@ -810,8 +929,10 @@ mod tests {
                 assert_eq!(engine.channels[1 - channel].delay_line[0], 0.0);
 
                 let mut history = MonoHistory::new();
-                assert_eq!(engine.process_shared_mono(&mut history, 0.25, 0.5),
-                           ((0.0, 0.0), (0.0, 0.0)));
+                assert_eq!(
+                    engine.process_shared_mono(&mut history, 0.25, 0.5),
+                    ((0.0, 0.0), (0.0, 0.0))
+                );
                 assert_eq!(history.write_position, 0);
                 assert_eq!(history.delay_line[0], 0.0);
             }
@@ -819,8 +940,10 @@ mod tests {
             engine.init(Parameters::default());
             let mut history = MonoHistory::new();
             history.write_position = invalid;
-            assert_eq!(engine.process_shared_mono(&mut history, 0.25, 0.5),
-                       ((0.0, 0.0), (0.0, 0.0)));
+            assert_eq!(
+                engine.process_shared_mono(&mut history, 0.25, 0.5),
+                ((0.0, 0.0), (0.0, 0.0))
+            );
             assert_eq!(engine.channels[0].write_position, 0);
             assert_eq!(engine.channels[0].delay_line[0], 0.0);
             history.silence();
@@ -830,7 +953,14 @@ mod tests {
 
     #[test]
     fn invalid_bank_selection_rejects_audio_and_edits_until_reset() {
-        for (active, pending) in [(2, 1), (usize::MAX, 1), (0, 2), (0, usize::MAX), (0, 0), (1, 1)] {
+        for (active, pending) in [
+            (2, 1),
+            (usize::MAX, 1),
+            (0, 2),
+            (0, usize::MAX),
+            (0, 0),
+            (1, 1),
+        ] {
             for transitioning in [false, true] {
                 let mut engine = Box::new(VelvetDecorrelator::new());
                 engine.init(Parameters::default());
@@ -843,8 +973,10 @@ mod tests {
                 let mut history = MonoHistory::new();
 
                 assert_eq!(engine.process_sample(0.25, 0.5), (0.0, 0.0));
-                assert_eq!(engine.process_shared_mono(&mut history, 0.25, 0.5),
-                           ((0.0, 0.0), (0.0, 0.0)));
+                assert_eq!(
+                    engine.process_shared_mono(&mut history, 0.25, 0.5),
+                    ((0.0, 0.0), (0.0, 0.0))
+                );
                 assert_eq!(engine.channels[0].write_position, 0);
                 assert_eq!(engine.channels[1].write_position, 0);
                 assert_eq!(history.write_position, 0);
@@ -870,8 +1002,12 @@ mod tests {
     fn history_index_matches_ring_subtraction_at_every_wrap_boundary() {
         for write_position in 0..MAX_DELAY_SAMPLES {
             for delay in [
-                0, 1, write_position.saturating_sub(1), write_position,
-                (write_position + 1).min(MAX_DELAY_SAMPLES - 1), MAX_DELAY_SAMPLES - 1,
+                0,
+                1,
+                write_position.saturating_sub(1),
+                write_position,
+                (write_position + 1).min(MAX_DELAY_SAMPLES - 1),
+                MAX_DELAY_SAMPLES - 1,
             ] {
                 assert_eq!(
                     history_index(write_position, delay),
@@ -887,7 +1023,10 @@ mod tests {
             for delay in 0..MAX_DELAY_SAMPLES {
                 let index = history_index(write_position, core::hint::black_box(delay));
                 assert!(index < MAX_DELAY_SAMPLES);
-                assert_eq!(index, (write_position + MAX_DELAY_SAMPLES - delay) % MAX_DELAY_SAMPLES);
+                assert_eq!(
+                    index,
+                    (write_position + MAX_DELAY_SAMPLES - delay) % MAX_DELAY_SAMPLES
+                );
             }
         }
     }
@@ -902,10 +1041,19 @@ mod tests {
         history.nonzero_samples = 1;
         channel.banks[0].count = 1;
         // A bad position still encounters a bounds check, not an unchecked read.
-        assert!(std::panic::catch_unwind(|| VelvetDecorrelator::convolve_pair(&channel, &history, 0)).is_err());
-        assert_eq!(VelvetDecorrelator::convolve(&channel.banks[0], &channel.delay_line, MAX_DELAY_SAMPLES), 0.0);
+        assert!(
+            std::panic::catch_unwind(|| VelvetDecorrelator::convolve_pair(&channel, &history, 0))
+                .is_err()
+        );
+        assert_eq!(
+            VelvetDecorrelator::convolve(&channel.banks[0], &channel.delay_line, MAX_DELAY_SAMPLES),
+            0.0
+        );
         channel.banks[0].count = MAX_TAPS + 1;
-        assert_eq!(VelvetDecorrelator::convolve(&channel.banks[0], &channel.delay_line, 0), 0.0);
+        assert_eq!(
+            VelvetDecorrelator::convolve(&channel.banks[0], &channel.delay_line, 0),
+            0.0
+        );
     }
 
     #[test]
@@ -918,15 +1066,31 @@ mod tests {
         }
         channel.nonzero_samples = 1;
         history.nonzero_samples = 1;
-        for wp in [0, 1, MAX_DELAY_SAMPLES / 2, MAX_DELAY_SAMPLES - 2, MAX_DELAY_SAMPLES - 1] {
+        for wp in [
+            0,
+            1,
+            MAX_DELAY_SAMPLES / 2,
+            MAX_DELAY_SAMPLES - 2,
+            MAX_DELAY_SAMPLES - 1,
+        ] {
             channel.write_position = wp;
             history.write_position = wp;
-            let delays = [0, 1, wp as u32, (wp + 1) as u32,
-                          (MAX_DELAY_SAMPLES - 1) as u32, MAX_DELAY_SAMPLES as u32, u32::MAX];
+            let delays = [
+                0,
+                1,
+                wp as u32,
+                (wp + 1) as u32,
+                (MAX_DELAY_SAMPLES - 1) as u32,
+                MAX_DELAY_SAMPLES as u32,
+                u32::MAX,
+            ];
             let bank = &mut channel.banks[0];
             bank.count = MAX_TAPS;
             for i in 0..bank.count {
-                bank.storage[i] = Tap { delay: delays[i % delays.len()], gain: (i as f32 + 1.0) / 16.0 };
+                bank.storage[i] = Tap {
+                    delay: delays[i % delays.len()],
+                    gain: (i as f32 + 1.0) / 16.0,
+                };
             }
             let mut expected = (0.0f32, 0.0f32);
             for tap in &bank.storage[..bank.count] {
@@ -935,9 +1099,21 @@ mod tests {
                 expected.0 += tap.gain * channel.delay_line[read];
                 expected.1 += tap.gain * history.delay_line[read];
             }
-            assert_eq!(VelvetDecorrelator::convolve_pair(&channel, &history, 0), expected, "wp={wp}");
-            assert_eq!(VelvetDecorrelator::convolve(&channel.banks[0], &channel.delay_line, wp), expected.0, "wp={wp}");
-            assert_eq!(VelvetDecorrelator::convolve(&channel.banks[0], &history.delay_line, wp), expected.1, "wp={wp}");
+            assert_eq!(
+                VelvetDecorrelator::convolve_pair(&channel, &history, 0),
+                expected,
+                "wp={wp}"
+            );
+            assert_eq!(
+                VelvetDecorrelator::convolve(&channel.banks[0], &channel.delay_line, wp),
+                expected.0,
+                "wp={wp}"
+            );
+            assert_eq!(
+                VelvetDecorrelator::convolve(&channel.banks[0], &history.delay_line, wp),
+                expected.1,
+                "wp={wp}"
+            );
         }
     }
 
@@ -945,13 +1121,19 @@ mod tests {
     fn crossfade_phase_matches_division_and_keeps_its_duration_during_edits() {
         for duration_ms in [1.0, 250.0, 54_000.0] {
             let mut effect = Box::new(VelvetDecorrelator::new());
-            let mut params = Parameters { dynamic: false, refresh_seconds: 60.0,
-                transition_ms: duration_ms, ..Parameters::default() };
+            let mut params = Parameters {
+                dynamic: false,
+                refresh_seconds: 60.0,
+                transition_ms: duration_ms,
+                ..Parameters::default()
+            };
             effect.init(params);
             params.length_ms += 1.0;
             effect.set_parameters(params);
             for _ in 0..(2 * MAX_TAPS + 2) {
-                if effect.transitioning { break; }
+                if effect.transitioning {
+                    break;
+                }
                 effect.advance_filter();
             }
             assert!(effect.transitioning);
@@ -964,8 +1146,14 @@ mod tests {
                 effect.transition_position = position;
                 let phase = PI_2 * position as f32 / (length - 1) as f32;
                 let (old, new) = effect.transition_weights();
-                assert!((old - cos(phase)).abs() < 2e-6, "duration={duration_ms} position={position}");
-                assert!((new - sin(phase)).abs() < 2e-6, "duration={duration_ms} position={position}");
+                assert!(
+                    (old - cos(phase)).abs() < 2e-6,
+                    "duration={duration_ms} position={position}"
+                );
+                assert!(
+                    (new - sin(phase)).abs() < 2e-6,
+                    "duration={duration_ms} position={position}"
+                );
             }
         }
     }

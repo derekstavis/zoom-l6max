@@ -1,0 +1,23 @@
+# L6max setup-complete state with the stock Room effect selected.
+version = 1
+model = "l6max"
+
+[settings]
+base = "defaults"
+
+[settings.values]
+"mixer.current.efx_type" = 1
+"mixer.current.channel[0].efx[0]" = 64
+"mixer.current.level[0]" = 30
+setup_required = 0
+last_date_year = 2026
+last_date_month = 2
+last_date_day = 2
+last_date_hour = 1
+last_date_minute = 1
+
+[rtc]
+datetime = "2026-02-02T01:01:00"
+
+[panel]
+programmed = true

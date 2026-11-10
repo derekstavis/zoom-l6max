@@ -1,9 +1,17 @@
 # Dual-EFX: Velvet Noise Decorrelator & Plateau Reverb
 
-**Disabled:** The firmware hooks and memory bindings are unsafe and have not
-been qualified on hardware. Both patch builders reject this patch until those
-issues are fixed and verified. The descriptions and estimates below describe
-the intended design; they do not establish implemented behavior or safety.
+**Experimental in-progress port:** The patch can be built into a firmware
+update or loaded as an SD module. It uses the shared L6max hook API to follow
+the stock effect workspace clear, callback selection, type update, and DSP
+stream paths. The `DualEfxProcessor` lives in the stock shared effect workspace;
+the patch replaces the Room and Spring callbacks with its own processing
+callback. That callback reconstructs three sends from emulator-observed channel
+buffers and gains, copies the stock control stream, and writes wet stereo
+output. Emulator smoke cases observe nonzero input, send, and output samples
+for both effects, and confirm the stock callback resumes for other effects.
+These are L6max MAIN 1.10 emulator observations; physical memory ownership,
+signal mapping, callback concurrency, audio quality, and timing still need
+qualification. The inspector and extended encoder controls are not connected.
 
 Replaces the stock mono/reconstructed send effects with high-end modern DSP engines:
 1. **Velvet Noise Decorrelator (VND)** (Effect A):
@@ -35,28 +43,76 @@ Targeted exclusively for **LiveTrak L6max** firmware revision 1.10 (`980d92272c1
 The original CPU estimates and 160 KiB memory figure were not measured and
 must not be used for target qualification. Cascaded sends retain a separate
 audio history while sharing Velvet's filter state. The processor's memory
-ownership, stack use and worst-case execution time remain unproven
-on the L6max. The `0x83e00000` state address is unverified on hardware.
+ownership, stack use and worst-case execution time remain unproven on hardware.
+
+The current ARM target reports `size_of::<DualEfxProcessor>()` as 283,160
+bytes, before the compiled module code:
+
+| State | Bytes | Main storage |
+| --- | ---: | --- |
+| Plateau | 212,424 | 211,884 bytes of fixed delay arrays |
+| Velvet | 51,424 | 38,416 bytes of sample history; 12,800 bytes of tap banks |
+| Cascade history | 19,208 | Separate mono sample history |
+| Other fields and alignment | 104 | Routing, parameters, and control state |
+
+The dynamic module currently occupies about 25.5 KiB. DSP state is initialized
+in place in the stock shared effect workspace at `0x80d00000`, whose observed
+span is 768,000 bytes. This avoids allocating the 283 KiB processor from the
+FreeRTOS heap. The SD smoke fixture reports a 167,528-byte heap low-water mark
+while requiring at least 131,072 bytes free. The stock firmware also clears and
+reuses this workspace when effects change. The stock selector fades the
+current effect before clearing the workspace and publishes the next callback
+before it updates the selected-type field. A static hook that replaces the
+callback at selector entry can prevent that fade from completing; the emulator
+showed the selector waiting in its semaphore path. Both patch modes therefore
+leave the callback in place through the fade and drain it at the later
+workspace-clear hook. The static patch rebuilds its state in the DSP entry hook
+before the newly published Room or Spring callback runs. Its small control
+words occupy the first `0x100` bytes of the workspace, and the processor starts
+at `0x80d00100`; those control words are rebuilt after stock clears the area.
+The dynamic module keeps control state in its SD allocation and rebuilds the
+processor after each clear, restoring its last applied parameter values while
+letting DSP histories and reverb tails reset. Stock effect parameters are held
+separately in the mixer settings image, so clearing the DSP workspace does not
+erase the built-in parameter values. Emulator checks cover dynamic selection
+and hook chaining; a static emulator run completed a six-selection cycle and
+returned to Room with the custom callback active and finite, nonzero output.
+Workspace ownership and synchronization still need validation on hardware and
+along unobserved firmware paths.
 
 ## Source Layout
 
-- `src/math.rs`: Fast, standalone math functions (`sin`, `cos`, `sqrt`, `pow10`, `exp2`, `clamp`).
-- `src/velvet.rs`: Velvet Noise Decorrelator core DSP engine.
-- `src/plateau.rs`: Valley Plateau Dattorro plate reverb core DSP engine.
-- `src/routing.rs`: Routing matrix and `DualEfxProcessor` audio engine.
+- `l6max/src/math.rs`: Fast, standalone math functions (`sin`, `cos`, `sqrt`, `pow10`, `exp2`, `clamp`).
+- `l6max/src/velvet.rs`: Velvet Noise Decorrelator core DSP engine.
+- `l6max/src/plateau.rs`: Valley Plateau Dattorro plate reverb core DSP engine.
+- `l6max/src/routing.rs`: Routing matrix and `DualEfxProcessor` audio engine.
   Weighted routing can use a caller-owned 768-byte workspace to avoid its
   block-sized temporary buses on the stack; simultaneous callers need separate
   workspaces. Firmware memory ownership remains unproven.
-- `src/parameters.rs`: Parameter edits and copies of applied values.
-- `src/admission.rs`: Standalone callback admission model; not connected to firmware.
-- `src/parameter_view.rs`: Validation and formatting of copied display values.
-- `src/firmware.rs`: Hardware and firmware bindings for L6max 1.10.
-- `src/trampolines.s`, `src/trampolines.rs`: Displaced instruction veneers.
-- `src/payload.rs`: Main payload entrypoints (`efx_dispatch_hook`, `knob_changed`).
-- `linker/link.ld`: Payload placement at `PAYLOAD_BASE` (`0x80108000`) and `.state` at `0x83e00000`.
-- `hooks.tsv`: Hook table guarding `0x8000277c`.
+- `l6max/src/parameters.rs`: Parameter edits and copies of applied values.
+- `l6max/src/admission.rs`: Standalone callback admission model; not connected to firmware.
+- `l6max/src/parameter_view.rs`: Validation and formatting of copied display values.
+- `l6max/src/firmware.rs`: Includes shared L6max firmware declarations.
+- `l6max/src/payload.rs`: Static and dynamic DSP/workspace hooks and the
+  Room/Spring replacement callback.
+- `l6max/linker/link.ld`: Dynamic module layout.
+- `l6max/linker/link-static.ld`: Static control state placement in the stock
+  effect workspace.
 
-The standalone inspector parameter model maps encoders 1–8 as follows:
+The shared L6max API exposes the fixed DSP stream and effect-workspace clear
+functions as dynamic hook sites. The callback pointer is selected by the stock
+firmware; the dynamic stream hook interposes only when Room or Spring is active.
+The old `hooks.tsv` call-site hook at `0x8000277c` was removed because it
+intercepts effect selection and parameter handling, not audio processing.
+
+The firmware knob hook preserves stock behavior on the recorder screen. In a
+different window it queues EFX encoder turns for the audio callback, choosing
+Velvet or Plateau from the selected stock effect. The dynamic module saves
+accepted parameter edits in its loader allocation so they survive workspace
+reinitialization. This event path is compiled but is not exercised by the
+current emulator case; the dedicated inspector and routing controls remain
+unconnected. The standalone inspector parameter model maps encoders 1–8 as
+follows:
 
 | Encoder | Velvet bank | Plateau bank |
 | --- | --- | --- |
@@ -72,8 +128,9 @@ The standalone inspector parameter model maps encoders 1–8 as follows:
 The Velvet refresh control spans 0.1–60 seconds.
 
 For the two on/off settings, clockwise selects on and counterclockwise selects
-off. The model and value formatter are host-tested; firmware event handling,
-display presentation, bank selection and routing controls are not connected.
+off. The model and value formatter are host-tested. A dedicated inspector
+screen, display presentation, bank selection and routing controls are not
+connected, so users do not yet have an integrated UI for these parameters.
 Plateau holds its tank modulation delays fixed while frozen to preserve the
 tail, and resumes modulation when freeze is released.
 The default 48 kHz Plateau size range is 0.01–1.2 and predelay is 0–190 ms; the
@@ -116,7 +173,9 @@ The standalone DSP tests can be run with:
 cargo test --offline --locked -p l6dsp-tests
 ```
 
-Both patch builders intentionally reject `dual-efx`. The stock emulator's
-`audio-path` case checks callback and device observations; it does not test
-this effect or qualify its audio behavior. See the
-[safety status](../../docs/dual-efx-safety-status.md) for the remaining work.
+The `sd-dual-efx-emulator` smoke case builds and loads the dynamic patch,
+exercises Room and Spring selection, and checks that reconstructed input and
+output samples are nonzero and finite while the heap stays above its threshold.
+It does not compare the emitted waveform to a reference, test the inspector,
+prove callback exclusion across every firmware path, or qualify target timing
+and hardware behavior.

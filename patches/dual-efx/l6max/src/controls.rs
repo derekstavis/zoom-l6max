@@ -25,8 +25,15 @@ impl PanelEfxDecoder {
             return None;
         }
         match self.phase {
-            1 => { self.column = byte; self.phase = 2; None }
-            2 => { self.phase = 0; (self.column == 4 && byte == 6).then_some(self.pressed) }
+            1 => {
+                self.column = byte;
+                self.phase = 2;
+                None
+            }
+            2 => {
+                self.phase = 0;
+                (self.column == 4 && byte == 6).then_some(self.pressed)
+            }
             _ => None,
         }
     }
@@ -60,7 +67,13 @@ impl EfxSelectGesture {
     /// Classifies an edge carrying a nonzero sequence assigned at reception.
     /// A gap discards an unfinished gesture before considering the new edge.
     /// Sequence zero means the event could not be associated with reception.
-    pub fn sequenced_edge(&mut self, pressed: bool, now: u32, sequence: u32, hold_ticks: u32) -> EfxSelectAction {
+    pub fn sequenced_edge(
+        &mut self,
+        pressed: bool,
+        now: u32,
+        sequence: u32,
+        hold_ticks: u32,
+    ) -> EfxSelectAction {
         if sequence == 0 {
             self.cancel();
             return EfxSelectAction::None;
@@ -90,7 +103,9 @@ impl EfxSelectGesture {
         }
         match core::mem::take(&mut self.press) {
             PressState::Idle | PressState::Ambiguous => EfxSelectAction::None,
-            PressState::Down(start) if now.wrapping_sub(start) >= hold_ticks => EfxSelectAction::ToggleInspector,
+            PressState::Down(start) if now.wrapping_sub(start) >= hold_ticks => {
+                EfxSelectAction::ToggleInspector
+            }
             PressState::Down(_) => EfxSelectAction::SelectNext,
         }
     }

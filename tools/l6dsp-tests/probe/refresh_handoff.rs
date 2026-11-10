@@ -38,7 +38,9 @@ impl RefreshHandoff<'_> {
     pub fn claim(&self) -> Option<(u32, u32)> {
         let pause = BoundaryPause(self.pause);
         let request = self.pause.load(Ordering::Acquire);
-        if !pause.acknowledge(request) { return None; }
+        if !pause.acknowledge(request) {
+            return None;
+        }
         let capture = CaptureProtocol(self.capture);
         match capture.claim() {
             Some((claim, 0)) => Some((request, claim)),
