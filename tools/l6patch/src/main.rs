@@ -416,10 +416,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let effect_dispatch_symbols = if *name == "dual-efx" {
                 Some(serde_json::json!({
                     "dsp_stream_entry_hits": symbol(&symbols, "DSP_STREAM_ENTRY_HITS")?,
-                    "dsp_stream_last_arg0": symbol(&symbols, "DSP_STREAM_LAST_ARG0")?,
-                    "dsp_stream_last_arg1": symbol(&symbols, "DSP_STREAM_LAST_ARG1")?,
-                    "dsp_stream_last_arg2": symbol(&symbols, "DSP_STREAM_LAST_ARG2")?,
-                    "dsp_stream_last_arg3": symbol(&symbols, "DSP_STREAM_LAST_ARG3")?,
                     "effect_workspace_clear_hits": symbol(&symbols, "EFFECT_WORKSPACE_CLEAR_HITS")?,
                     "dual_effect_type_set_hits": symbol(&symbols, "DUAL_EFFECT_TYPE_SET_HITS")?,
                     "dual_effect_type_set_seen": symbol(&symbols, "DUAL_EFFECT_TYPE_SET_SEEN")?,
