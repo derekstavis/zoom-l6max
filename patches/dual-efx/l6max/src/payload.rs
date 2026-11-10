@@ -38,7 +38,6 @@ use routing::{DualEfxProcessor, RoutingMode, BLOCK_SIZE, MAX_CHANNELS};
 // live beside the code. The static linker places these state words at the
 // beginning of stock's shared effect workspace; keep the processor after them.
 const EFFECT_STATE_BYTES: usize = 0x100;
-const EFFECT_PROCESSOR: usize = dsp_effect_workspace.address() + EFFECT_STATE_BYTES;
 const CALLBACK_CLOSED: u32 = 1 << 31;
 const ROOM_CALLBACK: u32 = 0x2028_0ab9;
 const SPRING_CALLBACK: u32 = 0x2028_2221;
@@ -58,9 +57,23 @@ struct EffectWorkspace {
     processor: MaybeUninit<DualEfxProcessor>,
 }
 
-const _: () = assert!(
-    EFFECT_STATE_BYTES + core::mem::size_of::<EffectWorkspace>() <= DSP_EFFECT_WORKSPACE_BYTES
-);
+const EFFECT_PROCESSOR_END: usize = EFFECT_STATE_BYTES + core::mem::size_of::<EffectWorkspace>();
+const _: () = assert!(EFFECT_PROCESSOR_END <= DSP_EFFECT_WORKSPACE_BYTES);
+const _: () = assert!(EFFECT_STATE_BYTES % core::mem::align_of::<EffectWorkspace>() == 0);
+const _: () = assert!(dsp_effect_workspace.address() % core::mem::align_of::<EffectWorkspace>() == 0);
+
+/// Get the processor's bounded subregion from the firmware-owned workspace.
+///
+/// # Safety
+/// The caller must own the callback/selection gate so no firmware or patch
+/// task can access the workspace concurrently.
+unsafe fn effect_processor_storage() -> Option<*mut EffectWorkspace> {
+    let workspace = unsafe {
+        &mut *(dsp_effect_workspace.address() as *mut [u8; DSP_EFFECT_WORKSPACE_BYTES])
+    };
+    let processor_bytes = workspace.get_mut(EFFECT_STATE_BYTES..EFFECT_PROCESSOR_END)?;
+    Some(processor_bytes.as_mut_ptr().cast::<EffectWorkspace>())
+}
 
 #[cfg_attr(not(sd_dynamic_module), unsafe(link_section = ".effect_workspace_state"))]
 #[unsafe(no_mangle)]
@@ -228,7 +241,10 @@ pub unsafe fn dual_efx_initialize_static_state() {
 }
 
 fn initialize_processor(effect_type: u32) {
-    let workspace = unsafe { &mut *(EFFECT_PROCESSOR as *mut EffectWorkspace) };
+    let Some(workspace) = (unsafe { effect_processor_storage() }) else {
+        return;
+    };
+    let workspace = unsafe { &mut *workspace };
     let processor = DualEfxProcessor::initialize_in_place(&mut workspace.processor);
     for channel in 0..MAX_CHANNELS {
         processor.set_channel_routing(channel, RoutingMode::Neither);
@@ -577,10 +593,12 @@ unsafe fn process_effect_block(descriptor: *mut u8) -> bool {
         return false;
     }
 
-    let workspace = unsafe { &mut *(EFFECT_PROCESSOR as *mut EffectWorkspace) };
     // SAFETY: callback_enter owns an exclusive processing lease; selector clear
     // closes the gate and drains leases before changing this storage.
-    let processor = unsafe { workspace.processor.assume_init_mut() };
+    let Some(workspace) = (unsafe { effect_processor_storage() }) else {
+        return false;
+    };
+    let processor = unsafe { (&mut *workspace).processor.assume_init_mut() };
     let original = DUAL_EFFECT_CALLBACK_ORIGINAL.load(Ordering::Acquire);
     if DUAL_EFFECT_ROUTED_CALLBACK.load(Ordering::Relaxed) != original {
         let default_route = match original {
