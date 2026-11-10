@@ -9,7 +9,8 @@ use patch_api::function_entry_hook;
 mod firmware;
 use firmware as firmware_bindings;
 use firmware_bindings::{
-    current_window, dsp_stream_callback, dsp_effect_workspace_clear, sys_main_startup_initialize,
+    current_window, dsp_stream_callback, dsp_effect_workspace, dsp_effect_workspace_clear,
+    sys_main_startup_initialize, DSP_EFFECT_WORKSPACE_BYTES,
     mixer_apply_channel_parameter, mixer_get_efx_type, mixer_select_efx_callback,
     mixer_set_efx_type,
 };
@@ -33,13 +34,11 @@ use core::mem::MaybeUninit;
 use core::sync::atomic::{AtomicU32, Ordering};
 use routing::{DualEfxProcessor, RoutingMode, BLOCK_SIZE, MAX_CHANNELS};
 
-const EFFECT_WORKSPACE: usize = 0x80d0_0000;
-const EFFECT_WORKSPACE_BYTES: usize = 0x000b_b800;
 // Static patches execute from firmware storage, so mutable Rust statics cannot
 // live beside the code. The static linker places these state words at the
 // beginning of stock's shared effect workspace; keep the processor after them.
 const EFFECT_STATE_BYTES: usize = 0x100;
-const EFFECT_PROCESSOR: usize = EFFECT_WORKSPACE + EFFECT_STATE_BYTES;
+const EFFECT_PROCESSOR: usize = dsp_effect_workspace.address() + EFFECT_STATE_BYTES;
 const CALLBACK_CLOSED: u32 = 1 << 31;
 const ROOM_CALLBACK: u32 = 0x2028_0ab9;
 const SPRING_CALLBACK: u32 = 0x2028_2221;
@@ -60,7 +59,7 @@ struct EffectWorkspace {
 }
 
 const _: () = assert!(
-    EFFECT_STATE_BYTES + core::mem::size_of::<EffectWorkspace>() <= EFFECT_WORKSPACE_BYTES
+    EFFECT_STATE_BYTES + core::mem::size_of::<EffectWorkspace>() <= DSP_EFFECT_WORKSPACE_BYTES
 );
 
 #[cfg_attr(not(sd_dynamic_module), unsafe(link_section = ".effect_workspace_state"))]
