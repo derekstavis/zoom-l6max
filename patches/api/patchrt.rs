@@ -297,20 +297,6 @@ macro_rules! firmware_symbols {
     };
 }
 
-#[macro_export]
-macro_rules! variable_read {
-    ($name:ident) => {
-        $name.read()
-    };
-}
-
-#[macro_export]
-macro_rules! variable_write {
-    ($name:ident, $value:expr) => {
-        $name.write($value)
-    };
-}
-
 /// Call a generated continuation other than the current hook's own
 /// continuation. Most entry hooks should use `hook_continue`; this escape hatch
 /// is for cross-hook calls such as dismissing one notification while another

@@ -28,7 +28,7 @@ use firmware::*;
 )]
 pub unsafe fn din_mixer_forward() {
     unsafe {
-        let length = variable_read!(midi_message_length);
+        let length = midi_message_length.read();
         if length == 3 && mixer_control_via_midi() != 0 {
             apply_mixer_cc(midi_message_buffer.address() as *const u8);
         }

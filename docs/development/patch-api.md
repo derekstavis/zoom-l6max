@@ -22,7 +22,7 @@ bindings only for functions or variables that are genuinely patch-specific.
 | --- | --- | --- |
 | Declare callable firmware functions | `firmware_functions!` | Creates typed unsafe wrappers at revision-specific addresses. |
 | Describe firmware functions that can be patched | `define_function_hooks!` | References `firmware_functions!` declarations and adds guard, displaced-length, continuation, and dynamic-dispatch metadata. |
-| Read or write firmware globals | `firmware_variables!`, `variable_read!`, `variable_write!` | Defines typed volatile descriptors; only `mut` declarations permit writes. |
+| Read or write firmware globals | `firmware_variables!` with `.read()` and `.write()` | Defines typed volatile descriptors; only `mut` declarations permit writes. |
 | Hook every function entry | `#[function_entry_hook(site)]` | Adds a handler to an entry hook chain; choose `hook_continue` or `hook_done` on each path. |
 | Inject at a function instruction offset | `#[function_offset_hook(function, at = OFFSET)]` | Generates a register-preserving static veneer; `hook_continue()` replays displaced instructions and `hook_done()` skips them. |
 | Add behavior around a call to a function | `#[function_call_pre_hook(function, at = ADDRESS)]`, `#[function_call_post_hook(...)]` | Adds typed handler calls selected by the caller return address; the original `BL` stays in place. |
@@ -62,8 +62,8 @@ firmware_variables! {
     pub mut status_word: u32, at 0x805e_5d50;
 }
 
-let length = unsafe { variable_read!(message_length) };
-unsafe { variable_write!(status_word, 1) };
+let length = unsafe { message_length.read() };
+unsafe { status_word.write(1) };
 ```
 
 Both operations are unsafe because the address, alignment, access permission,

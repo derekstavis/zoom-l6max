@@ -82,8 +82,8 @@ firmware_variables! {
     pub mut status_word: u32, at 0x805e_5d50;
 }
 
-let length = unsafe { variable_read!(message_length) };
-unsafe { variable_write!(status_word, 1) };
+let length = unsafe { message_length.read() };
+unsafe { status_word.write(1) };
 ```
 
 The descriptors expose their address for APIs that need a pointer rather than a
@@ -95,7 +95,7 @@ The L6max GUI bindings include the widget/background descriptor tables, the
 localized text pointer and capacity roots, the DisplayCycle2 callback table,
 fixed table counts, and display dimensions. The descriptor arrays and callback
 table are stored directly at their binding addresses; the localized text
-bindings instead hold root pointers, so use `variable_read!` to obtain their
+bindings instead hold root pointers, so call `.read()` to obtain their
 tables. These common bindings let GUI patches share the reviewed address
 definitions without moving feature-specific descriptor layouts or state into
 the common module.

@@ -43,7 +43,7 @@ unsafe fn tap_button(event: u32) {
 }
 
 unsafe fn report_state() {
-    let state = unsafe { variable_read!(rec_mode) };
+    let state = unsafe { rec_mode.read() };
     unsafe { midi_send_cc_raw(CC_RECORDER_STATE, u32::from(state)) };
 }
 

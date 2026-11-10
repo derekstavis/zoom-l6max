@@ -58,8 +58,8 @@ const MODE_TITLES: [&[u8]; MODE_COUNT as usize] = [
 unsafe fn language_tables() -> (*mut u32, *mut u16) {
     unsafe {
         (
-            variable_read!(gui_text_pointers_by_language) as *mut u32,
-            variable_read!(gui_text_lengths_by_language) as *mut u16,
+            gui_text_pointers_by_language.read() as *mut u32,
+            gui_text_lengths_by_language.read() as *mut u16,
         )
     }
 }
@@ -389,7 +389,7 @@ pub unsafe extern "C" fn knob_dialog_display_tick() {
         if pointer.is_null() {
             return;
         }
-        if variable_read!(current_window) != GUI_RECORDER_WINDOW {
+        if current_window.read() != GUI_RECORDER_WINDOW {
             if (*pointer).ticks != 0 {
                 restore_scene(true);
             } else {
@@ -397,7 +397,7 @@ pub unsafe extern "C" fn knob_dialog_display_tick() {
             }
             return;
         }
-        if variable_read!(notification_active) == 0 && variable_read!(notification_busy) == 0 {
+        if notification_active.read() == 0 && notification_busy.read() == 0 {
             if let Some((channel, mode)) = take_pending() {
                 present(channel, mode);
             }
@@ -425,7 +425,7 @@ pub unsafe fn knob_changed(
             return;
         }
         // Only the normal recorder window: leave setup and modal dialogs alone.
-        if variable_read!(current_window) != GUI_RECORDER_WINDOW {
+        if current_window.read() != GUI_RECORDER_WINDOW {
             return;
         }
         let active = state();
@@ -460,7 +460,7 @@ unsafe fn ensure_state() -> *mut State {
         let callback_slot = callback_slot.add(DISPLAY_CALLBACK_SLOT);
         let callback = crate::knob_dialog_display_tick as usize as u32 | 1;
         let registered = read(callback_slot);
-        if variable_read!(gui_bitmap_table_entry_0) != 0
+        if gui_bitmap_table_entry_0.read() != 0
             || (registered != 0 && registered != callback)
         {
             return core::ptr::null_mut();
@@ -487,12 +487,12 @@ unsafe fn ensure_state() -> *mut State {
 // Only the slot-5 display callback calls this.
 unsafe fn present(channel: u32, mode: u32) {
     unsafe {
-        let current = variable_read!(current_window);
+        let current = current_window.read();
         let pointer = state();
         if pointer.is_null()
             || current != GUI_RECORDER_WINDOW
-            || variable_read!(notification_active) != 0
-            || variable_read!(notification_busy) != 0
+            || notification_active.read() != 0
+            || notification_busy.read() != 0
         {
             return;
         }
