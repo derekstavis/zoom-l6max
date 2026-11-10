@@ -19,6 +19,7 @@ task at hand.
 
 - [CI and releases](development/ci.md): automated checks, app artifacts, and tag publishing.
 - [Tool index](development/tools.md): command references for emulator, firmware, and packaging tools.
+- [Rust patch payload API](development/patch-api.md): choose and use firmware binding, variable, entry-hook, offset-hook, and continuation macros.
 - [Contributing](../CONTRIBUTING.md): conventions, review, and evidence standards.
 - [Patch conventions](../patches/README.md): layout, hook guards, and adding patches.
 - [MIDI sync implementation](../patches/midi-sync/README.md): hook, getters, combining, validation.

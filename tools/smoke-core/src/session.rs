@@ -179,6 +179,7 @@ pub fn run(scenario: Scenario, mut options: Options) -> Result<(), String> {
         "engine.trace"
     }));
     let mut device_state = devices::State::default();
+    let mut card_inserted = options.sd_image.is_some() && !options.no_sd;
     let result: Result<(), String> = (|| {
         loop {
             let progress = {
@@ -195,7 +196,12 @@ pub fn run(scenario: Scenario, mut options: Options) -> Result<(), String> {
                     }
                     drop(session.take());
                     options.logs = options.logs.join("restart");
-                    session = Some(Session::start(&options)?);
+                    let mut restart_options = options.clone();
+                    if !card_inserted {
+                        restart_options.sd_image = None;
+                        restart_options.no_sd = true;
+                    }
+                    session = Some(Session::start(&restart_options)?);
                     device_state.restarted();
                     runner.restarted(&options.logs);
                     runner.trace_file(options.logs.join(if options.trace_sd {
@@ -206,6 +212,10 @@ pub fn run(scenario: Scenario, mut options: Options) -> Result<(), String> {
                     runner.device_finished(json!({"restarted":true,"logs":options.logs}));
                 }
                 Progress::Device(operation) => {
+                    let card_change = match &operation {
+                        devices::Operation::SdCard { inserted } => Some(*inserted),
+                        _ => None,
+                    };
                     let step = &runner.scenario.step[runner.current_step()];
                     let evidence = device_state.execute(
                         session.as_ref().unwrap(),
@@ -214,6 +224,9 @@ pub fn run(scenario: Scenario, mut options: Options) -> Result<(), String> {
                         step.guest_timeout_ms,
                         step.wall_timeout_s,
                     )?;
+                    if let Some(inserted) = card_change {
+                        card_inserted = inserted;
+                    }
                     runner.device_finished(evidence);
                 }
                 Progress::Waiting => {}

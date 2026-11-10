@@ -14,6 +14,8 @@ Before suites, use execution permissions that allow POSIX shared memory and
 inherited sockets. Shared Git worktrees need access to their parent Git metadata.
 These requirements cannot be granted by this file; request the tool's required
 execution permissions directly rather than repeatedly retrying a denied suite.
+The user authorizes POSIX shared memory access for this project; this does not
+override restrictions imposed by the execution environment.
 
 Both GUI and headless scenarios use `smoke-core`, `PanelFeed` and `PanelData`.
 Keep assertions out of GUI adapters. Prefer guest-time readiness/output checks

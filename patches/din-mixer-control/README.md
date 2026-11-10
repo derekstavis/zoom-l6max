@@ -43,16 +43,16 @@ arrived on that port. The jig check's own behavior is untouched.
 
 ## Source layout
 
-- `src/payload.rs`: the mixer-forward logic, called from the veneer below.
+- `src/payload.rs`: the `#[function_offset_hook(...)]` mixer-forward helper inserted
+  inside the receive loop by a generated veneer. This is a static offset hook,
+  not an entry hook; see the [attribute guide](../../docs/development/patch-api.md#function-offset-hooks).
 - `src/firmware.rs`: bindings to the original functions and message layout.
-- `src/trampolines.rs`, `src/trampolines.s`: veneer that preserves every
-  register around the call into Rust, then replays the one displaced
-  instruction and resumes `MidiUartRcvMsg` exactly where it left off. Unlike
-  `midi-sync`'s entry hook, this one splices into the middle of a function,
-  so the veneer (not the Rust side) carries the register-safety burden.
+- The offset attribute names the function, byte offset, displaced length, and
+  instruction guard. The generated veneer preserves every register around
+  the Rust helper, replays the displaced instruction, and resumes
+  `MidiUartRcvMsg`. Offset hooks are static-only.
 - `linker/link.ld`: payload placement (`PAYLOAD_BASE` comes from the builder)
   and prohibition on reserved mutable RAM.
-- `hooks.tsv`: hook address, length and expected byte hash.
 
 The builder is [`l6patch`](../../docs/development/tools/l6patch.md). See
 the [patch conventions](../README.md).

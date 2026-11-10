@@ -19,3 +19,8 @@ by default; explicitly request `--recompute-checksum` after payload edits.
 
 The tool checks package model and revision guards before writing. Read the
 individual patch guide for model support, behavior, and validation commands.
+
+Payloads are compiled `no_std` Rust using the shared firmware bindings and
+hook macros. See the [Rust patch payload API guide](../patch-api.md) for the
+function attributes and shared hook catalog used by the static builder and the
+Patch loader.

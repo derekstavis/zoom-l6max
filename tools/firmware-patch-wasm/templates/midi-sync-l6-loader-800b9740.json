@@ -1,0 +1,23 @@
+{
+  "base": "0x800b9740",
+  "hooks": [
+    {
+      "address": "0x8002f490",
+      "length": 4,
+      "symbol": "midi_in_hook",
+      "target": "0x800b9760"
+    }
+  ],
+  "model": "L6",
+  "name": "midi-sync",
+  "payload_file": "midi-sync-l6-loader-800b9740.bin",
+  "payload_length": 256,
+  "window_byte_total": 4,
+  "windows": [
+    {
+      "firmware_address": "0x8002f490",
+      "length": 4,
+      "payload_offset": 16
+    }
+  ]
+}

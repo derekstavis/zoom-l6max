@@ -471,6 +471,15 @@ impl Runner {
                         bytes,
                     }));
                 }
+                Action::ExpectSdPatch {
+                    loaded,
+                    chain_count,
+                } => {
+                    return Ok(Progress::Device(devices::Operation::ExpectSdPatch {
+                        loaded,
+                        chain_count,
+                    }));
+                }
                 Action::ExpectHeap { minimum_free } => {
                     return Ok(Progress::Device(devices::Operation::ExpectHeap {
                         minimum_free,
@@ -494,6 +503,7 @@ impl Runner {
                     return Ok(Progress::Device(devices::Operation::ExpectRecorder));
                 }
                 Action::Restart => return Ok(Progress::Device(devices::Operation::Restart)),
+                Action::WarmReset => return Ok(Progress::Device(devices::Operation::WarmReset)),
                 Action::PowerPress { hold_ms, powered } => {
                     return Ok(Progress::Device(devices::Operation::PowerPress {
                         hold_ms,

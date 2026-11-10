@@ -1,5 +1,97 @@
 {
   "l6_source_firmware_sha256": "827c7c5cb2a43cc3a011d4556462b8cb9539242f817ebeed7727d66a36c03799",
+  "loaders": [
+    {
+      "base": "0x80108000",
+      "metadata_file": "patch-loader-L6max-000-80108000.json",
+      "model": "L6max"
+    },
+    {
+      "base": "0x80108000",
+      "metadata_file": "patch-loader-L6max-001-80108000.json",
+      "model": "L6max"
+    },
+    {
+      "base": "0x80108000",
+      "metadata_file": "patch-loader-L6max-002-80108000.json",
+      "model": "L6max"
+    },
+    {
+      "base": "0x80108000",
+      "metadata_file": "patch-loader-L6max-003-80108000.json",
+      "model": "L6max"
+    },
+    {
+      "base": "0x80108000",
+      "metadata_file": "patch-loader-L6max-004-80108000.json",
+      "model": "L6max"
+    },
+    {
+      "base": "0x80108000",
+      "metadata_file": "patch-loader-L6max-005-80108000.json",
+      "model": "L6max"
+    },
+    {
+      "base": "0x80108000",
+      "metadata_file": "patch-loader-L6max-006-80108000.json",
+      "model": "L6max"
+    },
+    {
+      "base": "0x80108000",
+      "metadata_file": "patch-loader-L6max-007-80108000.json",
+      "model": "L6max"
+    },
+    {
+      "base": "0x80108000",
+      "metadata_file": "patch-loader-L6max-008-80108000.json",
+      "model": "L6max"
+    },
+    {
+      "base": "0x80108000",
+      "metadata_file": "patch-loader-L6max-009-80108000.json",
+      "model": "L6max"
+    },
+    {
+      "base": "0x80108000",
+      "metadata_file": "patch-loader-L6max-010-80108000.json",
+      "model": "L6max"
+    },
+    {
+      "base": "0x80108000",
+      "metadata_file": "patch-loader-L6max-011-80108000.json",
+      "model": "L6max"
+    },
+    {
+      "base": "0x80108000",
+      "metadata_file": "patch-loader-L6max-012-80108000.json",
+      "model": "L6max"
+    },
+    {
+      "base": "0x80108000",
+      "metadata_file": "patch-loader-L6max-013-80108000.json",
+      "model": "L6max"
+    },
+    {
+      "base": "0x80108000",
+      "metadata_file": "patch-loader-L6max-014-80108000.json",
+      "model": "L6max"
+    },
+    {
+      "base": "0x80108000",
+      "metadata_file": "patch-loader-L6max-015-80108000.json",
+      "model": "L6max"
+    },
+    {
+      "base": "0x800b6af0",
+      "metadata_file": "patch-loader-L6-000-800b6af0.json",
+      "model": "L6"
+    },
+    {
+      "base": "0x800b6af0",
+      "metadata_file": "patch-loader-L6-001-800b6af0.json",
+      "model": "L6"
+    }
+  ],
   "source_firmware_sha256": "980d92272c1f84bed200b4d2f83575202f6a00082c928d99b9e8b53af8d44461",
   "units": [
     {
@@ -9,20 +101,92 @@
       "name": "din-mixer-control"
     },
     {
-      "base": "0x801084a0",
-      "metadata_file": "din-mixer-control-801084a0.json",
+      "base": "0x801084b0",
+      "metadata_file": "din-mixer-control-801084b0.json",
       "model": "L6max",
       "name": "din-mixer-control"
     },
     {
-      "base": "0x80109ef0",
-      "metadata_file": "din-mixer-control-80109ef0.json",
+      "base": "0x801088d0",
+      "metadata_file": "din-mixer-control-801088d0.json",
       "model": "L6max",
       "name": "din-mixer-control"
     },
     {
-      "base": "0x8010a390",
-      "metadata_file": "din-mixer-control-8010a390.json",
+      "base": "0x80108d80",
+      "metadata_file": "din-mixer-control-80108d80.json",
+      "model": "L6max",
+      "name": "din-mixer-control"
+    },
+    {
+      "base": "0x801097b0",
+      "metadata_file": "din-mixer-control-801097b0.json",
+      "model": "L6max",
+      "name": "din-mixer-control"
+    },
+    {
+      "base": "0x80109c60",
+      "metadata_file": "din-mixer-control-80109c60.json",
+      "model": "L6max",
+      "name": "din-mixer-control"
+    },
+    {
+      "base": "0x8010a080",
+      "metadata_file": "din-mixer-control-8010a080.json",
+      "model": "L6max",
+      "name": "din-mixer-control"
+    },
+    {
+      "base": "0x8010a530",
+      "metadata_file": "din-mixer-control-8010a530.json",
+      "model": "L6max",
+      "name": "din-mixer-control"
+    },
+    {
+      "base": "0x8010b1e0",
+      "metadata_file": "din-mixer-control-8010b1e0.json",
+      "model": "L6max",
+      "name": "din-mixer-control"
+    },
+    {
+      "base": "0x8010b690",
+      "metadata_file": "din-mixer-control-8010b690.json",
+      "model": "L6max",
+      "name": "din-mixer-control"
+    },
+    {
+      "base": "0x8010bab0",
+      "metadata_file": "din-mixer-control-8010bab0.json",
+      "model": "L6max",
+      "name": "din-mixer-control"
+    },
+    {
+      "base": "0x8010bf60",
+      "metadata_file": "din-mixer-control-8010bf60.json",
+      "model": "L6max",
+      "name": "din-mixer-control"
+    },
+    {
+      "base": "0x8010c990",
+      "metadata_file": "din-mixer-control-8010c990.json",
+      "model": "L6max",
+      "name": "din-mixer-control"
+    },
+    {
+      "base": "0x8010ce40",
+      "metadata_file": "din-mixer-control-8010ce40.json",
+      "model": "L6max",
+      "name": "din-mixer-control"
+    },
+    {
+      "base": "0x8010d260",
+      "metadata_file": "din-mixer-control-8010d260.json",
+      "model": "L6max",
+      "name": "din-mixer-control"
+    },
+    {
+      "base": "0x8010d710",
+      "metadata_file": "din-mixer-control-8010d710.json",
       "model": "L6max",
       "name": "din-mixer-control"
     },
@@ -33,20 +197,92 @@
       "name": "knob-dialog"
     },
     {
+      "base": "0x8010b1e0",
+      "metadata_file": "knob-dialog-8010b1e0.json",
+      "model": "L6max",
+      "name": "knob-dialog"
+    },
+    {
+      "base": "0x80108000",
+      "metadata_file": "midi-control-80108000.json",
+      "model": "L6max",
+      "name": "midi-control"
+    },
+    {
+      "base": "0x801097b0",
+      "metadata_file": "midi-control-801097b0.json",
+      "model": "L6max",
+      "name": "midi-control"
+    },
+    {
+      "base": "0x8010b1e0",
+      "metadata_file": "midi-control-8010b1e0.json",
+      "model": "L6max",
+      "name": "midi-control"
+    },
+    {
+      "base": "0x8010c990",
+      "metadata_file": "midi-control-8010c990.json",
+      "model": "L6max",
+      "name": "midi-control"
+    },
+    {
       "base": "0x80108000",
       "metadata_file": "midi-sync-80108000.json",
       "model": "L6max",
       "name": "midi-sync"
     },
     {
-      "base": "0x80109ef0",
-      "metadata_file": "midi-sync-80109ef0.json",
+      "base": "0x801088d0",
+      "metadata_file": "midi-sync-801088d0.json",
+      "model": "L6max",
+      "name": "midi-sync"
+    },
+    {
+      "base": "0x801097b0",
+      "metadata_file": "midi-sync-801097b0.json",
+      "model": "L6max",
+      "name": "midi-sync"
+    },
+    {
+      "base": "0x8010a080",
+      "metadata_file": "midi-sync-8010a080.json",
+      "model": "L6max",
+      "name": "midi-sync"
+    },
+    {
+      "base": "0x8010b1e0",
+      "metadata_file": "midi-sync-8010b1e0.json",
+      "model": "L6max",
+      "name": "midi-sync"
+    },
+    {
+      "base": "0x8010bab0",
+      "metadata_file": "midi-sync-8010bab0.json",
+      "model": "L6max",
+      "name": "midi-sync"
+    },
+    {
+      "base": "0x8010c990",
+      "metadata_file": "midi-sync-8010c990.json",
+      "model": "L6max",
+      "name": "midi-sync"
+    },
+    {
+      "base": "0x8010d260",
+      "metadata_file": "midi-sync-8010d260.json",
       "model": "L6max",
       "name": "midi-sync"
     },
     {
       "base": "0x800b6af0",
       "metadata_file": "midi-sync-l6-800b6af0.json",
+      "model": "L6",
+      "name": "midi-sync"
+    },
+    {
+      "base": "0x800b9740",
+      "metadata_file": "midi-sync-l6-loader-800b9740.json",
       "model": "L6",
       "name": "midi-sync"
     }

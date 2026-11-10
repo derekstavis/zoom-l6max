@@ -4,9 +4,10 @@ models = ["l6max"]
 backends = ["headless"]
 state = "setup-complete"
 patches = ["knob-dialog"]
-card = "empty"
+card = "recorder-project"
+gdb = true
 main_sha256 = "76925b4e017083910ef33c2d52e3930d3cdad819cc8b4ffe5f782dd2f07212d7"
-main_sha256_any = ["90c7cbdd0fee494bdcaf805730b1eb3931117d27d96ab651fe5dc604695c3010", "863ee4475b728e9a7b1d04fcdd4eb28555aee3fc8009eca9c36d2a3032b5fc32"]
+main_sha256_any = ["90c7cbdd0fee494bdcaf805730b1eb3931117d27d96ab651fe5dc604695c3010", "863ee4475b728e9a7b1d04fcdd4eb28555aee3fc8009eca9c36d2a3032b5fc32", "80417cebcce84128fde12c18ac96f9ac57b569438a6721bca8b5d93b783c8e02", "6af14876a4d08ae719619b3e49d1ab16b51ad673425726d0328f00e980120fe1", "cd6a00971410d95669bd43c5c03e0700843266b6b359edaad57040de85a9897a", "c3e69693a6b50436151d61db82721637b65cc3de24ffc5dcc0e76740be78b231"]
 
 [[step]]
 action = "knob-dialog"

@@ -1,0 +1,28 @@
+{
+  "modules": [
+    {
+      "id": "midi-sync",
+      "model": "L6max",
+      "file": "L6max/MIDI.BIN",
+      "format_version": 8,
+      "loader_abi": 2,
+      "sha256": "d438e22288af7a5cbaff8fca705526cce428994c4b98afa5d83bf25f1ce402bf"
+    },
+    {
+      "id": "midi-sync",
+      "model": "L6",
+      "file": "L6/MIDI.BIN",
+      "format_version": 8,
+      "loader_abi": 2,
+      "sha256": "582e173dce6a0d219159a2b2d002af40707e316668f2d667efb3517599c2db1f"
+    },
+    {
+      "id": "knob-dialog",
+      "model": "L6max",
+      "file": "L6max/KNOB.BIN",
+      "format_version": 8,
+      "loader_abi": 2,
+      "sha256": "795f0959640a7582b40e069122e2415804741914fef779a90680d9b7bb33069a"
+    }
+  ]
+}

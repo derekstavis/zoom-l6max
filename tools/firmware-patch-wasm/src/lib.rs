@@ -10,17 +10,17 @@
 include!(concat!(env!("OUT_DIR"), "/templates_generated.rs"));
 
 use firmware_patch_core::{
-    CallSiteEdit, FirmwareModel, HookEdit, L6_MAIN_BASE, L6_SLOT_END, PATCHES, PatchEdits,
-    apply_patch_with_map, first_payload_for, verify_firmware_for, write_image_length_and_version,
+    FirmwareModel, HookEdit, L6_MAIN_BASE, L6_SLOT_END, PATCHES, PatchEdits, apply_patch_with_map,
+    branch, first_payload_for, verify_firmware_for, write_image_length_and_version,
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use wasm_bindgen::prelude::*;
 
-/// Update-version marker for every package this crate produces, distinct
-/// from the native CLI's own dev-build markers (0112/0113). See the plan's
-/// "Resolved decisions": 1.11 reads as "stock 1.10 plus the web patcher's
-/// changes."
+/// Update-version marker for packages without the Patch loader. Loader-enabled
+/// packages use marker 0114 so the device can distinguish that layout from
+/// ordinary feature-only updates. Both are distinct from the native CLI's
+/// dev-build markers (0112/0113).
 const UPDATE_VERSION: &str = "0111";
 
 struct Window {
@@ -36,8 +36,27 @@ struct Unit {
     windows: Vec<Window>,
     hooks: Vec<HookEdit>,
     hook_symbols: Vec<String>,
-    knob_dialog_entry: Option<u32>,
-    knob_dialog_call_sites: Vec<CallSiteEdit>,
+    continuation_slots: Vec<Option<(String, usize)>>,
+}
+
+struct LoaderSite {
+    address: u32,
+    length: usize,
+    guard_sha256: String,
+    target_offset: u32,
+    link: bool,
+    dynamic_dispatch: bool,
+}
+
+struct LoaderUnit {
+    model: FirmwareModel,
+    base: u32,
+    module_base: u32,
+    reserve_end: u32,
+    static_patches: Vec<String>,
+    template: Vec<u8>,
+    windows: Vec<Window>,
+    sites: Vec<LoaderSite>,
 }
 
 fn parse_hex(value: &Value) -> Result<u32, String> {
@@ -94,20 +113,18 @@ fn parse_unit(payload: &[u8], metadata_json: &str) -> Result<Unit, String> {
                 .ok_or("hook missing symbol".to_owned())
         })
         .collect::<Result<Vec<_>, String>>()?;
-    let knob_dialog_entry = match &meta["knob_dialog_entry"] {
-        Value::Null => None,
-        value => Some(parse_hex(value)?),
-    };
-    let knob_dialog_call_sites = meta["knob_dialog_call_sites"]
+    let continuation_slots = meta["hooks"]
         .as_array()
-        .ok_or("metadata missing knob_dialog_call_sites")?
+        .ok_or("metadata missing hooks")?
         .iter()
-        .map(|c| {
-            Ok(CallSiteEdit {
-                address: parse_hex(&c["address"])?,
-                original: parse_hex(&c["original"])?,
-                target: parse_hex(&c["target"])?,
-            })
+        .map(|hook| {
+            let site = hook["continuation_site"].as_str();
+            let offset = hook["continuation_slot_offset"].as_u64();
+            match (site, offset) {
+                (Some(site), Some(offset)) => Ok(Some((site.to_owned(), offset as usize))),
+                (None, None) => Ok(None),
+                _ => Err("incomplete static continuation slot metadata".to_owned()),
+            }
         })
         .collect::<Result<Vec<_>, String>>()?;
     Ok(Unit {
@@ -117,13 +134,12 @@ fn parse_unit(payload: &[u8], metadata_json: &str) -> Result<Unit, String> {
         windows,
         hooks,
         hook_symbols,
-        knob_dialog_entry,
-        knob_dialog_call_sites,
+        continuation_slots,
     })
 }
 
 /// Finds the one embedded unit for `name` at exactly `base` — every
-/// non-empty subset of `PATCHES` resolves to one of the 7 embedded units, so
+/// non-empty subset of `PATCHES` resolves to an embedded unit, so
 /// this only fails if the embedded templates are stale or corrupt.
 fn find_unit(name: &str, model: FirmwareModel, base: u32) -> Result<Unit, String> {
     for (unit_name, payload, metadata) in EMBEDDED_UNITS {
@@ -136,6 +152,108 @@ fn find_unit(name: &str, model: FirmwareModel, base: u32) -> Result<Unit, String
     }
     Err(format!(
         "no precompiled template for {name} at base {base:#x} (stale or corrupt embedded templates)"
+    ))
+}
+
+fn parse_loader(payload: &[u8], metadata_json: &str) -> Result<LoaderUnit, String> {
+    let meta: Value = serde_json::from_str(metadata_json).map_err(|e| e.to_string())?;
+    let model = match meta["model"]
+        .as_str()
+        .ok_or("loader metadata missing model")?
+    {
+        "L6" => FirmwareModel::L6,
+        "L6max" => FirmwareModel::L6max,
+        other => {
+            return Err(format!(
+                "unknown firmware model in loader template: {other}"
+            ));
+        }
+    };
+    let windows = meta["windows"]
+        .as_array()
+        .ok_or("loader metadata missing windows")?
+        .iter()
+        .map(|w| {
+            Ok(Window {
+                payload_offset: w["payload_offset"]
+                    .as_u64()
+                    .ok_or("loader window missing payload_offset")?
+                    as usize,
+                firmware_address: parse_hex(&w["firmware_address"])?,
+                length: w["length"].as_u64().ok_or("loader window missing length")? as usize,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let sites = meta["sites"]
+        .as_array()
+        .ok_or("loader metadata missing sites")?
+        .iter()
+        .map(|s| {
+            Ok(LoaderSite {
+                address: parse_hex(&s["address"])?,
+                length: s["length"].as_u64().ok_or("loader site missing length")? as usize,
+                guard_sha256: s["guard_sha256"]
+                    .as_str()
+                    .ok_or("loader site missing guard hash")?
+                    .to_owned(),
+                target_offset: s["target_offset"]
+                    .as_u64()
+                    .ok_or("loader site missing target offset")?
+                    as u32,
+                link: s["link"]
+                    .as_bool()
+                    .ok_or("loader site missing branch kind")?,
+                dynamic_dispatch: s["dynamic_dispatch"]
+                    .as_bool()
+                    .ok_or("loader site missing dynamic-dispatch marker")?,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok(LoaderUnit {
+        model,
+        base: parse_hex(&meta["base"])?,
+        module_base: parse_hex(&meta["module_base"])?,
+        reserve_end: parse_hex(&meta["reserve_end"])?,
+        static_patches: meta["static_patches"]
+            .as_array()
+            .ok_or("loader metadata missing static patches")?
+            .iter()
+            .map(|name| {
+                name.as_str()
+                    .map(str::to_owned)
+                    .ok_or("invalid loader patch name".to_owned())
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+        template: payload.to_vec(),
+        windows,
+        sites,
+    })
+}
+
+fn find_loader(model: FirmwareModel, base: u32, selected: &[&str]) -> Result<LoaderUnit, String> {
+    for (loader_model, payload, metadata) in EMBEDDED_LOADERS {
+        if *loader_model
+            == if model == FirmwareModel::L6 {
+                "L6"
+            } else {
+                "L6max"
+            }
+        {
+            let loader = parse_loader(payload, metadata)?;
+            if loader.model == model
+                && loader.base == base
+                && loader
+                    .static_patches
+                    .iter()
+                    .map(String::as_str)
+                    .eq(selected.iter().copied())
+            {
+                return Ok(loader);
+            }
+        }
+    }
+    Err(format!(
+        "no Patch loader template for {model:?} at {base:#x}"
     ))
 }
 
@@ -162,6 +280,17 @@ pub fn available_patches(package: &[u8]) -> Result<Vec<&'static str>, String> {
 /// a small JSON report. `package` is the only untrusted input: every other
 /// byte comes from the embedded, Zoom-byte-free templates.
 pub fn apply_patches(package: &[u8], selected: &[&str]) -> Result<(Vec<u8>, Value), String> {
+    apply_patches_with_loader(package, selected, false)
+}
+
+/// Applies static feature patches and optionally installs the persistent SD
+/// loader. When enabled, the loader is written first so feature payloads can
+/// follow it in the same image, matching the native builder's layout.
+pub fn apply_patches_with_loader(
+    package: &[u8],
+    selected: &[&str],
+    install_patch_loader: bool,
+) -> Result<(Vec<u8>, Value), String> {
     let model = match l6fw::model_from_package(package)? {
         l6fw::Model::L6 => FirmwareModel::L6,
         l6fw::Model::L6max => FirmwareModel::L6max,
@@ -175,7 +304,7 @@ pub fn apply_patches(package: &[u8], selected: &[&str]) -> Result<(Vec<u8>, Valu
         .into_iter()
         .filter(|p| selected.contains(p))
         .collect();
-    if ordered.is_empty() {
+    if ordered.is_empty() && !install_patch_loader {
         return Err("select at least one patch".into());
     }
     if model == FirmwareModel::L6 && ordered.iter().any(|name| *name != "midi-sync") {
@@ -202,22 +331,173 @@ pub fn apply_patches(package: &[u8], selected: &[&str]) -> Result<(Vec<u8>, Valu
     let mut base = first_payload_for(model, original_length);
     let mut applied_report = Vec::new();
     let mut diagnostic_hooks = Vec::new();
+    let mut hook_ranges: Vec<(u32, usize, Option<String>)> = Vec::new();
+    let mut continuation_tails = std::collections::BTreeMap::<u32, (usize, usize, String)>::new();
+    let mut loader_dispatch_targets = std::collections::BTreeMap::<u32, u32>::new();
+    let mut output_version = UPDATE_VERSION;
+    let mut loader_reserve = None;
+    if install_patch_loader {
+        let loader_base = base;
+        let unit = find_loader(model, loader_base, &ordered)?;
+        let mut payload = unit.template.clone();
+        for window in &unit.windows {
+            let offset = window
+                .firmware_address
+                .checked_sub(firmware_base)
+                .ok_or("loader window precedes firmware image")? as usize;
+            let end = offset
+                .checked_add(window.length)
+                .ok_or("loader window overflow")?;
+            let payload_end = window
+                .payload_offset
+                .checked_add(window.length)
+                .ok_or("loader payload window overflow")?;
+            if end > original_firmware.len() || payload_end > payload.len() {
+                return Err("loader template window exceeds the firmware or payload".into());
+            }
+            payload[window.payload_offset..payload_end]
+                .copy_from_slice(&original_firmware[offset..end]);
+        }
+        for site in &unit.sites {
+            let offset = site
+                .address
+                .checked_sub(firmware_base)
+                .ok_or("loader edit precedes firmware image")? as usize;
+            let end = offset
+                .checked_add(site.length)
+                .ok_or("loader edit range overflow")?;
+            if end > original_firmware.len() {
+                return Err("loader edit exceeds firmware image".into());
+            }
+            let actual = format!("{:x}", Sha256::digest(&original_firmware[offset..end]));
+            if actual != site.guard_sha256 {
+                return Err(format!("Patch loader guard failed at {:#x}", site.address));
+            }
+        }
+        let payload_end = loader_base
+            .checked_add(payload.len() as u32)
+            .ok_or("loader payload address overflow")?;
+        if payload_end > unit.module_base {
+            return Err("Patch loader payload overlaps its reserved module region".into());
+        }
+        let payload_offset = loader_base
+            .checked_sub(firmware_base)
+            .ok_or("loader payload precedes image")? as usize;
+        firmware.resize(payload_offset, 0xff);
+        firmware.extend_from_slice(&payload);
+        for site in &unit.sites {
+            let offset = (site.address - firmware_base) as usize;
+            let target = loader_base
+                .checked_add(site.target_offset)
+                .ok_or("loader branch target overflow")?;
+            if site.dynamic_dispatch {
+                loader_dispatch_targets.insert(site.address, target | 1);
+            }
+            firmware[offset..offset + 4].copy_from_slice(&branch(site.address, target, site.link));
+            for chunk in firmware[offset + 4..offset + site.length].chunks_exact_mut(2) {
+                chunk.copy_from_slice(&0xbf00u16.to_le_bytes());
+            }
+        }
+        applied_report.push(serde_json::json!({
+            "name": "patch-loader",
+            "payload_address": format!("{loader_base:#x}"),
+            "payload_length": payload.len(),
+            "reserved_end": format!("{:#x}", unit.reserve_end),
+        }));
+        base = (payload_end + 15) & !15;
+        loader_reserve = Some((unit.module_base, unit.reserve_end));
+        output_version = "0114";
+    }
     for &name in &ordered {
         let unit = find_unit(name, model, base)?;
-        if name == "knob-dialog" {
-            diagnostic_hooks = unit.hooks.iter().zip(&unit.hook_symbols).map(|(hook, symbol)|
-                serde_json::json!({"address": hook.address, "target": hook.target, "symbol": symbol, "displaced_length": hook.length})
-            ).collect();
-        }
+        diagnostic_hooks.extend(unit.hooks.iter().zip(&unit.hook_symbols).map(|(hook, symbol)| {
+            serde_json::json!({"address": hook.address, "target": hook.target, "symbol": symbol, "displaced_length": hook.length})
+        }));
         let mut payload = unit.template.clone();
         for window in &unit.windows {
             let start = (window.firmware_address - firmware_base) as usize;
             payload[window.payload_offset..window.payload_offset + window.length]
                 .copy_from_slice(&original_firmware[start..start + window.length]);
         }
-        let mut edits = PatchEdits::new(unit.hooks);
-        edits.knob_dialog_entry = unit.knob_dialog_entry;
-        edits.knob_dialog_call_sites = unit.knob_dialog_call_sites;
+        let mut edits = Vec::new();
+        for (index, hook) in unit.hooks.iter().enumerate() {
+            let continuation = unit.continuation_slots[index].clone();
+            if let Some((start, length, prior_site)) = hook_ranges
+                .iter()
+                .find(|(start, length, _)| {
+                    hook.address < *start + *length as u32
+                        && *start < hook.address + hook.length as u32
+                })
+                .cloned()
+            {
+                if start != hook.address || length != hook.length {
+                    return Err(format!(
+                        "incompatible static hook overlap at {:#x}",
+                        hook.address
+                    ));
+                }
+                let Some((site, slot_offset)) = continuation.as_ref().cloned() else {
+                    return Err(format!(
+                        "non-chainable patches share hook {:#x}",
+                        hook.address
+                    ));
+                };
+                if prior_site.as_deref() != Some(&site) {
+                    return Err(format!(
+                        "patches disagree on continuation site at {:#x}",
+                        hook.address
+                    ));
+                }
+                let (prior_slot, _, tail_site) = continuation_tails
+                    .get(&hook.address)
+                    .cloned()
+                    .ok_or("shared hook has no prior continuation slot")?;
+                if tail_site != site {
+                    return Err(format!(
+                        "patches disagree on continuation site at {:#x}",
+                        hook.address
+                    ));
+                }
+                firmware[prior_slot..prior_slot + 4]
+                    .copy_from_slice(&(hook.target | 1).to_le_bytes());
+                continuation_tails.insert(
+                    hook.address,
+                    (
+                        (base - firmware_base) as usize + slot_offset,
+                        hook.length,
+                        site,
+                    ),
+                );
+            } else {
+                hook_ranges.push((
+                    hook.address,
+                    hook.length,
+                    continuation.as_ref().map(|(site, _)| site.clone()),
+                ));
+                edits.push(HookEdit {
+                    address: hook.address,
+                    target: hook.target,
+                    length: hook.length,
+                });
+                if let Some((site, slot_offset)) = continuation.as_ref() {
+                    continuation_tails.insert(
+                        hook.address,
+                        (
+                            (base - firmware_base) as usize + *slot_offset,
+                            hook.length,
+                            site.clone(),
+                        ),
+                    );
+                }
+            }
+            if let Some((_, slot_offset)) = continuation.as_ref() {
+                if let Some(dispatch_target) = loader_dispatch_targets.get(&hook.address) {
+                    payload[*slot_offset..*slot_offset + 4]
+                        .copy_from_slice(&dispatch_target.to_le_bytes());
+                }
+            }
+        }
+        let edits = PatchEdits::new(edits);
         let applied = apply_patch_with_map(
             &mut firmware,
             original_length,
@@ -234,6 +514,23 @@ pub fn apply_patches(package: &[u8], selected: &[&str]) -> Result<(Vec<u8>, Valu
             "payload_length": applied.payload_len,
         }));
         base = applied.next_base;
+        if let Some((module_base, _)) = loader_reserve
+            && base > module_base
+        {
+            return Err("firmware feature payloads overlap the Patch loader module reserve".into());
+        }
+    }
+    if let Some((_, reserve_end)) = loader_reserve {
+        let reserve_offset = reserve_end
+            .checked_sub(firmware_base)
+            .ok_or("loader reserve precedes firmware image")? as usize;
+        let consumed = reserve_offset
+            .checked_sub(original_length)
+            .ok_or("loader reserve overlaps original firmware")?;
+        if consumed > padding.len() || padding[..consumed].iter().any(|&byte| byte != 0xff) {
+            return Err("Patch loader reserve overlaps non-erased package data".into());
+        }
+        firmware.resize(reserve_offset, 0xff);
     }
 
     let new_length = firmware.len() as u32;
@@ -245,7 +542,7 @@ pub fn apply_patches(package: &[u8], selected: &[&str]) -> Result<(Vec<u8>, Valu
     );
     let mut trailer = segments["main_trailer.bin"].clone();
     let mut footer = segments["package_footer.bin"].clone();
-    write_image_length_and_version(&mut trailer, &mut footer, new_length, UPDATE_VERSION);
+    write_image_length_and_version(&mut trailer, &mut footer, new_length, output_version);
     segments.insert("main_trailer.bin".into(), trailer);
     segments.insert("package_footer.bin".into(), footer);
     for (segment_name, start, end) in l6fw::layout_for(
@@ -277,7 +574,7 @@ pub fn apply_patches(package: &[u8], selected: &[&str]) -> Result<(Vec<u8>, Valu
         "patches": applied_report,
         "hooks": diagnostic_hooks,
         "update_sha256": format!("{:x}", Sha256::digest(&packed)),
-        "version": UPDATE_VERSION,
+        "version": output_version,
         "usage": "Patched in your browser from your own upload. Verified in emulation only; physical bootloader acceptance is unverified.",
     });
     Ok((packed, report))
@@ -317,10 +614,15 @@ impl PatchResult {
 /// JS entry point: `selected` is any non-empty subset of `"knob-dialog"`,
 /// `"midi-sync"`, `"din-mixer-control"`, in any order.
 #[wasm_bindgen(js_name = applyPatches)]
-pub fn apply_patches_wasm(package: &[u8], selected: Vec<String>) -> Result<PatchResult, JsError> {
+pub fn apply_patches_wasm(
+    package: &[u8],
+    selected: Vec<String>,
+    install_patch_loader: bool,
+) -> Result<PatchResult, JsError> {
     let selected_refs: Vec<&str> = selected.iter().map(String::as_str).collect();
     let (package, report) =
-        apply_patches(package, &selected_refs).map_err(|message| JsError::new(&message))?;
+        apply_patches_with_loader(package, &selected_refs, install_patch_loader)
+            .map_err(|message| JsError::new(&message))?;
     Ok(PatchResult {
         package,
         report_json: report.to_string(),
@@ -337,8 +639,7 @@ mod tests {
         let metadata = r#"{
             "base": "0x80000000",
             "windows": [],
-            "hooks": [],
-            "knob_dialog_call_sites": []
+            "hooks": []
         }"#;
         assert_eq!(
             parse_unit(&[], metadata).err().unwrap(),
@@ -352,8 +653,7 @@ mod tests {
             "model": "L6mini",
             "base": "0x80000000",
             "windows": [],
-            "hooks": [],
-            "knob_dialog_call_sites": []
+            "hooks": []
         }"#;
         assert_eq!(
             parse_unit(&[], metadata).err().unwrap(),
@@ -362,19 +662,15 @@ mod tests {
     }
 
     #[test]
-    fn knob_template_exposes_named_hooks_for_fixture_diagnostics() {
+    fn knob_template_has_well_formed_hook_metadata() {
         let unit = find_unit("knob-dialog", FirmwareModel::L6max, 0x80108000).unwrap();
         assert_eq!(unit.hooks.len(), unit.hook_symbols.len());
-        for name in [
-            "notification_show_hook",
-            "notification_pop_hook",
-            "busy_show_hook",
-            "busy_hide_hook",
-            "overlays_clear_hook",
-        ] {
-            assert!(unit.hook_symbols.iter().any(|symbol| symbol == name));
-        }
-        let metadata = r#"{"model":"L6", "base":"0x80000000", "windows":[], "hooks":[{"address":"0x80000000", "target":"0x80001000", "length":4}], "knob_dialog_call_sites":[]}"#;
+        assert!(unit.hooks.iter().all(|hook| hook.length >= 4));
+    }
+
+    #[test]
+    fn metadata_requires_hook_symbols() {
+        let metadata = r#"{"model":"L6", "base":"0x80000000", "windows":[], "hooks":[{"address":"0x80000000", "target":"0x80001000", "length":4}]}"#;
         assert!(parse_unit(&[], metadata).err().unwrap().contains("symbol"));
     }
 }

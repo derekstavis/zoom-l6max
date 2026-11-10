@@ -6,7 +6,12 @@
 use sha2::{Digest, Sha256};
 
 /// Patches in catalog order. Output never depends on the order patches are requested in.
-pub const PATCHES: [&str; 3] = ["knob-dialog", "midi-sync", "din-mixer-control"];
+pub const PATCHES: [&str; 4] = [
+    "knob-dialog",
+    "midi-control",
+    "midi-sync",
+    "din-mixer-control",
+];
 pub const FIRST_PAYLOAD: u32 = 0x80108000;
 pub const SLOT_END: u32 = 0x801a2ff8;
 /// SHA-256 of the supported stock L6max MAIN firmware image (1.10).
@@ -100,9 +105,6 @@ pub fn verify_firmware_for(model: FirmwareModel, firmware: &[u8]) -> Result<(), 
     if firmware[0x40c..0x410] != 0x8007eea9u32.to_le_bytes() {
         return Err("firmware does not match the expected reset support vector".into());
     }
-    if firmware[0x36c74..0x36c78] != branch(0x80036c74, 0x80053b28, true) {
-        return Err("firmware does not match the expected knob-dialog call site".into());
-    }
     if firmware.len() > 0x108000 {
         return Err("payload would overwrite original firmware".into());
     }
@@ -119,31 +121,15 @@ pub struct HookEdit {
     pub length: usize,
 }
 
-/// `knob-dialog`'s three `bl` call-site redirects: before patching, the call
-/// at `address` must still target `original` (a guard against a stock image
-/// that doesn't call what this patch expects), then is rewritten to `target`.
-pub struct CallSiteEdit {
-    pub address: u32,
-    pub original: u32,
-    pub target: u32,
-}
-
 /// Everything needed to splice one already-compiled patch payload into a
-/// firmware image: its hook edits, and (for `knob-dialog` only) the extra
-/// entry-point edit and call-site redirects.
+/// firmware image.
 pub struct PatchEdits {
     pub hooks: Vec<HookEdit>,
-    pub knob_dialog_entry: Option<u32>,
-    pub knob_dialog_call_sites: Vec<CallSiteEdit>,
 }
 
 impl PatchEdits {
     pub fn new(hooks: Vec<HookEdit>) -> Self {
-        Self {
-            hooks,
-            knob_dialog_entry: None,
-            knob_dialog_call_sites: Vec::new(),
-        }
+        Self { hooks }
     }
 }
 
@@ -204,23 +190,12 @@ pub fn apply_patch_with_map(
     }
     firmware.resize(offset, 0xff);
     firmware.extend_from_slice(payload);
-    if let Some(target) = edits.knob_dialog_entry {
-        let off = (0x80036c74 - firmware_base) as usize;
-        firmware[off..off + 4].copy_from_slice(&branch(0x80036c74, target, true));
-    }
     for hook in &edits.hooks {
         let off = (hook.address - firmware_base) as usize;
         firmware[off..off + 4].copy_from_slice(&branch(hook.address, hook.target, false));
         for chunk in firmware[off + 4..off + hook.length].chunks_exact_mut(2) {
             chunk.copy_from_slice(&[0, 0xbf]);
         }
-    }
-    for call in &edits.knob_dialog_call_sites {
-        let off = (call.address - firmware_base) as usize;
-        if firmware[off..off + 4] != branch(call.address, call.original, true) {
-            return Err(format!("call guard failed at {:#x}", call.address));
-        }
-        firmware[off..off + 4].copy_from_slice(&branch(call.address, call.target, true));
     }
     let next_base = (base + payload.len() as u32 + 15) & !15;
     Ok(AppliedPatch {
