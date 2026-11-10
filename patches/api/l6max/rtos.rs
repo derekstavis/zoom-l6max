@@ -15,7 +15,7 @@ firmware_functions! {
     pub unsafe fn vPortExitCritical() at 0x8008_e558;
 
     /// Firmware wrapper around xQueueCreateCountingSemaphore(max_count = 1).
-    pub unsafe fn firmware_semaphore_create(slot: u32, initial: u32) at 0x8005_f600;
+    pub unsafe fn fw_semaphore_create(slot: u32, initial: u32) at 0x8005_f600;
 }
 
 firmware_variables! {

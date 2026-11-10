@@ -39,9 +39,10 @@ and must be checked against the supported image before reuse on another
 firmware version.
 
 FreeRTOS functions keep their upstream names and live in `rtos.rs`, including
-the heap functions `pvPortMalloc` and `vPortFree`. Firmware wrappers around
-FreeRTOS keep their firmware-specific names. Model startup routines live in
-`system.rs`; DSP and effect callback declarations live in `dsp.rs`.
+the heap functions `pvPortMalloc` and `vPortFree`. Firmware-owned wrappers use
+the `fw_` prefix, such as `fw_semaphore_create` and the file-service bindings.
+Model startup routines live in `system.rs`; DSP and effect callback
+declarations live in `dsp.rs`.
 
 The `hooks.rs` files define hookable function entries and their guard,
 continuation, and dynamic-dispatch metadata. Both the static builder and SD
