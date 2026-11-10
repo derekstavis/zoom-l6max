@@ -9,7 +9,7 @@ use patch_api::function_entry_hook;
 mod firmware;
 use firmware as firmware_bindings;
 use firmware_bindings::{
-    current_window, dsp_stream_callback, effect_workspace_clear, main_startup_initialize,
+    current_window, dsp_stream_callback, dsp_effect_workspace_clear, sys_main_startup_initialize,
     mixer_apply_channel_parameter, mixer_get_efx_type, mixer_select_efx_callback,
     mixer_set_efx_type,
 };
@@ -217,7 +217,7 @@ fn prepare_static_callback(effect_type: u32) {
 /// Static firmware payloads initialize the workspace control state after the
 /// stock startup routine and before audio tasks can reach the hook sites.
 #[cfg(not(sd_dynamic_module))]
-#[function_entry_hook(main_startup_initialize)]
+#[function_entry_hook(sys_main_startup_initialize)]
 pub unsafe fn dual_efx_initialize_static_state() {
     let continuation = hook_continue();
     reset_static_state();
@@ -368,7 +368,7 @@ pub unsafe fn dual_efx_parameter_edit(
     hook_done()
 }
 
-#[function_entry_hook(effect_workspace_clear)]
+#[function_entry_hook(dsp_effect_workspace_clear)]
 pub unsafe fn dual_efx_effect_workspace_clear() {
     #[cfg(sd_dynamic_module)]
     {
