@@ -6032,7 +6032,9 @@ fn run_knob_dialog(
             return Err("demo level sweep did not reach 69%".into());
         }
         capture(500, "knob-dialog-demo-level-peak")?;
-        for index in 0..60 {
+        // The displayed percentage is rounded from a 0..127 firmware value,
+        // so 60 encoder steps are not always enough to return to zero.
+        for index in 0..128 {
             if decode_text(text_table + 179 * 4)? == "0%" {
                 break;
             }
@@ -6275,10 +6277,22 @@ fn run_knob_dialog(
             (7, 25, "sub-mix"),
             (8, 30, "pan"),
         ] {
+            let selection_applied = inputs.panel.snapshot().applied;
             inputs.tap(button, 50)?;
+            wait_l6_input(
+                session,
+                || inputs.panel.snapshot().applied > selection_applied,
+                "knob-dialog parameter-selection input acknowledgement",
+            )?;
             let selection = inputs.panel.snapshot().guest_ms;
             wait_guest(session, selection, 300, guest_timeout_ms, wall_timeout_s)?;
+            let encoder_applied = inputs.panel.snapshot().applied;
             inputs.knob(0, -1)?;
+            wait_l6_input(
+                session,
+                || inputs.panel.snapshot().applied > encoder_applied,
+                "knob-dialog parameter encoder acknowledgement",
+            )?;
             let frame = capture(400, &format!("window-scene-{name}"))?;
             let offset = [2, 5, 4, 6, 15, 16, 12, 9, 8, 0x120][mode as usize];
             let raw = qmp.read_memory(0, 0x8045ff84 + offset, 1)?[0];
@@ -6500,13 +6514,22 @@ fn run_knob_dialog(
                 resource_after_notification != scene_text_before_notification
             ).into());
         }
-        wait_guest(
-            session,
-            notification_start,
-            5_000,
-            guest_timeout_ms,
-            wall_timeout_s,
-        )?;
+        // The dialog has its own inactivity timeout. Wait for the notification
+        // frame to clear instead of sleeping past that timeout as well.
+        let after_notification = loop {
+            let frame = capture(100, "window-scene-after-notification")?;
+            if frame != notification_frame {
+                break frame;
+            }
+            let elapsed = inputs
+                .panel
+                .snapshot()
+                .guest_ms
+                .wrapping_sub(notification_start);
+            if elapsed >= 5_000 {
+                return Err("stock notification did not clear after its timeout".into());
+            }
+        };
         if qmp.read_memory(0, 0x8020a59c + 20, 4)? != active_slot5.to_le_bytes()
             || qmp.read_memory(0, text_table + 179 * 4, 4)? != shared_resource_pointer.to_le_bytes()
             || qmp.read_memory(0, shared_resource_pointer, 512)? != scene_text_before_notification
@@ -6515,17 +6538,27 @@ fn run_knob_dialog(
                 "stock notification expiry damaged or prematurely removed the custom scene".into(),
             );
         }
-        let after_notification = capture(150, "window-scene-after-notification")?;
-        if after_notification == notification_frame {
-            return Err("stock notification did not clear after its timeout".into());
+        let timeout_start = inputs.panel.snapshot().guest_ms;
+        loop {
+            let ticks = qmp.read_memory(0, state + 2, 1)?[0];
+            if ticks == 0 {
+                break;
+            }
+            let now = inputs.panel.snapshot().guest_ms;
+            if now.wrapping_sub(timeout_start) >= 5_000 {
+                return Err(format!(
+                    "custom scene timeout did not finish after notification expiry; {ticks} ticks remain"
+                )
+                .into());
+            }
+            wait_guest(session, now, 100, guest_timeout_ms, wall_timeout_s)?;
         }
-        let tick = inputs.panel.snapshot().guest_ms;
-        wait_guest(session, tick, 2_500, guest_timeout_ms, wall_timeout_s)?;
         let timeout_cleared = capture(150, "knob-dialog-timeout-cleared")?;
+        if timeout_cleared == after_notification {
+            return Err("knob dialog timeout screenshot still shows the custom scene".into());
+        }
         if timeout_cleared == notification_frame {
-            return Err(
-                "knob dialog timeout screenshot still shows the notification/dialog frame".into(),
-            );
+            return Err("knob dialog timeout screenshot still shows the notification".into());
         }
         let restore_checks = [
             (
