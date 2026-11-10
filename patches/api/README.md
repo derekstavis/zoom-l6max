@@ -16,18 +16,19 @@ api/
   l6/
     fs.rs
     hooks.rs
-    memory.rs
     midi.rs
     mixer.rs
     rtos.rs
+    system.rs
   l6max/
     fs.rs
+    dsp.rs
     gui.rs
     hooks.rs
-    memory.rs
     midi.rs
     mixer.rs
     rtos.rs
+    system.rs
 ```
 
 Each model's `mod.rs` includes its subsystem declarations into one module, so
@@ -36,6 +37,11 @@ binding there when another patch can use the same firmware API; keep feature
 state and private helpers in the patch itself. Addresses are revision-specific
 and must be checked against the supported image before reuse on another
 firmware version.
+
+FreeRTOS functions keep their upstream names and live in `rtos.rs`, including
+the heap functions `pvPortMalloc` and `vPortFree`. Firmware wrappers around
+FreeRTOS keep their firmware-specific names. Model startup routines live in
+`system.rs`; DSP and effect callback declarations live in `dsp.rs`.
 
 The `hooks.rs` files define hookable function entries and their guard,
 continuation, and dynamic-dispatch metadata. Both the static builder and SD

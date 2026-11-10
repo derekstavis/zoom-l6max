@@ -185,12 +185,14 @@ impl<T: Copy> FirmwareVariable<T, ReadWrite> {
 macro_rules! firmware_functions {
     ($( $(#[$meta:meta])* $vis:vis unsafe fn $name:ident ($($arg:ident : $arg_ty:ty),* $(,)?) $(-> $result:ty,)? at $address:expr; )+) => {
         $(
+            #[allow(non_snake_case)]
             #[doc(hidden)]
             $vis mod $name {
                 pub type Abi = unsafe extern "C" fn($($arg_ty),*) $(-> $result)?;
                 pub const ADDRESS: usize = $address;
             }
 
+            #[allow(non_snake_case)]
             $(#[$meta])*
             $vis unsafe fn $name($($arg: $arg_ty),*) $(-> $result)? {
                 let function: unsafe extern "C" fn($($arg_ty),*) $(-> $result)? =
@@ -261,12 +263,14 @@ macro_rules! define_function_hooks {
 macro_rules! firmware_variables {
     (@parse) => {};
     (@parse $(#[$meta:meta])* $vis:vis mut $name:ident : $ty:ty, at $address:expr; $($rest:tt)*) => {
+        #[allow(non_upper_case_globals)]
         $(#[$meta])*
         $vis const $name: $crate::patch_api::FirmwareVariable<$ty, $crate::patch_api::ReadWrite> =
             unsafe { $crate::patch_api::FirmwareVariable::new($address) };
         $crate::firmware_variables!(@parse $($rest)*);
     };
     (@parse $(#[$meta:meta])* $vis:vis $name:ident : $ty:ty, at $address:expr; $($rest:tt)*) => {
+        #[allow(non_upper_case_globals)]
         $(#[$meta])*
         $vis const $name: $crate::patch_api::FirmwareVariable<$ty, $crate::patch_api::ReadOnly> =
             unsafe { $crate::patch_api::FirmwareVariable::new($address) };

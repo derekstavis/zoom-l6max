@@ -185,7 +185,7 @@ unsafe fn alloc(size: usize) -> *mut u8 {
     }
     #[cfg(not(sd_qemu_module_arena))]
     {
-        unsafe { fw_malloc(size) }
+        unsafe { pvPortMalloc(size) }
     }
 }
 unsafe fn free(p: *mut u8) {
@@ -199,7 +199,7 @@ unsafe fn free(p: *mut u8) {
     }
     #[cfg(not(sd_qemu_module_arena))]
     unsafe {
-        fw_free(p);
+        vPortFree(p);
     }
 }
 
