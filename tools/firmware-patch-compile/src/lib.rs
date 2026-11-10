@@ -125,7 +125,18 @@ pub fn compile(
     name: &str,
     base: u32,
 ) -> Result<(Vec<u8>, String), Box<dyn std::error::Error>> {
-    compile_inner(source, root, output, name, base, None, false, false, true)
+    compile_inner(
+        source,
+        root,
+        output,
+        name,
+        base,
+        None,
+        false,
+        false,
+        true,
+        &[],
+    )
 }
 
 /// Compile a deterministic sentinel-firmware variant for browser template
@@ -138,7 +149,18 @@ pub fn compile_sentinel(
     name: &str,
     base: u32,
 ) -> Result<(Vec<u8>, String), Box<dyn std::error::Error>> {
-    compile_inner(source, root, output, name, base, None, false, false, false)
+    compile_inner(
+        source,
+        root,
+        output,
+        name,
+        base,
+        None,
+        false,
+        false,
+        false,
+        &[],
+    )
 }
 
 /// Compile with continuation metadata collected from additional patch roots.
@@ -152,8 +174,24 @@ pub fn compile_with_continuations(
     name: &str,
     base: u32,
 ) -> Result<(Vec<u8>, String), Box<dyn std::error::Error>> {
+    compile_with_continuations_cfg(source, root, continuation_roots, output, name, base, &[])
+}
+
+/// Compile with named additional Rust cfgs. Used for emulator-only loader
+/// experiments that must not be enabled in normal firmware builds.
+pub fn compile_with_continuations_cfg(
+    source: &Path,
+    root: &Path,
+    continuation_roots: &[&Path],
+    output: &Path,
+    name: &str,
+    base: u32,
+    extra_cfgs: &[&str],
+) -> Result<(Vec<u8>, String), Box<dyn std::error::Error>> {
     let _ = continuation_roots;
-    compile_inner(source, root, output, name, base, None, false, true, true)
+    compile_inner(
+        source, root, output, name, base, None, false, true, true, extra_cfgs,
+    )
 }
 
 /// Compile a deterministic sentinel-firmware variant of a loader template.
@@ -168,7 +206,18 @@ pub fn compile_sentinel_with_continuations(
     base: u32,
 ) -> Result<(Vec<u8>, String), Box<dyn std::error::Error>> {
     let _ = continuation_roots;
-    compile_inner(source, root, output, name, base, None, false, true, false)
+    compile_inner(
+        source,
+        root,
+        output,
+        name,
+        base,
+        None,
+        false,
+        true,
+        false,
+        &[],
+    )
 }
 
 /// Compile a payload with its optional SD-specific initialization entry.
@@ -189,6 +238,7 @@ pub fn compile_sd(
         false,
         false,
         true,
+        &[],
     )
 }
 
@@ -201,7 +251,7 @@ pub fn compile_sd_relocatable(
     output: &Path,
     name: &str,
     base: u32,
-) -> Result<(Vec<u8>, String, Vec<Relocation>), Box<dyn std::error::Error>> {
+) -> Result<(Vec<u8>, usize, String, Vec<Relocation>), Box<dyn std::error::Error>> {
     let (image, symbols) = compile_inner(
         source,
         root,
@@ -212,10 +262,19 @@ pub fn compile_sd_relocatable(
         true,
         false,
         true,
+        &[],
     )?;
     let elf = output.join(format!("{name}.payload.elf"));
-    let relocations = parse_relocations(&elf, base, image.len())?;
-    Ok((image, symbols, relocations))
+    let memory_len = symbols
+        .lines()
+        .find(|line| line.split_whitespace().last() == Some("__module_memory_end"))
+        .and_then(|line| u32::from_str_radix(line.split_whitespace().next()?, 16).ok())
+        .and_then(|end| end.checked_sub(base))
+        .map(|length| length as usize)
+        .unwrap_or(image.len())
+        .max(image.len());
+    let relocations = parse_relocations(&elf, base, image.len(), memory_len)?;
+    Ok((image, memory_len, symbols, relocations))
 }
 
 /// Compile the Patch loader against the separate L6 firmware bindings.
@@ -238,6 +297,7 @@ pub fn compile_l6_patch_loader(
         false,
         true,
         true,
+        &[],
     )?;
     Ok((image, symbols))
 }
@@ -262,6 +322,7 @@ pub fn compile_sentinel_l6_patch_loader(
         false,
         true,
         false,
+        &[],
     )
 }
 
@@ -275,6 +336,7 @@ fn compile_inner(
     emit_relocations: bool,
     generate_dynamic_sites: bool,
     validate_guards: bool,
+    extra_cfgs: &[&str],
 ) -> Result<(Vec<u8>, String), Box<dyn std::error::Error>> {
     let generated = output.join(format!("{name}.generated"));
     fs::create_dir_all(&generated)?;
@@ -294,6 +356,7 @@ fn compile_inner(
         base,
         cfg,
         emit_relocations,
+        extra_cfgs,
         &generated,
         &elf,
         &blob,
@@ -320,6 +383,7 @@ fn compile_inner(
         base,
         cfg,
         emit_relocations,
+        extra_cfgs,
         &generated,
         &elf,
         &blob,
@@ -335,12 +399,19 @@ fn compile_payload_pass(
     base: u32,
     cfg: Option<&str>,
     emit_relocations: bool,
+    extra_cfgs: &[&str],
     generated: &Path,
     elf: &Path,
     blob: &Path,
     hook_macro: &Path,
 ) -> Result<(Vec<u8>, String), Box<dyn std::error::Error>> {
     let firmware = fs::read(source.join("main_firmware.bin"))?;
+    let static_state_linker = root.join("linker/link-static.ld");
+    let linker_script = if cfg.is_none() && !emit_relocations && static_state_linker.is_file() {
+        static_state_linker
+    } else {
+        root.join("linker/link.ld")
+    };
     let firmware_is_l6 = firmware.get(4..8) == Some(&0x8000_1415u32.to_le_bytes());
     let mut command = Command::new("rustc");
     command
@@ -372,10 +443,7 @@ fn compile_payload_pass(
         .arg("-C")
         .arg(format!("link-arg=--defsym=PAYLOAD_BASE={base:#x}"))
         .arg("-C")
-        .arg(format!(
-            "link-arg=-T{}",
-            root.join("linker/link.ld").display()
-        ))
+        .arg(format!("link-arg=-T{}", linker_script.display()))
         .arg("-o")
         .arg(&elf);
     if emit_relocations {
@@ -386,6 +454,9 @@ fn compile_payload_pass(
             .arg("link-arg=--emit-relocs");
     }
     if let Some(cfg) = cfg {
+        command.args(["--cfg", cfg]);
+    }
+    for cfg in extra_cfgs {
         command.args(["--cfg", cfg]);
     }
     if firmware_is_l6 && cfg != Some("sd_l6") {
@@ -530,7 +601,7 @@ fn generate_continuations_from_metadata(
             let slot = format!("static_next_{name}_slot");
             let stock = format!("static_stock_{name}");
             assembly.push_str(&format!(
-                ".section .text.continuation_{name}, \"ax\"\n.global {original}\n.thumb_func\n{original}:\n    ldr r12, ={slot}\n    ldr r12, [r12]\n    bx r12\n.align 2\n.global {slot}\n{slot}:\n    .word {stock} + 1\n.thumb_func\n{stock}:\n"
+                ".section .text.continuation_{name}, \"ax\"\n.global {original}\n.thumb_func\n{original}:\n    ldr r12, ={slot}\n    ldr r12, [r12]\n    bx r12\n.align 2\n.global {slot}\n{slot}:\n    .word {stock}\n.thumb_func\n{stock}:\n"
             ));
             let resume = site
                 .address
@@ -1006,7 +1077,8 @@ fn emit_cbz_continuation(
 fn parse_relocations(
     elf: &Path,
     base: u32,
-    image_len: usize,
+    code_len: usize,
+    memory_len: usize,
 ) -> Result<Vec<Relocation>, Box<dyn std::error::Error>> {
     let output = run(Command::new(llvm_tool(
         "L6_LLVM_READELF",
@@ -1016,7 +1088,7 @@ fn parse_relocations(
     .args(["-r"])
     .arg(elf))?;
     let end = base
-        .checked_add(u32::try_from(image_len).map_err(|_| "payload too large")?)
+        .checked_add(u32::try_from(memory_len).map_err(|_| "module too large")?)
         .ok_or("payload address overflow")?;
     let mut in_text = false;
     let mut records = Vec::new();
@@ -1049,7 +1121,7 @@ fn parse_relocations(
             "R_ARM_ABS32" => {
                 if (relative as usize)
                     .checked_add(4)
-                    .is_none_or(|x| x > image_len)
+                    .is_none_or(|x| x > code_len)
                 {
                     return Err("ABS32 relocation outside payload".into());
                 }
@@ -1079,7 +1151,7 @@ fn parse_relocations(
         }
         if (*high_offset as usize)
             .checked_add(4)
-            .is_none_or(|x| x > image_len)
+            .is_none_or(|x| x > code_len)
         {
             return Err("MOVT relocation outside payload".into());
         }

@@ -5156,21 +5156,42 @@ fn sd_fixture_edits(options: &Options, main: &[u8], model: l6fw::Model) -> Resul
         ),
         String,
     > {
-        if bytes.len() < patch_loader_core::dynamic::HEADER_LEN
-            || &bytes[..4] != b"L6SB"
-            || u16::from_le_bytes(bytes[4..6].try_into().unwrap())
-                != patch_loader_core::dynamic::FORMAT_VERSION
+        if bytes.len() < patch_loader_core::dynamic::HEADER_LEN_V8 || &bytes[..4] != b"L6SB" {
+            return Err("invalid SD patch file or CRC".into());
+        }
+        let version = u16::from_le_bytes(bytes[4..6].try_into().unwrap());
+        let header_len = match version {
+            8 => patch_loader_core::dynamic::HEADER_LEN_V8,
+            9 => patch_loader_core::dynamic::HEADER_LEN_V9,
+            _ => return Err("invalid SD patch version".into()),
+        };
+        if bytes.len() < header_len
             || u16::from_le_bytes(bytes[6..8].try_into().unwrap())
                 != patch_loader_core::dynamic::LOADER_ABI
             || patch_loader_core::dynamic::checksum(bytes)
-                != Some(u32::from_le_bytes(bytes[20..24].try_into().unwrap()))
+                != Some(u32::from_le_bytes(if version == 9 {
+                    bytes[24..28].try_into().unwrap()
+                } else {
+                    bytes[20..24].try_into().unwrap()
+                }))
         {
-            return Err("invalid v8 SD patch file or CRC".into());
+            return Err("invalid SD patch file or CRC".into());
         }
         let code_len = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
-        let hook_count = u16::from_le_bytes(bytes[12..14].try_into().unwrap()) as usize;
-        let relocation_count = u16::from_le_bytes(bytes[14..16].try_into().unwrap()) as usize;
-        let expected_len = 24usize
+        let (memory_len, hook_count, relocation_count) = if version == 9 {
+            (
+                u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize,
+                u16::from_le_bytes(bytes[16..18].try_into().unwrap()) as usize,
+                u16::from_le_bytes(bytes[18..20].try_into().unwrap()) as usize,
+            )
+        } else {
+            (
+                code_len,
+                u16::from_le_bytes(bytes[12..14].try_into().unwrap()) as usize,
+                u16::from_le_bytes(bytes[14..16].try_into().unwrap()) as usize,
+            )
+        };
+        let expected_len = header_len
             .checked_add(code_len)
             .and_then(|n| {
                 n.checked_add(hook_count.checked_mul(patch_loader_core::dynamic::HOOK_RECORD_LEN)?)
@@ -5178,11 +5199,12 @@ fn sd_fixture_edits(options: &Options, main: &[u8], model: l6fw::Model) -> Resul
             .and_then(|n| n.checked_add(relocation_count.checked_mul(12)?))
             .ok_or("SD patch size overflow")?;
         if expected_len != bytes.len()
-            || code_len > 0x8000
+            || code_len > memory_len
+            || memory_len > 0x60000
             || hook_count > patch_loader_core::dynamic::MAX_HOOKS_PER_MODULE
             || relocation_count > 256
         {
-            return Err("invalid v8 SD patch lengths or counts".into());
+            return Err("invalid SD patch lengths or counts".into());
         }
         struct Reader<'a>(&'a [u8]);
         impl patch_loader_core::bundle::Reader for Reader<'_> {
@@ -5197,12 +5219,12 @@ fn sd_fixture_edits(options: &Options, main: &[u8], model: l6fw::Model) -> Resul
         let mut reader = Reader(bytes);
         let pending = patch_loader_core::dynamic::read_header(
             &mut reader,
-            0x8000,
+            0x60000,
             patch_loader_core::dynamic::MAX_HOOKS_PER_MODULE,
             256,
         )
-        .map_err(|e| format!("invalid v8 SD patch header: {e:?}"))?;
-        let mut payload = vec![0; code_len];
+        .map_err(|e| format!("invalid SD patch header: {e:?}"))?;
+        let mut payload = vec![0; memory_len];
         let mut hooks = vec![patch_loader_core::dynamic::Hook::default(); hook_count];
         let header = patch_loader_core::dynamic::read_body(
             &mut reader,
@@ -5212,7 +5234,7 @@ fn sd_fixture_edits(options: &Options, main: &[u8], model: l6fw::Model) -> Resul
             0,
             0,
         )
-        .map_err(|e| format!("invalid v8 SD patch body: {e:?}"))?;
+        .map_err(|e| format!("invalid SD patch body: {e:?}"))?;
         let module_hooks = hooks.clone();
         let mut edits = Vec::with_capacity(hook_count);
         for hook in hooks {
@@ -5228,7 +5250,8 @@ fn sd_fixture_edits(options: &Options, main: &[u8], model: l6fw::Model) -> Resul
             edits.push((hook.address, original, hook.entry_offset));
         }
         let mut relocations = Vec::with_capacity(relocation_count);
-        let reloc_start = 24 + code_len + hook_count * patch_loader_core::dynamic::HOOK_RECORD_LEN;
+        let reloc_start =
+            header_len + code_len + hook_count * patch_loader_core::dynamic::HOOK_RECORD_LEN;
         for bytes in bytes[reloc_start..].chunks_exact(12) {
             let kind = u32::from_le_bytes(bytes[..4].try_into().unwrap());
             let first = u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as usize;

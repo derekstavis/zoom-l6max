@@ -359,8 +359,23 @@ pub mod bundle {
         linked_base: u32,
         loaded_base: u32,
     ) -> Result<(), Error> {
+        relocate_with_memory(image, relocations, linked_base, loaded_base, image.len())
+    }
+
+    /// Apply relocations whose absolute targets may point into zero-filled
+    /// writable state following the streamed code image.
+    pub fn relocate_with_memory<I: Iterator<Item = Relocation>>(
+        image: &mut [u8],
+        relocations: I,
+        linked_base: u32,
+        loaded_base: u32,
+        memory_len: usize,
+    ) -> Result<(), Error> {
+        if memory_len < image.len() {
+            return Err(Error::Relocation);
+        }
         let linked_end = linked_base
-            .checked_add(u32::try_from(image.len()).map_err(|_| Error::Relocation)?)
+            .checked_add(u32::try_from(memory_len).map_err(|_| Error::Relocation)?)
             .ok_or(Error::Relocation)?;
         let delta = i64::from(loaded_base) - i64::from(linked_base);
         for relocation in relocations {
@@ -520,17 +535,17 @@ pub mod bundle {
 pub mod dynamic {
     use super::bundle::{self, ReadError, Reader, Relocation};
 
-    pub const HEADER_LEN: usize = 24;
-    pub const FORMAT_VERSION: u16 = 8;
+    pub const HEADER_LEN_V8: usize = 24;
+    pub const HEADER_LEN_V9: usize = 28;
+    pub const FORMAT_VERSION: u16 = 9;
     pub const LOADER_ABI: u16 = 2;
     pub const HOOK_RECORD_LEN: usize = 12;
     pub const RELOCATION_RECORD_LEN: usize = 12;
     /// Maximum number of distinct hook sites the resident loader can index.
     /// Keep this synchronized with the fixed registry reserved by Patch loader.
-    // The current L6max catalog exposes seven dynamic sites. Keep one spare
-    // chain and bound per-module loader stack use while covering MIDI Control's
-    // six registrations.
-    pub const MAX_FUNCTION_CHAINS: usize = 8;
+    // The L6max catalog exposes ten dynamic sites. Keep the registry sized
+    // for the complete catalog and bound per-module loader stack use.
+    pub const MAX_FUNCTION_CHAINS: usize = 10;
     /// Maximum hook records accepted in one patch file. This covers the
     /// current multi-site patch prototypes while keeping loader stack use
     /// bounded.
@@ -683,6 +698,8 @@ pub mod dynamic {
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub struct Header {
         pub code_len: usize,
+        /// Total writable allocation size, including zero-filled module state.
+        pub memory_len: usize,
         pub hook_count: usize,
         pub relocation_count: usize,
         pub init_offset: u32,
@@ -743,21 +760,42 @@ pub mod dynamic {
         max_hooks: usize,
         max_relocations: usize,
     ) -> Result<Pending, Error> {
-        let mut header = [0u8; HEADER_LEN];
-        read_exact(reader, &mut header)?;
-        if &header[..4] != b"L6SB"
-            || u16_at(&header, 4) != FORMAT_VERSION
-            || u16_at(&header, 6) != LOADER_ABI
-        {
+        let mut header = [0u8; HEADER_LEN_V9];
+        read_exact(reader, &mut header[..8])?;
+        if &header[..4] != b"L6SB" || u16_at(&header, 6) != LOADER_ABI {
             return Err(Error::Invalid);
         }
-        let code_len = u32_at(&header, 8) as usize;
-        let hook_count = u16_at(&header, 12) as usize;
-        let relocation_count = u16_at(&header, 14) as usize;
-        let init_offset = u32_at(&header, 16);
-        let expected_crc = u32_at(&header, 20);
+        let version = u16_at(&header, 4);
+        let (code_len, memory_len, hook_count, relocation_count, init_offset, crc_offset) =
+            match version {
+                8 => {
+                    read_exact(reader, &mut header[8..HEADER_LEN_V8])?;
+                    (
+                        u32_at(&header, 8) as usize,
+                        u32_at(&header, 8) as usize,
+                        u16_at(&header, 12) as usize,
+                        u16_at(&header, 14) as usize,
+                        u32_at(&header, 16),
+                        20,
+                    )
+                }
+                FORMAT_VERSION => {
+                    read_exact(reader, &mut header[8..HEADER_LEN_V9])?;
+                    (
+                        u32_at(&header, 8) as usize,
+                        u32_at(&header, 12) as usize,
+                        u16_at(&header, 16) as usize,
+                        u16_at(&header, 18) as usize,
+                        u32_at(&header, 20),
+                        24,
+                    )
+                }
+                _ => return Err(Error::Invalid),
+            };
+        let expected_crc = u32_at(&header, crc_offset);
         if code_len == 0
-            || code_len > max_code_len
+            || memory_len < code_len
+            || memory_len > max_code_len
             || hook_count == 0
             || hook_count > max_hooks
             || relocation_count > max_relocations
@@ -768,18 +806,20 @@ pub mod dynamic {
         Ok(Pending {
             header: Header {
                 code_len,
+                memory_len,
                 hook_count,
                 relocation_count,
                 init_offset,
                 crc32: expected_crc,
             },
             // Header checksum bytes are deliberately omitted from CRC input.
-            crc_state: crc_update(!0u32, &header[..20]),
+            crc_state: crc_update(!0u32, &header[..crc_offset]),
         })
     }
 
-    /// Read one v8 body directly into its final code allocation. Relocations
-    /// are applied as records arrive; hooks remain unpublished until CRC pass.
+    /// Stream code into the final allocation, zero its writable tail, and
+    /// apply relocations as records arrive. Hooks remain unpublished until CRC
+    /// validation succeeds.
     pub fn read_body<R: Reader>(
         reader: &mut R,
         pending: Pending,
@@ -789,12 +829,13 @@ pub mod dynamic {
         loaded_base: u32,
     ) -> Result<Header, Error> {
         let header = pending.header;
-        if code.len() != header.code_len || hooks.len() < header.hook_count {
+        if code.len() != header.memory_len || hooks.len() < header.hook_count {
             return Err(Error::TooLarge);
         }
         let mut crc = pending.crc_state;
-        read_exact(reader, code)?;
-        crc = crc_update(crc, code);
+        read_exact(reader, &mut code[..header.code_len])?;
+        crc = crc_update(crc, &code[..header.code_len]);
+        code[header.code_len..].fill(0);
 
         let mut hook_bytes = [0u8; HOOK_RECORD_LEN];
         for index in 0..header.hook_count {
@@ -835,8 +876,14 @@ pub mod dynamic {
                 },
                 _ => return Err(Error::Relocation),
             };
-            bundle::relocate(code, core::iter::once(relocation), linked_base, loaded_base)
-                .map_err(|_| Error::Relocation)?;
+            bundle::relocate_with_memory(
+                &mut code[..header.code_len],
+                core::iter::once(relocation),
+                linked_base,
+                loaded_base,
+                header.memory_len,
+            )
+            .map_err(|_| Error::Relocation)?;
         }
         if !crc != header.crc32 {
             return Err(Error::Checksum);
@@ -847,11 +894,17 @@ pub mod dynamic {
 
     /// CRC-32/ISO-HDLC for a complete v8 file, excluding bytes 20..24.
     pub fn checksum(file: &[u8]) -> Option<u32> {
-        if file.len() < HEADER_LEN || &file[..4] != b"L6SB" {
+        if file.len() < HEADER_LEN_V8 || &file[..4] != b"L6SB" {
             return None;
         }
-        let crc = crc_update(!0u32, &file[..20]);
-        Some(!crc_update(crc, &file[HEADER_LEN..]))
+        let version = u16_at(file, 4);
+        let (header_len, crc_offset) = match version {
+            8 => (HEADER_LEN_V8, 20),
+            FORMAT_VERSION if file.len() >= HEADER_LEN_V9 => (HEADER_LEN_V9, 24),
+            _ => return None,
+        };
+        let crc = crc_update(!0u32, &file[..crc_offset]);
+        Some(!crc_update(crc, &file[header_len..]))
     }
 }
 
@@ -926,6 +979,49 @@ mod dynamic_stream_tests {
             }
         );
         assert_eq!(u32::from_le_bytes(code[..4].try_into().unwrap()), 0x2004);
+    }
+
+    #[test]
+    fn v9_streams_code_and_relocates_into_zeroed_module_state() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"L6SB");
+        bytes.extend_from_slice(&9u16.to_le_bytes());
+        bytes.extend_from_slice(&2u16.to_le_bytes());
+        bytes.extend_from_slice(&4u32.to_le_bytes()); // code_len
+        bytes.extend_from_slice(&12u32.to_le_bytes()); // memory_len
+        bytes.extend_from_slice(&1u16.to_le_bytes()); // hooks
+        bytes.extend_from_slice(&1u16.to_le_bytes()); // relocations
+        bytes.extend_from_slice(&0u32.to_le_bytes()); // init_offset
+        bytes.extend_from_slice(&[0; 4]); // CRC
+        bytes.extend_from_slice(&8u32.to_le_bytes()); // code points into state
+        bytes.extend_from_slice(&0x8000_1000u32.to_le_bytes());
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        bytes.extend_from_slice(&1u32.to_le_bytes()); // ABS32
+        bytes.extend_from_slice(&0u32.to_le_bytes()); // relocation site
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        let checksum = dynamic::checksum(&bytes).unwrap();
+        bytes[24..28].copy_from_slice(&checksum.to_le_bytes());
+
+        let mut reader = Chunks {
+            bytes: &bytes,
+            chunk: 2,
+        };
+        let pending = dynamic::read_header(&mut reader, 32, 4, 8).unwrap();
+        assert_eq!(pending.header.code_len, 4);
+        assert_eq!(pending.header.memory_len, 12);
+        let mut allocation = [0xa5; 12];
+        let mut hooks = [Hook::default(); 4];
+        let header =
+            dynamic::read_body(&mut reader, pending, &mut allocation, &mut hooks, 0, 0x2000)
+                .unwrap();
+        assert_eq!(header.code_len, 4);
+        assert_eq!(header.memory_len, 12);
+        assert_eq!(
+            u32::from_le_bytes(allocation[..4].try_into().unwrap()),
+            0x2008
+        );
+        assert_eq!(&allocation[4..], &[0; 8]);
     }
 
     #[test]

@@ -23,8 +23,16 @@ const MODULE_BASE: usize = 0x8021_0000;
 #[cfg(sd_l6)]
 const MODULE_BASE: usize = 0x801f_0000;
 const MODULE_LIMIT: usize = 0x8000;
-const MODULE_CAPACITY: usize = MODULE_LIMIT;
 const REGISTRY_BASE: usize = MODULE_BASE + MODULE_LIMIT;
+// Cap a single code + zero-filled state allocation at 384 KiB. Larger modules
+// are rejected before allocating from the shared FreeRTOS heap.
+const MODULE_CAPACITY: usize = 0x60000;
+#[cfg(sd_qemu_module_arena)]
+const MODULE_ARENA_BASE: usize = 0x83e0_0000;
+#[cfg(sd_qemu_module_arena)]
+const MODULE_ARENA_END: usize = MODULE_ARENA_BASE + 0x80000;
+#[cfg(sd_qemu_module_arena)]
+const MODULE_ARENA_NEXT_WORD: usize = REGISTRY_BASE + 0x700;
 const REGISTRY_MAGIC: u32 = 0x4c36_5244;
 const DEBUG_WORD: usize = REGISTRY_BASE + 4;
 const CLAIM_WORD: usize = REGISTRY_BASE + 8;
@@ -85,10 +93,13 @@ unsafe fn ensure_registry() {
             ptr::write_volatile(DEBUG_WORD as *mut u32, 0);
             ptr::write_volatile(MODULE_PTR_WORD as *mut u32, 0);
             ptr::write_volatile(MODULE_LEN_WORD as *mut u32, 0);
+            #[cfg(sd_qemu_module_arena)]
+            ptr::write_volatile(MODULE_ARENA_NEXT_WORD as *mut u32, MODULE_ARENA_BASE as u32);
             ptr::write_bytes(
                 HOOK_CHAIN_TABLE as *mut u8,
                 0,
-                core::mem::size_of::<[core_loader::dynamic::FunctionHookChain; MAX_FUNCTION_CHAINS]>(),
+                core::mem::size_of::<[core_loader::dynamic::FunctionHookChain; MAX_FUNCTION_CHAINS]>(
+                ),
             );
             ptr::write_bytes(
                 DYNAMIC_HANDLER_TABLE as *mut u8,
@@ -113,6 +124,8 @@ pub unsafe extern "C" fn sd_reset_registry() {
         // Forget the old address before any registered hooks can execute.
         ptr::write_volatile(MODULE_PTR_WORD as *mut u32, 0);
         ptr::write_volatile(MODULE_LEN_WORD as *mut u32, 0);
+        #[cfg(sd_qemu_module_arena)]
+        ptr::write_volatile(MODULE_ARENA_NEXT_WORD as *mut u32, MODULE_ARENA_BASE as u32);
         ptr::write_bytes(
             HOOK_CHAIN_TABLE as *mut u8,
             0,
@@ -135,14 +148,10 @@ unsafe fn ready() -> u32 {
     unsafe { fw_ready() }
 }
 unsafe fn open(handle: *mut u32, path: *const u16) -> i32 {
-    unsafe {
-        fw_open(handle, path, 0, 0x100)
-    }
+    unsafe { fw_open(handle, path, 0, 0x100) }
 }
 unsafe fn find_first(path: *const u16, attributes: u32, info: *mut u8) -> i32 {
-    unsafe {
-        fw_find_first(path, attributes, info)
-    }
+    unsafe { fw_find_first(path, attributes, info) }
 }
 unsafe fn find_next(info: *mut u8) -> i32 {
     unsafe { fw_find_next(info) }
@@ -151,9 +160,7 @@ unsafe fn find_close(info: *mut u8) -> i32 {
     unsafe { fw_find_close(info) }
 }
 unsafe fn read(handle: u32, dest: *mut u8, count: u32, actual: *mut u32) -> i32 {
-    unsafe {
-        fw_read(handle, dest, count, actual)
-    }
+    unsafe { fw_read(handle, dest, count, actual) }
 }
 unsafe fn close(handle: u32) {
     unsafe {
@@ -161,9 +168,36 @@ unsafe fn close(handle: u32) {
     }
 }
 unsafe fn alloc(size: usize) -> *mut u8 {
-    unsafe { fw_malloc(size) }
+    #[cfg(sd_qemu_module_arena)]
+    {
+        let next = unsafe { ptr::read_volatile(MODULE_ARENA_NEXT_WORD as *const u32) as usize };
+        let Some(start) = next.checked_add(7).map(|address| address & !7) else {
+            return ptr::null_mut();
+        };
+        let Some(end) = start.checked_add(size) else {
+            return ptr::null_mut();
+        };
+        if start < MODULE_ARENA_BASE || end > MODULE_ARENA_END {
+            return ptr::null_mut();
+        }
+        unsafe { ptr::write_volatile(MODULE_ARENA_NEXT_WORD as *mut u32, end as u32) };
+        start as *mut u8
+    }
+    #[cfg(not(sd_qemu_module_arena))]
+    {
+        unsafe { fw_malloc(size) }
+    }
 }
 unsafe fn free(p: *mut u8) {
+    #[cfg(sd_qemu_module_arena)]
+    {
+        let address = p as usize;
+        let current = unsafe { ptr::read_volatile(MODULE_ARENA_NEXT_WORD as *const u32) as usize };
+        if (MODULE_ARENA_BASE..=current).contains(&address) {
+            unsafe { ptr::write_volatile(MODULE_ARENA_NEXT_WORD as *mut u32, address as u32) };
+        }
+    }
+    #[cfg(not(sd_qemu_module_arena))]
     unsafe {
         fw_free(p);
     }
@@ -303,10 +337,7 @@ unsafe fn find_next_patch(
             let best_order = if selected_len == 0 {
                 core::cmp::Ordering::Less
             } else {
-                core_loader::dynamic::compare_patch_filenames(
-                    &candidate,
-                    &selected[..selected_len],
-                )
+                core_loader::dynamic::compare_patch_filenames(&candidate, &selected[..selected_len])
             };
             if after_order == core::cmp::Ordering::Greater
                 && best_order == core::cmp::Ordering::Less
@@ -393,17 +424,14 @@ unsafe fn find_hook_chain(
         if value.count != 0 && value.address == address {
             return Some(chain);
         }
-        if free.is_none()
-            && value.count == 0
-            && !reserved.contains(&chain)
-        {
+        if free.is_none() && value.count == 0 && !reserved.contains(&chain) {
             free = Some(chain);
         }
     }
     free
 }
 
-/// Load one compact v8 module directly into its final heap allocation. Hook
+/// Load one compact v9 (or compatible v8) module directly into its final heap allocation. Hook
 /// registrations stay local until the streaming CRC, relocations, and every
 /// site/capacity check pass. The complete module's hook set is published under
 /// one interrupt-masked registry update.
@@ -425,7 +453,7 @@ unsafe fn load_dynamic<R: core_loader::bundle::Reader>(reader: &mut R, order: u3
     if pending.header.init_offset != 0 {
         return false;
     }
-    let module = unsafe { alloc(pending.header.code_len) };
+    let module = unsafe { alloc(pending.header.memory_len) };
     if module.is_null() || module as usize > u32::MAX as usize {
         if !module.is_null() {
             unsafe { free(module) };
@@ -434,7 +462,7 @@ unsafe fn load_dynamic<R: core_loader::bundle::Reader>(reader: &mut R, order: u3
     }
     let loaded_base = module as usize;
     let mut hooks = [core_loader::dynamic::Hook::default(); MAX_HOOKS];
-    let code = unsafe { slice::from_raw_parts_mut(module, pending.header.code_len) };
+    let code = unsafe { slice::from_raw_parts_mut(module, pending.header.memory_len) };
     let header = match core_loader::dynamic::read_body(
         reader,
         pending,
@@ -485,7 +513,7 @@ unsafe fn load_dynamic<R: core_loader::bundle::Reader>(reader: &mut R, order: u3
     for hook in hooks.iter().take(header.hook_count).copied() {
         if hook.next_slot_offset == u32::MAX {
             unsafe {
-                clear_payload(loaded_base, header.code_len);
+                clear_payload(loaded_base, header.memory_len);
                 free(module);
             }
             return false;
@@ -496,7 +524,7 @@ unsafe fn load_dynamic<R: core_loader::bundle::Reader>(reader: &mut R, order: u3
             .position(|site| site.address == hook.address)
         else {
             unsafe {
-                clear_payload(loaded_base, header.code_len);
+                clear_payload(loaded_base, header.memory_len);
                 free(module);
             }
             return false;
@@ -504,7 +532,7 @@ unsafe fn load_dynamic<R: core_loader::bundle::Reader>(reader: &mut R, order: u3
         let chain = unsafe { find_hook_chain(hook.address, &reserved_chains[..planned]) };
         let Some(chain) = chain else {
             unsafe {
-                clear_payload(loaded_base, header.code_len);
+                clear_payload(loaded_base, header.memory_len);
                 free(module);
             }
             return false;
@@ -513,16 +541,11 @@ unsafe fn load_dynamic<R: core_loader::bundle::Reader>(reader: &mut R, order: u3
         let expected_count = chain_value.count;
         let entry = loaded_base as u32 + hook.entry_offset | 1;
         let next_slot = loaded_base as u32 + hook.next_slot_offset;
-        let previous_slot = chain_value.append(
-            hook.address,
-            entry,
-            next_slot,
-            order,
-            loaded_base as u32,
-        );
+        let previous_slot =
+            chain_value.append(hook.address, entry, next_slot, order, loaded_base as u32);
         if previous_slot.is_err() {
             unsafe {
-                clear_payload(loaded_base, header.code_len);
+                clear_payload(loaded_base, header.memory_len);
                 free(module);
             }
             return false;
@@ -540,13 +563,13 @@ unsafe fn load_dynamic<R: core_loader::bundle::Reader>(reader: &mut R, order: u3
     }
     if planned != header.hook_count {
         unsafe {
-            clear_payload(loaded_base, header.code_len);
+            clear_payload(loaded_base, header.memory_len);
             free(module);
         }
         return false;
     }
     unsafe {
-        clean_cache(loaded_base, header.code_len);
+        clean_cache(loaded_base, header.memory_len);
         synchronize_instructions();
         let primask: u32;
         asm!("mrs {0}, PRIMASK", "cpsid i", out(reg) primask, options(nostack, preserves_flags));
@@ -565,7 +588,7 @@ unsafe fn load_dynamic<R: core_loader::bundle::Reader>(reader: &mut R, order: u3
                 || (current_chain.count != 0 && current_head != current_chain.links[0].entry)
             {
                 asm!("msr PRIMASK, {0}", in(reg) primask, options(nostack, preserves_flags));
-                clear_payload(loaded_base, header.code_len);
+                clear_payload(loaded_base, header.memory_len);
                 free(module);
                 return false;
             }
@@ -578,20 +601,21 @@ unsafe fn load_dynamic<R: core_loader::bundle::Reader>(reader: &mut R, order: u3
                 .nth(plan.dispatch_index)
                 .unwrap()
                 .name;
-            let continuation =
-                (crate::patch_api::__continuations::address(site_name) as u32) | 1;
+            let continuation = (crate::patch_api::__continuations::address(site_name) as u32) | 1;
             ptr::write_volatile(plan.next_slot as *mut u32, continuation);
         }
         for plan in &plans[..planned] {
             let slot = (DYNAMIC_HANDLER_TABLE + plan.dispatch_index * 4) as *mut u32;
             let mut updated_chain = ptr::read_volatile(plan.chain);
-            let previous_slot = updated_chain.append(
-                plan.address,
-                plan.entry,
-                plan.next_slot,
-                order,
-                loaded_base as u32,
-            ).unwrap();
+            let previous_slot = updated_chain
+                .append(
+                    plan.address,
+                    plan.entry,
+                    plan.next_slot,
+                    order,
+                    loaded_base as u32,
+                )
+                .unwrap();
             ptr::write_volatile(plan.chain, updated_chain);
             if let Some(previous_slot) = previous_slot {
                 ptr::write_volatile(previous_slot as *mut u32, plan.entry);
@@ -600,7 +624,7 @@ unsafe fn load_dynamic<R: core_loader::bundle::Reader>(reader: &mut R, order: u3
             }
         }
         ptr::write_volatile(MODULE_PTR_WORD as *mut u32, loaded_base as u32);
-        ptr::write_volatile(MODULE_LEN_WORD as *mut u32, header.code_len as u32);
+        ptr::write_volatile(MODULE_LEN_WORD as *mut u32, header.memory_len as u32);
         ptr::write_volatile(DEBUG_WORD as *mut u32, 0x327);
         asm!("msr PRIMASK, {0}", in(reg) primask, options(nostack, preserves_flags));
     }
@@ -616,8 +640,7 @@ unsafe fn load_patch_files() -> bool {
     let mut path = [0u16; SEARCH_NAME_CAPACITY + 12];
     for order in 0..MAX_PATCH_FILES {
         let mut selected = [0; SEARCH_NAME_CAPACITY];
-        let selected_len = match unsafe { find_next_patch(&last_name[..last_len], &mut selected) }
-        {
+        let selected_len = match unsafe { find_next_patch(&last_name[..last_len], &mut selected) } {
             Ok(Some(len)) => len,
             Ok(None) => break,
             Err(()) => break,
@@ -661,10 +684,7 @@ unsafe fn claim() -> bool {
 }
 unsafe fn finish(success: bool) {
     unsafe {
-        ptr::write_volatile(
-            CLAIM_WORD as *mut u32,
-            if success { 1 } else { 0 },
-        );
+        ptr::write_volatile(CLAIM_WORD as *mut u32, if success { 1 } else { 0 });
     }
 }
 

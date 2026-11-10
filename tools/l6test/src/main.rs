@@ -610,17 +610,29 @@ fn fixture_options(
                     .ok_or("dynamic module report has no pass-through entry")?
                     as u32;
                 let code_len = u32::from_le_bytes(original[8..12].try_into().unwrap()) as usize;
-                let hook_count = u16::from_le_bytes(original[12..14].try_into().unwrap()) as usize;
-                if hook_count != 1 || original[4..6] != 8u16.to_le_bytes() {
-                    return Err("ordered-chain fixture expects one v8 hook".into());
+                let version = u16::from_le_bytes(original[4..6].try_into().unwrap());
+                let (header_len, hook_count) = if version == 9 {
+                    (
+                        patch_loader_core::dynamic::HEADER_LEN_V9,
+                        u16::from_le_bytes(original[16..18].try_into().unwrap()) as usize,
+                    )
+                } else {
+                    (
+                        patch_loader_core::dynamic::HEADER_LEN_V8,
+                        u16::from_le_bytes(original[12..14].try_into().unwrap()) as usize,
+                    )
+                };
+                if hook_count != 1 || !matches!(version, 8 | 9) {
+                    return Err("ordered-chain fixture expects one dynamic hook".into());
                 }
                 let mut pass_through_module = original.clone();
-                let entry_offset = patch_loader_core::dynamic::HEADER_LEN + code_len + 4;
+                let entry_offset = header_len + code_len + 4;
                 pass_through_module[entry_offset..entry_offset + 4]
                     .copy_from_slice(&pass_through.to_le_bytes());
                 let checksum = patch_loader_core::dynamic::checksum(&pass_through_module)
                     .ok_or("invalid dynamic fixture checksum")?;
-                pass_through_module[20..24].copy_from_slice(&checksum.to_le_bytes());
+                let checksum_offset = if version == 9 { 24..28 } else { 20..24 };
+                pass_through_module[checksum_offset].copy_from_slice(&checksum.to_le_bytes());
                 let first_path = dir.join("sd-chain-first.BIN");
                 let second_path = dir.join("sd-chain-second.BIN");
                 fs::write(&first_path, pass_through_module).map_err(|e| e.to_string())?;
@@ -1619,9 +1631,16 @@ mod tests {
             u16::from_le_bytes(bytes[4..6].try_into().unwrap()),
             patch_loader_core::dynamic::FORMAT_VERSION
         );
+        let checksum_offset = if bytes[4..6] == 9u16.to_le_bytes() {
+            24..28
+        } else {
+            20..24
+        };
         assert_eq!(
             patch_loader_core::dynamic::checksum(&bytes),
-            Some(u32::from_le_bytes(bytes[20..24].try_into().unwrap()))
+            Some(u32::from_le_bytes(
+                bytes[checksum_offset].try_into().unwrap()
+            ))
         );
         let package = fixture.firmware_package.as_ref().unwrap();
         let unpacked = dir.join("verify-loader");

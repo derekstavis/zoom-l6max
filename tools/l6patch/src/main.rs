@@ -2,8 +2,8 @@
 mod sd_bundle;
 use firmware_patch_compile::{
     FunctionHookSiteMetadata, HookRegistration, compile, compile_l6_patch_loader, compile_sd,
-    compile_sd_relocatable, compile_with_continuations, decode_thumb_bl_target,
-    function_hook_sites, hook_registrations, symbol,
+    compile_sd_relocatable, compile_with_continuations, compile_with_continuations_cfg,
+    decode_thumb_bl_target, function_hook_sites, hook_registrations, symbol,
 };
 use firmware_patch_core::{
     FirmwareModel, HookEdit, L6_MAIN_BASE, L6_SLOT_END, PATCHES, PatchEdits, apply_patch_with_map,
@@ -14,7 +14,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
-const USAGE: &str = "Usage: l6patch INPUT_UNPACKED_DIR OUTPUT_DIR [--patch NAME]... [--update-version FOUR_DIGITS] [--experimental-patch-bundle | --experimental-patch-loader]\n\
+const USAGE: &str = "Usage: l6patch INPUT_UNPACKED_DIR OUTPUT_DIR [--patch NAME]... [--update-version FOUR_DIGITS] [--experimental-patch-bundle | --experimental-patch-loader] [--experimental-qemu-module-arena]\n\
 Patches: knob-dialog, midi-control, midi-sync, din-mixer-control. Repeat --patch to combine them. MIDI Control and MIDI Sync can be combined. The Patch loader is experimental and unqualified.";
 
 const SD_MODULE_BASE: u32 = 0x8011_0000;
@@ -29,6 +29,7 @@ struct Options {
     version: Option<String>,
     experimental_sd_bundle: bool,
     experimental_patch_loader: bool,
+    experimental_qemu_module_arena: bool,
 }
 fn parse_args() -> Result<Options, Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
@@ -39,6 +40,7 @@ fn parse_args() -> Result<Options, Box<dyn std::error::Error>> {
     let mut version = None;
     let mut experimental_sd_bundle = false;
     let mut experimental_patch_loader = false;
+    let mut experimental_qemu_module_arena = false;
     while let Some(flag) = args.next() {
         if flag == "--experimental-patch-bundle" {
             experimental_sd_bundle = true;
@@ -46,6 +48,10 @@ fn parse_args() -> Result<Options, Box<dyn std::error::Error>> {
         }
         if flag == "--experimental-patch-loader" {
             experimental_patch_loader = true;
+            continue;
+        }
+        if flag == "--experimental-qemu-module-arena" {
+            experimental_qemu_module_arena = true;
             continue;
         }
         let value = args.next().ok_or(USAGE)?;
@@ -79,6 +85,9 @@ fn parse_args() -> Result<Options, Box<dyn std::error::Error>> {
     if experimental_sd_bundle && experimental_patch_loader {
         return Err("build the loader and SD bundle in separate output directories".into());
     }
+    if experimental_qemu_module_arena && !experimental_patch_loader {
+        return Err("the QEMU module arena requires --experimental-patch-loader".into());
+    }
     Ok(Options {
         source: PathBuf::from(source),
         output: PathBuf::from(output),
@@ -86,6 +95,7 @@ fn parse_args() -> Result<Options, Box<dyn std::error::Error>> {
         version,
         experimental_sd_bundle,
         experimental_patch_loader,
+        experimental_qemu_module_arena,
     })
 }
 #[derive(Debug)]
@@ -255,6 +265,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         l6fw::Model::L6 => (FirmwareModel::L6, L6_MAIN_BASE, L6_SLOT_END),
         l6fw::Model::L6max => (FirmwareModel::L6max, 0x80000000, 0x801a2ff8),
     };
+    if options.experimental_qemu_module_arena && model != l6fw::Model::L6max {
+        return Err("the experimental QEMU module arena is L6max-only".into());
+    }
     let (module_base, module_end) = match model {
         l6fw::Model::L6 => (L6_SD_MODULE_BASE, L6_SD_MODULE_END),
         l6fw::Model::L6max => (SD_MODULE_BASE, SD_MODULE_END),
@@ -312,7 +325,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         fs::create_dir_all(&patch_dir)?;
         let mut reports = Vec::new();
         for (name, root) in patches.iter().zip(&roots) {
-            let (module, symbols, relocations) =
+            let (module, memory_len, symbols, relocations) =
                 compile_sd_relocatable(&source, root, &output, name, 0)?;
             let sites = function_hook_sites(&output.join(format!("{name}.payload.elf")))?;
             let registrations = hook_registrations(&symbols)?;
@@ -391,13 +404,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 )
                 .into());
             }
-            let file = sd_bundle::build_dynamic_v8(&module, 0, &handlers, &relocations)?;
+            let file =
+                sd_bundle::build_dynamic_v9(&module, memory_len, 0, &handlers, &relocations)?;
             let filename = format!("{}.BIN", name.to_ascii_uppercase());
             fs::write(patch_dir.join(&filename), &file)?;
             reports.push(serde_json::json!({
                 "name": name,
                 "file": format!("PATCHES/{filename}"),
                 "payload_length": module.len(),
+                "memory_length": memory_len,
                 "relocation_count": relocations.len(),
                 "pass_through_entry_offsets": pass_through,
                 "hooks": handlers.iter().map(|(address, offset, next_offset)| serde_json::json!({"address":format!("{address:#x}"),"entry_offset":offset,"next_slot_offset":next_offset})).collect::<Vec<_>>(),
@@ -405,7 +420,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }));
         }
         let report = serde_json::json!({
-            "version": 7,
+            "version": 9,
             "loader_abi": patch_loader_core::dynamic::LOADER_ABI,
             "model": if model == l6fw::Model::L6 { "L6" } else { "L6max" },
             "source_sha256": digest,
@@ -457,14 +472,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 &continuation_roots,
             )?
         } else {
-            compile_with_continuations(
-                &source,
-                &root,
-                &continuation_roots,
-                &output,
-                "patch-loader",
-                end,
-            )?
+            if options.experimental_qemu_module_arena {
+                compile_with_continuations_cfg(
+                    &source,
+                    &root,
+                    &continuation_roots,
+                    &output,
+                    "patch-loader",
+                    end,
+                    &["sd_qemu_module_arena"],
+                )?
+            } else {
+                compile_with_continuations(
+                    &source,
+                    &root,
+                    &continuation_roots,
+                    &output,
+                    "patch-loader",
+                    end,
+                )?
+            }
         };
         let catalog = function_hook_sites(&output.join("patch-loader.payload.elf"))?;
         let registrations = hook_registrations(&symbols)?;
