@@ -188,7 +188,7 @@ jobs:
           fi
           apt-get update
           apt-get install --no-install-recommends -y \
-            ca-certificates curl git gnupg patch xz-utils lsb-release dpkg-dev
+            ca-certificates curl file git gnupg patch xz-utils lsb-release dpkg-dev
           # QEMU builds with Clang. Jammy's default is too old to read profiles
           # from current LLVM, so install a pinned release from apt.llvm.org.
           curl -fsSL --retry 3 https://apt.llvm.org/llvm-snapshot.gpg.key \
