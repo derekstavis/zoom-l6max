@@ -872,10 +872,17 @@ fn run_case(
                     .ok_or("update_patches require firmware_package")?;
                 let bytes = fs::read(package).map_err(|e| e.to_string())?;
                 let names: Vec<&str> = patches.iter().map(String::as_str).collect();
-                let (patched, _) = firmware_patch_wasm::apply_patches(&bytes, &names)?;
+                let (patched, report) = firmware_patch_wasm::apply_patches(&bytes, &names)?;
                 fs::create_dir_all(dir).map_err(|e| e.to_string())?;
                 let update = dir.join("patched-update.bin");
                 fs::write(&update, patched).map_err(|e| e.to_string())?;
+                // The post-update checks locate the installed hooks from the
+                // report that sits beside the package.
+                fs::write(
+                    update.with_extension("json"),
+                    serde_json::to_vec_pretty(&report).unwrap(),
+                )
+                .map_err(|e| e.to_string())?;
                 selected_fixture.update_package = Some(update);
             }
         }

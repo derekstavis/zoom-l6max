@@ -783,10 +783,22 @@ fn run_l6_update(options: &Options, main_image: &[u8]) -> Result<(), String> {
         verify.sd_image = None;
         verify.no_sd = true;
         verify.update_bootloader = false;
-        verify.firmware_dir = l6max_host::setup::unpack_cached(
-            options.update_package.as_ref().unwrap(),
-            &l6max_host::paths::repository_root().join("emulator/state/firmware"),
-        )?;
+        let package = options.update_package.as_ref().unwrap();
+        let report = package.with_extension("json");
+        verify.firmware_dir = if report.is_file() {
+            // A patched package keeps its patch report beside it; the MIDI
+            // probe reads the installed hook targets from that report.
+            let dir = options.logs.join("post-update-firmware");
+            let _ = fs::remove_dir_all(&dir);
+            l6fw::unpack(package, &dir)?;
+            fs::copy(&report, dir.join("patch.json")).map_err(|e| e.to_string())?;
+            dir
+        } else {
+            l6max_host::setup::unpack_cached(
+                package,
+                &l6max_host::paths::repository_root().join("emulator/state/firmware"),
+            )?
+        };
         verify.gdb_socket = Some(
             std::env::temp_dir().join(format!("l6-post-update-midi-{}.sock", std::process::id())),
         );
