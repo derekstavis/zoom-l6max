@@ -70,8 +70,6 @@ Useful background:
 - [Parameter values](../firmware/gui/parameter-values.md): units and formatting.
 - [Notification lifetime](../firmware/gui/notification-lifecycle.md): resource
   ownership, expiry, and nonblocking mixer handling.
-- [Dismissal triggers](../firmware/gui/popup-triggers.md): why idle recorder
-  polling must preserve stock busy-hide behavior.
 
 ## Limits
 

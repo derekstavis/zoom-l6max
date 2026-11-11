@@ -207,7 +207,6 @@ event can therefore reuse the same inline state safely.
 ```sh
 cargo test --offline -p l6patch
 cargo run --offline -p l6test -- run --config config.toml --case knob-dialog --model l6max
-cargo run --offline -p l6test -- run --config config.toml --case popup-concurrency --model l6max
 
 cargo run --offline -p l6test -- run --config config.toml \
   --case patched-update --model l6max
@@ -241,25 +240,16 @@ Both lines use the firmware's stock text renderer and font resources. See the
 
 Screenshots come from firmware LCD transfers, without a host UI overlay.
 
-The earlier `0112` popup-concurrency scenario uses a disposable VM and a local GDB socket. It
-invokes the actual recorder polling callback while busy flag 0 and checks
-that popup pixels, heap binding, active state, and elapsed counter survive. It
-replaces one GUI callback invocation with a stock notification request, forces
-encoder input at the expiry pop boundary, exercises full-queue nesting and busy
-pause/resume, forces popup allocation to return null, and injects a held semaphore
-while all CPUs are stopped. It counts original mixer invocations while the GUI
-waits on the actual FreeRTOS semaphore. No debug controls are added to the firmware.
-This test uses GPIO input and guest breakpoints, never the host mouse.
-Its debugger stops perturb timing; it verifies behavior, not hardware latency.
-
 The current scene prototype has one knob-dispatch call redirect and no
 function-entry hooks. The focused emulator check verifies the text, expiry
 restoration, semaphore independence, retained slot-5 callback, descriptor
-validity during stock notifications, and cleanup on window navigation. Earlier `0112` validation covered the five patch/formatting checks,
-the forced concurrency diagnostic, and the SD-install/restart diagnostic with
-all ten knob modes and 52 exact encoder reports. The forced diagnostic covers
-13 reports, including six observed calls to the original mixer routine while
-the GUI is blocked. Logs and generated binaries remain ignored artifacts.
+validity during stock notifications, and cleanup on window navigation. The
+earlier notification-based design was also checked by an SD-install/restart
+diagnostic with all ten knob modes and 52 exact encoder reports, and by a forced
+concurrency diagnostic for its semaphore sidecar. That design and its
+`popup-concurrency` case are retired; see the
+[notification lifecycle](../../docs/firmware/gui/notification-lifecycle.md).
+Logs and generated binaries remain ignored artifacts.
 
 The `patched-update` driver case requires the original main firmware as its
 starting image and a package with a newer development marker. It validates the
@@ -292,9 +282,9 @@ currently uses white text on black.
 
 ## Limitations
 
-The [notification ownership contract](../../docs/firmware/gui/notification-lifecycle.md)
-describes the stock counting semaphore. This scene does not acquire, replace,
-or modify it.
+The [notification lifecycle](../../docs/firmware/gui/notification-lifecycle.md)
+describes how the scene coexists with the stock notification manager. This
+scene does not acquire, replace, or modify its counting semaphore.
 
 - LEVEL and send percentages represent control position, not linear amplitude.
   Their dB conversion and mute thresholds remain unverified.

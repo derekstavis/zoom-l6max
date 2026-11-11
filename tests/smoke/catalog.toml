@@ -352,15 +352,6 @@ scenario = "scenarios/l6max-state-spec.toml"
 no_sd = true
 
 [[case]]
-id = "popup-concurrency"
-suites = ["full"]
-models = ["l6max"]
-scenario = "scenarios/popup-concurrency.toml"
-needs_configuration = true
-volatile = true
-no_sd = true
-
-[[case]]
 id = "power"
 suites = ["lifecycle", "full"]
 models = ["l6", "l6max"]

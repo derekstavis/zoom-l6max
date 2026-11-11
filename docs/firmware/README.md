@@ -23,8 +23,7 @@ validate the image and hook guards before building. See the
 - [Factory protocol scenario](protocols/factory-midi.md): emulator test setup and scope.
 - [Mixer MIDI](protocols/mixer-midi.md): Control Change numbers and state requests.
 - [Parameter values](gui/parameter-values.md): units and knob-popup formatting.
-- [Notification lifetime](gui/notification-lifecycle.md): popup ownership and expiry.
-- [Dismissal behavior](gui/popup-triggers.md): popup behavior during recorder refresh.
+- [Notification lifetime](gui/notification-lifecycle.md): knob dialog ownership and expiry.
 - [Patch implementation](../../patches/knob-dialog/README.md): sources, guards, and validation.
 
 Emulator observations and physical-device observations have different scopes.

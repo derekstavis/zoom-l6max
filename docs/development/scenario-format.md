@@ -150,7 +150,6 @@ Scenarios default to `backends = ["headless", "gui"]`. Typed device steps requir
 | `usb-storage` | — | Enumerate storage, compare sector zero to the copied card, round-trip its last sector, then create/read/compare/delete a 1,537-byte FAT file through the USB disk |
 | `audio-callbacks` | — | First step only; arm revision-guarded breakpoints before boot and require every model callback |
 | `knob-dialog` | — | Patched L6max only; verify all ten popup modes, firmware-formatted values, heap lifetime, busy-aware expiry, display cleanup, widget restoration and exact encoder reports; frequency text allows one display unit of firmware rounding |
-| `popup-concurrency` | — | Patched L6max only; exercise recorder polling, stock notification priority, expiry-boundary input, queue overflow, busy pause/resume, allocation failure and held-lock contention through GDB |
 | `firmware-update` | — | L6 and L6max disposable-state update lifecycle, corrupt-checksum rejection, NOR segment install, L6max panel programming, protected-region preservation and clean restart; an `update_patches` package additionally checks model-specific post-install behavior |
 | `power-press` | `hold_ms`, `powered` | Check expected power result, model cutoff timing and stopped clock |
 | `restart` | — | Retire the session before reopening its isolated persistent state; reset readiness, trace counters and action baselines |
