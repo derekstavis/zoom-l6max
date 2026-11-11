@@ -6,6 +6,10 @@ use std::path::PathBuf;
 
 pub const WIDTH: f32 = 480.0;
 
+/// The patches offered here, in catalog order, as the web patcher offers them.
+/// `midi-control` stays available to `--patch`, `config.toml` and tests.
+const OFFERED: [&str; 3] = ["knob-dialog", "midi-sync", "din-mixer-control"];
+
 fn description(patch: &str) -> &'static str {
     match patch {
         "knob-dialog" => "Show channel encoder values on the display",
@@ -75,7 +79,7 @@ impl Render for PatchesWindow {
         });
         let enabled = changed && can_start;
         let patch_error = panel.patch_error.clone();
-        let rows = PATCHES.iter().map(|&patch| {
+        let rows = OFFERED.iter().map(|&patch| {
             let usable = available.contains(&patch);
             let checked = self.selected.iter().any(|name| name == patch);
             // A saved patch can always be turned off, so that the guest can start again.
