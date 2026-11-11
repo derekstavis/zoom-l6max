@@ -611,22 +611,6 @@ unsafe fn load_dynamic<R: core_loader::bundle::Reader>(reader: &mut R, order: u3
                 return false;
             }
         }
-        // Initializers receive only the bounded runtime service registry. They
-        // run after validation, with hook publication still hidden, and must
-        // not call firmware services or allocate. A nonzero result rejects the
-        // module before any of its handlers become visible.
-        if header.init_offset != 0 {
-            let initializer: unsafe extern "C" fn(
-                *mut patch_api::runtime_api::Registry,
-            ) -> u32 = core::mem::transmute((loaded_base + header.init_offset as usize) | 1);
-            let initialized = initializer(RUNTIME_API_REGISTRY as *mut _);
-            if initialized != 0 {
-                asm!("msr PRIMASK, {0}", in(reg) primask, options(nostack, preserves_flags));
-                clear_payload(loaded_base, header.memory_len);
-                free(module);
-                return false;
-            }
-        }
         // Initialize each module continuation before exposing any handler.
         for plan in &plans[..planned] {
             let site_name = hook_catalog::FUNCTION_HOOK_SITES

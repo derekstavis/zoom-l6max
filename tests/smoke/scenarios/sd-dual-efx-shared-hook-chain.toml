@@ -6,7 +6,7 @@ state = "dual-efx-room"
 card = "empty"
 gdb = true
 sd_patches = ["dual-efx", "knob-dialog"]
-sd_bundle_mode = "knob-dialog-first"
+sd_bundle_mode = "composed-module"
 
 [[audio_input]]
 channel = 1

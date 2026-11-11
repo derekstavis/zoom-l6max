@@ -3655,18 +3655,16 @@ impl State {
                 minimum_parameter_edits,
                 expected_parameter_id,
                 expected_parameter_value,
-            } => {
-                Ok(dual_efx_state(
-                    options,
-                    session,
-                    expected_effect_type,
-                    expected_edit_mode,
-                    minimum_parameter_edits,
-                    expected_parameter_id,
-                    expected_parameter_value,
-                )
-                .map_err(std::io::Error::other)?)
-            }
+            } => Ok(dual_efx_state(
+                options,
+                session,
+                expected_effect_type,
+                expected_edit_mode,
+                minimum_parameter_edits,
+                expected_parameter_id,
+                expected_parameter_value,
+            )
+            .map_err(std::io::Error::other)?),
             Operation::ExpectSdPatch {
                 loaded,
                 chain_count,
@@ -3965,7 +3963,7 @@ impl State {
                     let module = u32::from_le_bytes(bytes[12..16].try_into().unwrap());
                     if entry & 1 == 0
                         || module == 0
-                        || prior_order.is_some_and(|prior| order <= prior)
+                        || prior_order.is_some_and(|prior| order < prior)
                     {
                         return Err(format!(
                             "invalid SD hook link {index}: entry={entry:#010x}, module={module:#010x}, order={order}"
@@ -4132,6 +4130,7 @@ impl State {
                         if first.2 >= second.2 {
                             return Err("module hook order was not preserved in the chain".into());
                         }
+                        }
                     }
                     for (index, (entry, next_slot, _order, module)) in
                         chain_links.iter().enumerate()
@@ -4163,8 +4162,7 @@ impl State {
                                         "hook {index} does not match any module's hook metadata"
                                     )
                                 })?;
-                        let mutable_symbol_ranges =
-                            mutable_ranges_for_size(module_payload.len());
+                        let mutable_symbol_ranges = mutable_ranges_for_size(module_payload.len());
                         let expected_next =
                             chain_links.get(index + 1).map_or(fallback, |next| next.0);
                         let actual_next = u32::from_le_bytes(
@@ -4233,8 +4231,7 @@ impl State {
                         .iter()
                         .find(|(module_payload, _, _)| module_payload.len() == loaded_len as usize)
                     {
-                        let mutable_symbol_ranges =
-                            mutable_ranges_for_size(latest_payload.len());
+                        let mutable_symbol_ranges = mutable_ranges_for_size(latest_payload.len());
                         let mut expected = latest_payload.clone();
                         patch_loader_core::bundle::relocate(
                             &mut expected,
@@ -4341,10 +4338,6 @@ impl State {
                         .map_err(Into::into)
                     };
                     let dispatch_hits_offset = read_symbol("dsp_stream_entry_hits")?;
-                    let arg0_offset = read_symbol("dsp_stream_last_arg0")?;
-                    let arg1_offset = read_symbol("dsp_stream_last_arg1")?;
-                    let arg2_offset = read_symbol("dsp_stream_last_arg2")?;
-                    let arg3_offset = read_symbol("dsp_stream_last_arg3")?;
                     let clear_hits_offset = read_symbol("effect_workspace_clear_hits")?;
                     let type_set_hits_offset = read_symbol("dual_effect_type_set_hits")?;
                     let type_set_seen_offset = read_symbol("dual_effect_type_set_seen")?;
@@ -4385,13 +4378,6 @@ impl State {
                             .try_into()
                             .unwrap(),
                     );
-                    let args = [arg0_offset, arg1_offset, arg2_offset, arg3_offset]
-                        .map(|offset| {
-                            qmp.read_memory(0, dual_base + offset, 4)
-                                .map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()))
-                        })
-                        .into_iter()
-                        .collect::<Result<Vec<_>, _>>()?;
                     let clear_hits = u32::from_le_bytes(
                         qmp.read_memory(0, dual_base + clear_hits_offset, 4)?
                             .try_into()
@@ -4533,13 +4519,12 @@ impl State {
                         || ![0x2028_0ab9, 0x2028_2221].contains(&callback_original)
                     {
                         return Err(format!(
-                            "Dual EFX DSP validation failed: dsp_hits={dispatch_hits}, callback_hits={callback_hits} (Room {room_hits}/{room_admitted} admitted, Spring {spring_hits}/{spring_admitted} admitted), type_set_hits={type_set_hits}, type_set_seen={type_set_seen:#x}, input_nonzero={input_nonzero}, send_nonzero={send_nonzero}, output_nonzero={output_nonzero} (Room {room_output_nonzero}, Spring {spring_output_nonzero}), output_invalid={output_invalid}, edits={edit_applied}, pending={edit_event:#010x}, dropped={edit_dropped}, gate={callback_gate:#010x}, selection_pending={selection_pending}, active={active_callback:#010x}, expected={expected_callback:#010x}, original={callback_original:#010x}, routed={routed_callback:#010x}, context={callback_context:#010x}, descriptor={callback_descriptor:#010x}, args={args:08x?}, clear_hits={clear_hits}"
+                            "Dual EFX DSP validation failed: dsp_hits={dispatch_hits}, callback_hits={callback_hits} (Room {room_hits}/{room_admitted} admitted, Spring {spring_hits}/{spring_admitted} admitted), type_set_hits={type_set_hits}, type_set_seen={type_set_seen:#x}, input_nonzero={input_nonzero}, send_nonzero={send_nonzero}, output_nonzero={output_nonzero} (Room {room_output_nonzero}, Spring {spring_output_nonzero}), output_invalid={output_invalid}, edits={edit_applied}, pending={edit_event:#010x}, dropped={edit_dropped}, gate={callback_gate:#010x}, selection_pending={selection_pending}, active={active_callback:#010x}, expected={expected_callback:#010x}, original={callback_original:#010x}, routed={routed_callback:#010x}, context={callback_context:#010x}, descriptor={callback_descriptor:#010x}, clear_hits={clear_hits}"
                         )
                         .into());
                     }
                     effect_observation = Some(json!({
                         "dsp_stream_entry_hits": dispatch_hits,
-                        "dsp_stream_last_args": args,
                         "effect_workspace_clear_hits": clear_hits,
                         "dual_effect_type_set_hits": type_set_hits,
                         "dual_effect_type_set_seen": type_set_seen,
@@ -5672,8 +5657,6 @@ fn dual_efx_parameter_edit(
         .and_then(|offset| u32::try_from(offset).ok())
         .ok_or("Dual EFX callback counter is missing from its module report")?;
     let qmp = &session.engine.management[0];
-    const MODULE_REGISTRY: u32 = 0x8021_8000;
-    const MODULE_BASE_WORD: u32 = MODULE_REGISTRY + 160;
     const CURRENT_WINDOW: u32 = 0x8020_2610;
     const EFX_TYPE: u32 = 0x8046_00b2;
     const MIXER_APPLY_CHANNEL_PARAMETER: u32 = 0x8005_3b28;
@@ -5688,11 +5671,21 @@ fn dual_efx_parameter_edit(
             "Dual EFX parameter edit requires Room or Spring, selected type is {effect_type}"
         ));
     }
-    let module_base = u32::from_le_bytes(
-        qmp.read_memory(0, MODULE_BASE_WORD, 4)
+    let registry = u32::from_le_bytes(
+        qmp.read_memory(0, patch_loader_core::registry::L6MAX_POINTER as u32, 4)
             .map_err(|error| error.to_string())?
             .try_into()
             .unwrap(),
+    );
+    let module_base = u32::from_le_bytes(
+        qmp.read_memory(
+            0,
+            registry + patch_loader_core::registry::MODULE_PTR_OFFSET,
+            4,
+        )
+        .map_err(|error| error.to_string())?
+        .try_into()
+        .unwrap(),
     );
     if module_base == 0 {
         return Err("Dual EFX module is not loaded".into());
@@ -5838,13 +5831,22 @@ fn dual_efx_state(
             .and_then(|value| u32::try_from(value).ok())
             .ok_or_else(|| format!("Dual EFX symbol {name} is missing"))
     };
-    const MODULE_REGISTRY: u32 = 0x8021_8000;
     let qmp = &session.engine.management[0];
-    let module_base = u32::from_le_bytes(
-        qmp.read_memory(0, MODULE_REGISTRY + 160, 4)
+    let registry = u32::from_le_bytes(
+        qmp.read_memory(0, patch_loader_core::registry::L6MAX_POINTER as u32, 4)
             .map_err(|error| error.to_string())?
             .try_into()
             .unwrap(),
+    );
+    let module_base = u32::from_le_bytes(
+        qmp.read_memory(
+            0,
+            registry + patch_loader_core::registry::MODULE_PTR_OFFSET,
+            4,
+        )
+        .map_err(|error| error.to_string())?
+        .try_into()
+        .unwrap(),
     );
     if module_base == 0 {
         return Err("Dual EFX module is not loaded".into());
@@ -5855,10 +5857,14 @@ fn dual_efx_state(
         .first()
         .copied();
     let edit_mode = u32::from_le_bytes(
-        qmp.read_memory(0, module_base + offset("dual_effect_parameter_edit_mode")?, 4)
-            .map_err(|error| error.to_string())?
-            .try_into()
-            .unwrap(),
+        qmp.read_memory(
+            0,
+            module_base + offset("dual_effect_parameter_edit_mode")?,
+            4,
+        )
+        .map_err(|error| error.to_string())?
+        .try_into()
+        .unwrap(),
     );
     let applied = u32::from_le_bytes(
         qmp.read_memory(0, module_base + offset("dual_effect_edit_applied")?, 4)
@@ -5868,7 +5874,9 @@ fn dual_efx_state(
     );
     let parameter = if let Some(parameter_id) = expected_parameter_id {
         if parameter_id >= 16 {
-            return Err(format!("Dual EFX parameter id {parameter_id} is out of range"));
+            return Err(format!(
+                "Dual EFX parameter id {parameter_id} is out of range"
+            ));
         }
         let handoff_offset = offset("parameter_handoff")? + u32::from(parameter_id) * 4;
         Some(f32::from_bits(u32::from_le_bytes(
@@ -5906,7 +5914,9 @@ fn dual_efx_state(
             ));
         }
     }
-    Ok(json!({"effect_type":effect_type,"edit_mode":edit_mode,"parameter_edits_applied":applied,"parameter_id":expected_parameter_id,"parameter_value":parameter}))
+    Ok(
+        json!({"effect_type":effect_type,"edit_mode":edit_mode,"parameter_edits_applied":applied,"parameter_id":expected_parameter_id,"parameter_value":parameter}),
+    )
 }
 
 fn sd_fixture_edits(options: &Options, main: &[u8], model: l6fw::Model) -> Result<SdEdits, String> {

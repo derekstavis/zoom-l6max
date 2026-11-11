@@ -655,43 +655,37 @@ fn fixture_options(
                     path: "PATCHES/AAA.BIN".into(),
                     content: sd_image::spec::Content::Copy(corrupt),
                 });
-            } else if fixture.sd_bundle_mode.as_deref() == Some("knob-dialog-first") {
+            } else if fixture.sd_bundle_mode.as_deref() == Some("composed-module") {
                 let report: serde_json::Value = serde_json::from_slice(
                     &fs::read(bundle_dir.parent().unwrap().join("patch.json"))
                         .map_err(|e| e.to_string())?,
                 )
                 .map_err(|e| e.to_string())?;
-                let mut named = report["patches"]
+                let module = report["patches"]
                     .as_array()
-                    .ok_or("dynamic module report has no patch list")?
-                    .iter()
-                    .map(|patch| {
-                        let name = patch["name"].as_str().ok_or("patch has no name")?;
-                        let file = patch["file"]
-                            .as_str()
-                            .and_then(|file| Path::new(file).file_name())
-                            .ok_or("patch has no output filename")?
-                            .to_string_lossy()
-                            .into_owned();
-                        let priority = match name {
-                            "knob-dialog" => "01",
-                            "dual-efx" => "02",
-                            _ => {
-                                return Err(format!(
-                                    "unexpected patch in combination fixture: {name}"
-                                ));
-                            }
-                        };
-                        Ok((format!("{priority}-{file}"), bundle_dir.join(file)))
-                    })
-                    .collect::<Result<Vec<_>, String>>()?;
-                named.sort_by(|left, right| left.0.cmp(&right.0));
-                for (filename, source) in named {
-                    card.file.push(sd_image::spec::File {
-                        path: format!("PATCHES/{filename}"),
-                        content: sd_image::spec::Content::Copy(source),
-                    });
+                    .and_then(|patches| patches.first())
+                    .ok_or("composed module report has no module")?;
+                let members = module["members"]
+                    .as_array()
+                    .ok_or("composed module report has no members")?;
+                if !members.iter().any(|member| member == "dual-efx")
+                    || !members.iter().any(|member| member == "knob-dialog")
+                {
+                    return Err("composed hook-chain fixture did not include both patches".into());
                 }
+                let file = module["file"]
+                    .as_str()
+                    .ok_or("composed module has no output path")?;
+                card.file.push(sd_image::spec::File {
+                    path: file.into(),
+                    content: sd_image::spec::Content::Copy(
+                        bundle_dir.join(
+                            Path::new(file)
+                                .file_name()
+                                .ok_or("composed module path has no filename")?,
+                        ),
+                    ),
+                });
             }
             for entry in files {
                 if !entry.file_type().map_err(|e| e.to_string())?.is_file() {
@@ -700,7 +694,7 @@ fn fixture_options(
                 if fixture.sd_bundle_mode.as_deref() == Some("ordered-chain") {
                     continue;
                 }
-                if fixture.sd_bundle_mode.as_deref() == Some("knob-dialog-first") {
+                if fixture.sd_bundle_mode.as_deref() == Some("composed-module") {
                     continue;
                 }
                 let filename = entry.file_name().to_string_lossy().into_owned();

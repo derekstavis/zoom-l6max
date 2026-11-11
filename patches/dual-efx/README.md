@@ -60,13 +60,11 @@ bytes, before the compiled module code:
 | Cascade history | 19,208 | Separate mono sample history |
 | Other fields and alignment | 104 | Routing, parameters, and control state |
 
-The Dual EFX dynamic module currently requests about 28.2 KiB for code and
-module state. Its `module.json` requires knob-dialog's `KDLG` v1 API, so the SD
-bundle builder includes that provider once and places it before Dual EFX. The
-dialog API table and text mailbox live in knob-dialog's module allocation;
-Dual EFX stores only the resolved API address. The loader's fixed 128-byte API
-registry is part of its reserved registry area and does not allocate from the
-FreeRTOS heap. DSP state is initialized in place in the stock shared effect
+The composed Dual EFX module currently requests about 31.8 KiB for code and
+module state, including the knob-dialog feature required to display parameter
+values. Its `module.json` declares that build-time dependency. The builder
+links both features into one `DUAL-EFX.BIN` allocation; no runtime patch API or
+separate knob-dialog file is needed. DSP state is initialized in place in the stock shared effect
 workspace at `0x80d00000`, whose observed
 span is 768,000 bytes. This avoids allocating the 283 KiB processor from the
 FreeRTOS heap. The SD smoke fixture reports a 167,528-byte heap low-water mark

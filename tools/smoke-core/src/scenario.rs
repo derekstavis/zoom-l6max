@@ -461,7 +461,7 @@ impl Scenario {
                 "corrupt",
                 "corrupt-first",
                 "ordered-chain",
-                "knob-dialog-first",
+                "composed-module",
             ]
             .contains(&mode.as_str())
                 || value.sd_patches.is_none()
