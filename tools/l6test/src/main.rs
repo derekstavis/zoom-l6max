@@ -1233,10 +1233,12 @@ fn execute() -> Result<i32, String> {
         if let Some(package) = &case.package {
             packages.insert(package.as_str());
         }
+        // A `gui` case runs on the GUI backend whatever backends were
+        // requested, so it always needs the GUI binary.
         if case.scenario.as_ref().is_some_and(|p| {
             Scenario::load(&catalog_dir.join(p))
                 .is_ok_and(|s| s.backends.iter().any(|b| b == "gui"))
-        }) && backends.contains(&"gui")
+        }) && (case.gui || backends.contains(&"gui"))
         {
             packages.insert("l6max-gui");
         }
