@@ -6436,8 +6436,37 @@ fn run_knob_dialog(
                 );
             }
         }
-        inputs.knob(0, -1)?;
-        capture(100, "window-scene-before-invalid-state-metadata")?;
+        // An encoder turn reaches the mailbox through the panel MCU, its UART
+        // and the mixer, so a fixed delay can end before the dialog shows it.
+        // A late event is held while a stock notification is active and then
+        // changes the scene after expiry. Wait until the dialog has consumed
+        // the event and shows the new mixer value.
+        let settled_turn = |name: &str| -> Result<(), Box<dyn std::error::Error>> {
+            let before = qmp.read_memory(0, channel0_level, 1)?[0];
+            inputs.knob(0, if before == 0 { 1 } else { -1 })?;
+            let start = inputs.panel.snapshot().guest_ms;
+            loop {
+                capture(50, name)?;
+                let raw = qmp.read_memory(0, channel0_level, 1)?[0];
+                if raw != before
+                    && qmp.read_memory(0, state + 3, 1)?[0] == u8::MAX
+                    && knob_display_matches(
+                        9,
+                        &expected_value(9, raw),
+                        &decode_text(text_table + 179 * 4)?,
+                    )
+                {
+                    return Ok(());
+                }
+                if inputs.panel.snapshot().guest_ms.wrapping_sub(start) >= 2_000 {
+                    return Err(format!(
+                        "channel-1 LEVEL turn was not displayed: before={before}, now={raw}"
+                    )
+                    .into());
+                }
+            }
+        };
+        settled_turn("window-scene-before-invalid-state-metadata")?;
         qmp.stop()?;
         let metadata = qmp.read_memory(0, state, 4)?;
         let metadata_word = u32::from_le_bytes(metadata.clone().try_into().unwrap());
@@ -6467,8 +6496,7 @@ fn run_knob_dialog(
         if !invalid_metadata_rejected {
             return Err("invalid state signature changed an overlay descriptor".into());
         }
-        inputs.knob(0, -1)?;
-        capture(100, "window-scene-after-invalid-state-metadata")?;
+        settled_turn("window-scene-after-invalid-state-metadata")?;
         let invalid_tag_discarded = true;
         let lit_pixels = |y0: usize, y1: usize| {
             (y0..y1)
@@ -6555,9 +6583,23 @@ fn run_knob_dialog(
             || resource_pointer_after_expiry != shared_resource_pointer.to_le_bytes()
             || resource_after_expiry != scene_text_before_notification
         {
+            let utf16 = |bytes: &[u8]| -> String {
+                bytes
+                    .chunks(2)
+                    .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+                    .take_while(|unit| *unit != 0)
+                    .take(24)
+                    .map(|unit| char::from_u32(unit.into()).unwrap_or('?'))
+                    .collect()
+            };
             return Err(format!(
-                "stock notification expiry damaged or prematurely removed the custom scene: callback {callback_after_expiry:02x?} vs {active_slot5:08x}, resource pointer {resource_pointer_after_expiry:02x?} vs {shared_resource_pointer:08x}, resource modified={}, guest ms since notification {}",
-                resource_after_expiry != scene_text_before_notification,
+                "stock notification expiry damaged or prematurely removed the custom scene: callback {callback_after_expiry:02x?} vs {active_slot5:08x}, resource pointer {resource_pointer_after_expiry:02x?} vs {shared_resource_pointer:08x}, resource {:?} vs {:?}, ticks {}, window {:02x?}, notification active {} busy {}, guest ms since notification {}",
+                utf16(&resource_after_expiry),
+                utf16(&scene_text_before_notification),
+                qmp.read_memory(0, state + 2, 1)?[0],
+                qmp.read_memory(0, 0x8020_2610, 4)?,
+                qmp.read_memory(0, 0x8020_a2b0, 1)?[0],
+                qmp.read_memory(0, 0x8020_a2c0, 1)?[0],
                 inputs.panel.snapshot().guest_ms.wrapping_sub(notification_start)
             ).into());
         }
