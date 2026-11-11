@@ -6196,7 +6196,21 @@ fn run_knob_dialog(
             return Err("background 47 no longer uses bitmap ID 0".into());
         }
         let before_null_bitmap_draw = capture(50, "window-scene-before-null-bitmap-probe")?;
+        // Call the draw routine from the display task, at the dialog's own
+        // callback entry. An arbitrary stop can land in the idle task or an
+        // exception handler, where the routine can block past the deadline.
         qmp.stop()?;
+        debugger.breakpoint(active_slot5 & !1, true)?;
+        qmp.resume()?;
+        let display_task_deadline = Instant::now() + Duration::from_secs(15);
+        while qmp.query_status()?.running {
+            session.poll()?;
+            if Instant::now() >= display_task_deadline {
+                return Err("dialog callback breakpoint was not reached".into());
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        debugger.breakpoint(active_slot5 & !1, false)?;
         debugger.call_thumb(0x8000_5e70, &[47], Duration::from_secs(5))?;
         qmp.resume()?;
         let after_null_bitmap_draw = capture(100, "window-scene-after-null-bitmap-probe")?;
