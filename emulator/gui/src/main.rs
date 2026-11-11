@@ -125,6 +125,46 @@ actions!(
     ]
 );
 
+/// Whether the emulated USB cable and MIDI jacks are connected.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+struct Connections {
+    usb: bool,
+    midi: bool,
+}
+
+/// The menu bar. The Connections menu offers only the action that changes the
+/// current state.
+fn app_menus(bundled: bool, connections: Connections) -> Vec<Menu> {
+    let usb = if connections.usb {
+        MenuItem::action("Disconnect USB", DisconnectUsb)
+    } else {
+        MenuItem::action("Connect USB", ConnectUsb)
+    };
+    let midi = if connections.midi {
+        MenuItem::action("Disconnect MIDI", DisconnectMidi)
+    } else {
+        MenuItem::action("Connect MIDI", ConnectMidi)
+    };
+    vec![
+        Menu::new("L6 Emulator").items([MenuItem::action("Quit L6 Emulator", Quit)]),
+        Menu::new("File").items([
+            MenuItem::action("Open Firmware…", OpenFirmware).disabled(!bundled),
+            MenuItem::action("Firmware Patches…", OpenPatchesWindow),
+            MenuItem::action("Use SD Card Folder…", OpenSdFolder).disabled(!bundled),
+            MenuItem::action("Eject SD Card", EjectSdCard),
+        ]),
+        Menu::new("Audio Input").items([
+            MenuItem::action("Channels and Playback…", OpenAudioWindow),
+            MenuItem::separator(),
+            MenuItem::action("Play", PlayAudioInputs),
+            MenuItem::action("Pause", PauseAudioInputs),
+            MenuItem::action("Stop", StopAudioInputs),
+            MenuItem::action("Rewind", RewindAudioInputs),
+        ]),
+        Menu::new("Connections").items([usb, midi]),
+    ]
+}
+
 struct NativePanel {
     /// The model the window is sized for.
     window_model: l6fw::Model,
@@ -1575,29 +1615,7 @@ fn main() {
             KeyBinding::new("cmd-shift-o", OpenSdFolder, None),
             KeyBinding::new("cmd-q", Quit, None),
         ]);
-        cx.set_menus([
-            Menu::new("L6 Emulator").items([MenuItem::action("Quit L6 Emulator", Quit)]),
-            Menu::new("File").items([
-                MenuItem::action("Open Firmware…", OpenFirmware).disabled(!bundled),
-                MenuItem::action("Firmware Patches…", OpenPatchesWindow),
-                MenuItem::action("Use SD Card Folder…", OpenSdFolder).disabled(!bundled),
-                MenuItem::action("Eject SD Card", EjectSdCard),
-            ]),
-            Menu::new("Audio Input").items([
-                MenuItem::action("Channels and Playback…", OpenAudioWindow),
-                MenuItem::separator(),
-                MenuItem::action("Play", PlayAudioInputs),
-                MenuItem::action("Pause", PauseAudioInputs),
-                MenuItem::action("Stop", StopAudioInputs),
-                MenuItem::action("Rewind", RewindAudioInputs),
-            ]),
-            Menu::new("Connections").items([
-                MenuItem::action("Connect USB", ConnectUsb),
-                MenuItem::action("Disconnect USB", DisconnectUsb),
-                MenuItem::action("Connect MIDI", ConnectMidi),
-                MenuItem::action("Disconnect MIDI", DisconnectMidi),
-            ]),
-        ]);
+        cx.set_menus(app_menus(bundled, Connections::default()));
         // macOS normally keeps apps alive after their last window closes.
         cx.on_window_closed(move |cx, _| {
             let panel_open = cx
@@ -1623,6 +1641,7 @@ fn main() {
         cx.activate(true);
         if run_tick {
             cx.spawn(async move |cx| {
+                let mut menu_connections = Connections::default();
                 loop {
                     // Tick once per display frame. macOS coalesces short
                     // timers to about 24 Hz, which shows a fast lamp blink,
@@ -1649,6 +1668,22 @@ fn main() {
                     frame.await;
                     if view
                         .update(cx, |panel, window, cx| {
+                            // Connections change from the menu, a restart or a
+                            // failed connect, so follow the engine's state.
+                            let connections =
+                                panel
+                                    ._qemu
+                                    .as_ref()
+                                    .map_or_else(Connections::default, |engine| Connections {
+                                        usb: engine.usb_connected(),
+                                        midi: engine.midi_connected(),
+                                    });
+                            if connections != menu_connections {
+                                menu_connections = connections;
+                                // Outside this window update: rebuilding the
+                                // menu bar can validate items against it.
+                                cx.defer(move |cx| cx.set_menus(app_menus(bundled, connections)));
+                            }
                             if panel.window_model != panel.model {
                                 panel.window_model = panel.model;
                                 let width = components::layout::window_width(panel.model);
@@ -1840,6 +1875,36 @@ mod next_frame {
                 state.1 = Some(cx.waker().clone());
                 Poll::Pending
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod menu_tests {
+    use super::*;
+
+    fn labels(menus: &[Menu], menu: &str) -> Vec<String> {
+        let menu = menus.iter().find(|m| m.name == menu).unwrap();
+        menu.items
+            .iter()
+            .map(|item| match item {
+                MenuItem::Action { name, .. } => name.to_string(),
+                MenuItem::Separator => "-".into(),
+                _ => "?".into(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn connections_menu_offers_the_opposite_of_each_state() {
+        for (usb, midi, expected) in [
+            (false, false, ["Connect USB", "Connect MIDI"]),
+            (true, false, ["Disconnect USB", "Connect MIDI"]),
+            (false, true, ["Connect USB", "Disconnect MIDI"]),
+            (true, true, ["Disconnect USB", "Disconnect MIDI"]),
+        ] {
+            let menus = app_menus(true, Connections { usb, midi });
+            assert_eq!(labels(&menus, "Connections"), expected);
         }
     }
 }

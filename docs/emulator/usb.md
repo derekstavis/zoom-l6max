@@ -203,9 +203,9 @@ by the direct MIDI-sync scenario; basic Editor connectivity does not require it.
 
 Both the USB cable and the DIN MIDI jacks are hotpluggable at any time,
 matching real hardware — no engine restart needed. `--usb` and `--midi` only
-pick the state at startup; the native app's **Connections** menu ("Connect
-USB", "Disconnect USB", "Connect MIDI", "Disconnect MIDI") toggles each
-independently while running, and `Engine::connect_usb`/`disconnect_usb`/
+pick the state at startup; the native app's **Connections** menu toggles each
+independently while running, offering "Connect USB" or "Disconnect USB" and
+"Connect MIDI" or "Disconnect MIDI" for the current state, and `Engine::connect_usb`/`disconnect_usb`/
 `connect_midi`/`disconnect_midi` do the same from code (`engine.rs`).
 
 Disconnecting USB removes its host endpoints and reconnecting enumerates the
