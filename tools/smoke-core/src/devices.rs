@@ -3281,7 +3281,7 @@ impl State {
                 .find(|(address, _, _)| *address == HOOK)
                 .map(|(_, _, offset)| *offset)
                 .ok_or("dynamic SD bundle has no L6 midi-sync entry")?;
-            let registry = patch_loader_core::L6_REGISTRY_BASE;
+            let registry = sd_registry(qmp, session.engine.model())?;
             let loaded_base =
                 u32::from_le_bytes(qmp.read_memory(0, registry + 160, 4)?.try_into().unwrap());
             let slot = sd_dynamic_handler_slot(options, session.engine.model(), registry, HOOK)
@@ -3649,9 +3649,13 @@ impl State {
                         .into());
                     }
                 }
-                let registry = match session.engine.model() {
-                    l6fw::Model::L6 => patch_loader_core::L6_REGISTRY_BASE,
-                    l6fw::Model::L6max => patch_loader_core::L6MAX_REGISTRY_BASE,
+                // Without a card mount since the last reset the loader has no
+                // registry, so every dispatch stub takes the stock path.
+                let Some(registry) = sd_registry_if_allocated(qmp, session.engine.model())? else {
+                    if loaded {
+                        return Err("the Patch loader has not allocated its registry".into());
+                    }
+                    return Ok(json!({"loaded":false,"registry":null,"guarded_hooks":edits.len()}));
                 };
                 let loaded_base =
                     u32::from_le_bytes(qmp.read_memory(0, registry + 160, 4)?.try_into().unwrap());
@@ -5288,6 +5292,38 @@ fn sd_fixture_edits(options: &Options, main: &[u8], model: l6fw::Model) -> Resul
     ))
 }
 
+/// The Patch loader's heap-allocated registry, read through its pointer word.
+fn sd_registry(
+    qmp: &l6max_host::qmp::QmpClient,
+    model: l6fw::Model,
+) -> Result<u32, Box<dyn std::error::Error>> {
+    sd_registry_if_allocated(qmp, model)?
+        .ok_or_else(|| "the Patch loader has not allocated its registry".into())
+}
+
+/// The registry, or `None` while the pointer word is still zero.
+fn sd_registry_if_allocated(
+    qmp: &l6max_host::qmp::QmpClient,
+    model: l6fw::Model,
+) -> Result<Option<u32>, Box<dyn std::error::Error>> {
+    use patch_loader_core::registry;
+    let pointer = match model {
+        l6fw::Model::L6 => registry::L6_POINTER,
+        l6fw::Model::L6max => registry::L6MAX_POINTER,
+    };
+    let base = u32::from_le_bytes(qmp.read_memory(0, pointer, 4)?.try_into().unwrap());
+    if base == 0 {
+        return Ok(None);
+    }
+    let magic = u32::from_le_bytes(qmp.read_memory(0, base, 4)?.try_into().unwrap());
+    if magic != registry::MAGIC {
+        return Err(
+            format!("Patch loader registry at {base:#010x} has magic {magic:#010x}").into(),
+        );
+    }
+    Ok(Some(base))
+}
+
 fn sd_dynamic_handler_slot(
     options: &Options,
     _model: l6fw::Model,
@@ -5312,15 +5348,7 @@ fn sd_dynamic_handler_slot(
         .iter()
         .position(|site| site["address"].as_u64() == Some(u64::from(function_address)))
         .ok_or_else(|| format!("function {function_address:#010x} has no SD dispatch slot"))?;
-    let table_offset = 0x100u32
-        .checked_add(
-            u32::try_from(core::mem::size_of::<
-                [patch_loader_core::dynamic::FunctionHookChain;
-                    patch_loader_core::dynamic::MAX_FUNCTION_CHAINS],
-            >())
-            .map_err(|e| e.to_string())?,
-        )
-        .ok_or("dynamic handler table offset overflow")?;
+    let table_offset = patch_loader_core::registry::HANDLER_TABLE_OFFSET;
     registry
         .checked_add(table_offset)
         .and_then(|base| base.checked_add(u32::try_from(index).ok()?.checked_mul(4)?))
@@ -5413,7 +5441,7 @@ fn run_knob_dialog(
         }
         let (_, link_base, mut expected, _, relocations, _, _) =
             sd_fixture_edits(options, &main, l6fw::Model::L6max).map_err(std::io::Error::other)?;
-        let registry = link_base + 0x8000;
+        let registry = sd_registry(qmp, l6fw::Model::L6max)?;
         let loaded_base =
             u32::from_le_bytes(qmp.read_memory(0, registry + 160, 4)?.try_into().unwrap());
         if loaded_base == 0 {

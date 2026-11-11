@@ -87,8 +87,11 @@ address as the load delta. Relative calls and PC-relative references need no
 fixup when the complete module moves. Firmware function and data bindings stay
 at supported firmware addresses. This is load-time relocation rather than
 zero-fixup PIC, avoiding a per-module PIC base register and writable GOT. The
-registry holds fixed arrays in reserved firmware RAM, so registering a hook
-does not allocate heap memory. Each patch still gets one exact-size allocation
+registry is allocated once from the FreeRTOS heap on the first card mount. Its
+address is the only firmware RAM the loader reserves: one word at `0x801f0000` on
+L6 and `0x80218000` on L6max, which reset clears. Dispatch stubs follow that word
+and take the stock path while it is zero. Registering a hook allocates no more
+heap memory. Each patch still gets one exact-size allocation
 for its code. The loader image has dispatch stubs for the cataloged `midi_in`
 site on both models and `mixer_apply_channel_parameter` on L6max. Other
 functions must be added to the catalog and loader dispatch before dynamic

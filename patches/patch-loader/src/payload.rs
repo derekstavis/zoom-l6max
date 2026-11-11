@@ -19,9 +19,9 @@ const IMAGE_LEN: usize = 0x107fe8;
 #[cfg(sd_l6)]
 const IMAGE_LEN: usize = 0xb5ae4;
 #[cfg(not(sd_l6))]
-const REGISTRY_BASE: usize = core_loader::L6MAX_REGISTRY_BASE as usize;
+const REGISTRY_POINTER: usize = core_loader::registry::L6MAX_POINTER as usize;
 #[cfg(sd_l6)]
-const REGISTRY_BASE: usize = core_loader::L6_REGISTRY_BASE as usize;
+const REGISTRY_POINTER: usize = core_loader::registry::L6_POINTER as usize;
 // Cap a single code + zero-filled state allocation at 384 KiB. Larger modules
 // are rejected before allocating from the shared FreeRTOS heap.
 const MODULE_CAPACITY: usize = 0x60000;
@@ -29,24 +29,38 @@ const MODULE_CAPACITY: usize = 0x60000;
 const MODULE_ARENA_BASE: usize = 0x83e0_0000;
 #[cfg(sd_qemu_module_arena)]
 const MODULE_ARENA_END: usize = MODULE_ARENA_BASE + 0x80000;
-#[cfg(sd_qemu_module_arena)]
-const MODULE_ARENA_NEXT_WORD: usize = REGISTRY_BASE + 0x700;
-const REGISTRY_MAGIC: u32 = 0x4c36_5244;
-const DEBUG_WORD: usize = REGISTRY_BASE + 4;
-const CLAIM_WORD: usize = REGISTRY_BASE + 8;
-const MODULE_PTR_WORD: usize = REGISTRY_BASE + 160;
-const MODULE_LEN_WORD: usize = REGISTRY_BASE + 164;
-const HOOK_CHAIN_TABLE: usize = REGISTRY_BASE + 0x100;
 const MAX_FUNCTION_CHAINS: usize = core_loader::dynamic::MAX_FUNCTION_CHAINS;
-const DYNAMIC_HANDLER_TABLE: usize = HOOK_CHAIN_TABLE
-    + core::mem::size_of::<[core_loader::dynamic::FunctionHookChain; MAX_FUNCTION_CHAINS]>();
 const MAX_RELOCATIONS: u32 = 256;
-// The tables must fit below the QEMU arena word, inside the reserved registry.
-const _: () = assert!(
-    MODULE_LEN_WORD < HOOK_CHAIN_TABLE
-        && DYNAMIC_HANDLER_TABLE + MAX_FUNCTION_CHAINS * 4 <= REGISTRY_BASE + 0x700
-        && 0x704 <= core_loader::REGISTRY_LIMIT as usize
-);
+
+/// The heap-allocated registry, or zero before the first card mount.
+fn registry_base() -> usize {
+    unsafe { ptr::read_volatile(REGISTRY_POINTER as *const u32) as usize }
+}
+fn registry_word(offset: u32) -> usize {
+    registry_base() + offset as usize
+}
+fn debug_word() -> usize {
+    registry_word(core_loader::registry::DEBUG_OFFSET)
+}
+fn claim_word() -> usize {
+    registry_word(core_loader::registry::CLAIM_OFFSET)
+}
+fn module_ptr_word() -> usize {
+    registry_word(core_loader::registry::MODULE_PTR_OFFSET)
+}
+fn module_len_word() -> usize {
+    registry_word(core_loader::registry::MODULE_LEN_OFFSET)
+}
+fn hook_chain_table() -> usize {
+    registry_word(core_loader::registry::HOOK_CHAINS_OFFSET)
+}
+fn dynamic_handler_table() -> usize {
+    registry_word(core_loader::registry::HANDLER_TABLE_OFFSET)
+}
+#[cfg(sd_qemu_module_arena)]
+fn module_arena_next_word() -> usize {
+    registry_word(core_loader::registry::ARENA_NEXT_OFFSET)
+}
 #[cfg(not(sd_l6))]
 const SHA: [u8; 32] = [
     0x98, 0x0d, 0x92, 0x27, 0x2c, 0x1f, 0x84, 0xbe, 0xd2, 0x00, 0xb4, 0xd2, 0xf8, 0x35, 0x75, 0x20,
@@ -89,58 +103,51 @@ const fn midi_hook_offset() -> usize {
     0x2e490
 }
 
-unsafe fn ensure_registry() {
-    let magic = unsafe { ptr::read_volatile(REGISTRY_BASE as *const u32) };
-    if magic != REGISTRY_MAGIC {
-        unsafe {
-            ptr::write_volatile(CLAIM_WORD as *mut u32, 0);
-            ptr::write_volatile(DEBUG_WORD as *mut u32, 0);
-            ptr::write_volatile(MODULE_PTR_WORD as *mut u32, 0);
-            ptr::write_volatile(MODULE_LEN_WORD as *mut u32, 0);
-            #[cfg(sd_qemu_module_arena)]
-            ptr::write_volatile(MODULE_ARENA_NEXT_WORD as *mut u32, MODULE_ARENA_BASE as u32);
-            ptr::write_bytes(
-                HOOK_CHAIN_TABLE as *mut u8,
-                0,
-                core::mem::size_of::<[core_loader::dynamic::FunctionHookChain; MAX_FUNCTION_CHAINS]>(
-                ),
-            );
-            ptr::write_bytes(
-                DYNAMIC_HANDLER_TABLE as *mut u8,
-                0,
-                core::mem::size_of::<[u32; MAX_FUNCTION_CHAINS]>(),
-            );
-            ptr::write_volatile(REGISTRY_BASE as *mut u32, REGISTRY_MAGIC);
+/// Allocate the registry from the FreeRTOS heap on the first card mount and
+/// publish it. Mount callers can race here, so the address is published only if
+/// no other caller published one first; the loser frees its allocation.
+unsafe fn ensure_registry() -> bool {
+    let current = registry_base();
+    if current != 0 {
+        return unsafe { ptr::read_volatile(current as *const u32) } == core_loader::registry::MAGIC;
+    }
+    let len = core_loader::registry::LEN as usize;
+    let fresh = unsafe { pvPortMalloc(len) };
+    if fresh.is_null() {
+        return false;
+    }
+    let base = fresh as usize;
+    unsafe {
+        ptr::write_bytes(fresh, 0, len);
+        #[cfg(sd_qemu_module_arena)]
+        ptr::write_volatile(
+            (base + core_loader::registry::ARENA_NEXT_OFFSET as usize) as *mut u32,
+            MODULE_ARENA_BASE as u32,
+        );
+        ptr::write_volatile(base as *mut u32, core_loader::registry::MAGIC);
+        let primask: u32;
+        asm!("dmb", "mrs {0}, PRIMASK", "cpsid i", out(reg) primask, options(nostack, preserves_flags));
+        let published = ptr::read_volatile(REGISTRY_POINTER as *const u32) == 0;
+        if published {
+            ptr::write_volatile(REGISTRY_POINTER as *mut u32, base as u32);
+        }
+        asm!("dmb", "msr PRIMASK, {0}", in(reg) primask, options(nostack, preserves_flags));
+        if !published {
+            vPortFree(fresh);
         }
     }
+    true
 }
 
-/// Called from the early MAIN startup function on every reset. External RAM
-/// can retain its contents across a warm reset, so explicitly withdraw all
-/// volatile module entry points before ordinary feature hooks can run.
+/// Called from the early MAIN startup function on every reset. The firmware
+/// rebuilds its FreeRTOS heap during reset initialization, and external RAM can
+/// retain the old pointer across a warm reset, so forget the registry before
+/// any dispatch stub or ordinary feature hook can run.
 #[unsafe(no_mangle)]
 #[unsafe(link_section = ".text.sd_reset_registry")]
 pub unsafe extern "C" fn sd_reset_registry() {
     unsafe {
-        ptr::write_volatile(CLAIM_WORD as *mut u32, 0);
-        ptr::write_volatile(DEBUG_WORD as *mut u32, 0);
-        // The firmware rebuilds its FreeRTOS heap during reset initialization.
-        // Forget the old address before any registered hooks can execute.
-        ptr::write_volatile(MODULE_PTR_WORD as *mut u32, 0);
-        ptr::write_volatile(MODULE_LEN_WORD as *mut u32, 0);
-        #[cfg(sd_qemu_module_arena)]
-        ptr::write_volatile(MODULE_ARENA_NEXT_WORD as *mut u32, MODULE_ARENA_BASE as u32);
-        ptr::write_bytes(
-            HOOK_CHAIN_TABLE as *mut u8,
-            0,
-            core::mem::size_of::<[core_loader::dynamic::FunctionHookChain; MAX_FUNCTION_CHAINS]>(),
-        );
-        ptr::write_bytes(
-            DYNAMIC_HANDLER_TABLE as *mut u8,
-            0,
-            core::mem::size_of::<[u32; MAX_FUNCTION_CHAINS]>(),
-        );
-        ptr::write_volatile(REGISTRY_BASE as *mut u32, REGISTRY_MAGIC);
+        ptr::write_volatile(REGISTRY_POINTER as *mut u32, 0);
     }
 }
 
@@ -174,7 +181,7 @@ unsafe fn close(handle: u32) {
 unsafe fn alloc(size: usize) -> *mut u8 {
     #[cfg(sd_qemu_module_arena)]
     {
-        let next = unsafe { ptr::read_volatile(MODULE_ARENA_NEXT_WORD as *const u32) as usize };
+        let next = unsafe { ptr::read_volatile(module_arena_next_word() as *const u32) as usize };
         let Some(start) = next.checked_add(7).map(|address| address & !7) else {
             return ptr::null_mut();
         };
@@ -184,7 +191,7 @@ unsafe fn alloc(size: usize) -> *mut u8 {
         if start < MODULE_ARENA_BASE || end > MODULE_ARENA_END {
             return ptr::null_mut();
         }
-        unsafe { ptr::write_volatile(MODULE_ARENA_NEXT_WORD as *mut u32, end as u32) };
+        unsafe { ptr::write_volatile(module_arena_next_word() as *mut u32, end as u32) };
         start as *mut u8
     }
     #[cfg(not(sd_qemu_module_arena))]
@@ -196,9 +203,9 @@ unsafe fn free(p: *mut u8) {
     #[cfg(sd_qemu_module_arena)]
     {
         let address = p as usize;
-        let current = unsafe { ptr::read_volatile(MODULE_ARENA_NEXT_WORD as *const u32) as usize };
+        let current = unsafe { ptr::read_volatile(module_arena_next_word() as *const u32) as usize };
         if (MODULE_ARENA_BASE..=current).contains(&address) {
-            unsafe { ptr::write_volatile(MODULE_ARENA_NEXT_WORD as *mut u32, address as u32) };
+            unsafe { ptr::write_volatile(module_arena_next_word() as *mut u32, address as u32) };
         }
     }
     #[cfg(not(sd_qemu_module_arena))]
@@ -421,7 +428,7 @@ unsafe fn find_hook_chain(
 ) -> Option<*mut core_loader::dynamic::FunctionHookChain> {
     let mut free = None;
     for index in 0..MAX_FUNCTION_CHAINS {
-        let chain = (HOOK_CHAIN_TABLE
+        let chain = (hook_chain_table()
             + index * core::mem::size_of::<core_loader::dynamic::FunctionHookChain>())
             as *mut core_loader::dynamic::FunctionHookChain;
         let value = unsafe { ptr::read_volatile(chain) };
@@ -583,7 +590,7 @@ unsafe fn load_dynamic<R: core_loader::bundle::Reader>(reader: &mut R, order: u3
         // multi-site module.
         for plan in &plans[..planned] {
             let current_chain = ptr::read_volatile(plan.chain);
-            let slot = (DYNAMIC_HANDLER_TABLE + plan.dispatch_index * 4) as *mut u32;
+            let slot = (dynamic_handler_table() + plan.dispatch_index * 4) as *mut u32;
             let current_head = ptr::read_volatile(slot);
             if (current_chain.address != plan.address
                 && !(current_chain.count == 0 && current_chain.address == 0))
@@ -609,7 +616,7 @@ unsafe fn load_dynamic<R: core_loader::bundle::Reader>(reader: &mut R, order: u3
             ptr::write_volatile(plan.next_slot as *mut u32, continuation);
         }
         for plan in &plans[..planned] {
-            let slot = (DYNAMIC_HANDLER_TABLE + plan.dispatch_index * 4) as *mut u32;
+            let slot = (dynamic_handler_table() + plan.dispatch_index * 4) as *mut u32;
             let mut updated_chain = ptr::read_volatile(plan.chain);
             let previous_slot = updated_chain
                 .append(
@@ -627,9 +634,9 @@ unsafe fn load_dynamic<R: core_loader::bundle::Reader>(reader: &mut R, order: u3
                 ptr::write_volatile(slot, plan.entry);
             }
         }
-        ptr::write_volatile(MODULE_PTR_WORD as *mut u32, loaded_base as u32);
-        ptr::write_volatile(MODULE_LEN_WORD as *mut u32, header.memory_len as u32);
-        ptr::write_volatile(DEBUG_WORD as *mut u32, 0x327);
+        ptr::write_volatile(module_ptr_word() as *mut u32, loaded_base as u32);
+        ptr::write_volatile(module_len_word() as *mut u32, header.memory_len as u32);
+        ptr::write_volatile(debug_word() as *mut u32, 0x327);
         asm!("msr PRIMASK, {0}", in(reg) primask, options(nostack, preserves_flags));
     }
     true
@@ -670,7 +677,7 @@ unsafe fn claim() -> bool {
     unsafe {
         asm!("mrs {0}, PRIMASK", "cpsid i", out(reg) primask, options(nostack, preserves_flags));
     }
-    let flag = CLAIM_WORD as *mut u32;
+    let flag = claim_word() as *mut u32;
     let state = unsafe { ptr::read_volatile(flag) };
     let free = state == 0 || state == u32::MAX;
     if free {
@@ -688,39 +695,41 @@ unsafe fn claim() -> bool {
 }
 unsafe fn finish(success: bool) {
     unsafe {
-        ptr::write_volatile(CLAIM_WORD as *mut u32, if success { 1 } else { 0 });
+        ptr::write_volatile(claim_word() as *mut u32, if success { 1 } else { 0 });
     }
 }
 
 /// Runs after a startup mount call; the call-hook dispatcher preserves the
 /// firmware mount result and selects only the cataloged call sites below.
 unsafe fn after_sd_mount(drive: u32) {
-    unsafe { ensure_registry() };
-    if unsafe { ptr::read_volatile(CLAIM_WORD as *const u32) } == 1 {
+    if !unsafe { ensure_registry() } {
         return;
     }
-    unsafe { ptr::write_volatile(DEBUG_WORD as *mut u32, 1) };
-    unsafe { ptr::write_volatile(DEBUG_WORD as *mut u32, 2) };
+    if unsafe { ptr::read_volatile(claim_word() as *const u32) } == 1 {
+        return;
+    }
+    unsafe { ptr::write_volatile(debug_word() as *mut u32, 1) };
+    unsafe { ptr::write_volatile(debug_word() as *mut u32, 2) };
     if drive != 0x41 {
-        unsafe { ptr::write_volatile(DEBUG_WORD as *mut u32, 3) };
+        unsafe { ptr::write_volatile(debug_word() as *mut u32, 3) };
         return;
     }
     let is_ready = unsafe { ready() };
-    unsafe { ptr::write_volatile(DEBUG_WORD as *mut u32, 0x100 | (is_ready & 0xff)) };
+    unsafe { ptr::write_volatile(debug_word() as *mut u32, 0x100 | (is_ready & 0xff)) };
     if is_ready == 0 {
         return;
     }
     if !unsafe { claim() } {
-        unsafe { ptr::write_volatile(DEBUG_WORD as *mut u32, 4) };
+        unsafe { ptr::write_volatile(debug_word() as *mut u32, 4) };
         return;
     }
-    unsafe { ptr::write_volatile(DEBUG_WORD as *mut u32, 5) };
+    unsafe { ptr::write_volatile(debug_word() as *mut u32, 5) };
     let success = unsafe { load_patch_files() };
     unsafe {
         if success {
-            ptr::write_volatile(DEBUG_WORD as *mut u32, 0x500);
+            ptr::write_volatile(debug_word() as *mut u32, 0x500);
         } else {
-            ptr::write_volatile(DEBUG_WORD as *mut u32, 0x400);
+            ptr::write_volatile(debug_word() as *mut u32, 0x400);
         }
     }
     unsafe {

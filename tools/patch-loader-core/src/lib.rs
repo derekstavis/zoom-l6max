@@ -3,18 +3,53 @@
 #[cfg(test)]
 extern crate std;
 
-/// Where the resident Patch loader keeps its fixed hook registry on L6 1.10.
-///
-/// The L6 scatter table places `.data` at 0x801f5400, so the first 0x5400 bytes
-/// of the 64 KiB bank at 0x801f0000 are RAM the firmware never references. The
-/// registry must stay below 0x801f5400: an earlier 0x801f8000 overwrote live
-/// `.data`, and the firmware then never started its USB controller.
-pub const L6_REGISTRY_BASE: u32 = 0x801f_0000;
-/// Where the resident Patch loader keeps its fixed hook registry on L6max 1.10.
-pub const L6MAX_REGISTRY_BASE: u32 = 0x8021_8000;
-/// Bytes the registry may use from its base. The handler table and the QEMU
-/// arena word sit well inside it.
-pub const REGISTRY_LIMIT: u32 = 0x800;
+/// The resident Patch loader's hook registry. The loader allocates it from the
+/// FreeRTOS heap on the first card mount and publishes its address in a single
+/// fixed word, the only firmware RAM the loader claims. Dispatch stubs and the
+/// test harness follow that word; zero means no registry yet, and every
+/// dispatch then takes the stock path.
+pub mod registry {
+    /// The registry pointer on L6 1.10. The L6 scatter table places `.data` at
+    /// 0x801f5400, and the firmware never references the RAM below it from
+    /// 0x801f0000. An earlier fixed registry at 0x801f8000 overwrote live
+    /// `.data`, and the L6 then never started its USB controller.
+    pub const L6_POINTER: u32 = 0x801f_0000;
+    /// The registry pointer on L6max 1.10.
+    pub const L6MAX_POINTER: u32 = 0x8021_8000;
+
+    pub const MAGIC: u32 = 0x4c36_5244;
+    pub const MAGIC_OFFSET: u32 = 0;
+    pub const DEBUG_OFFSET: u32 = 4;
+    pub const CLAIM_OFFSET: u32 = 8;
+    pub const MODULE_PTR_OFFSET: u32 = 160;
+    pub const MODULE_LEN_OFFSET: u32 = 164;
+    pub const HOOK_CHAINS_OFFSET: u32 = 0x100;
+    /// One handler word per dynamic dispatch site, after the hook chains.
+    pub const HANDLER_TABLE_OFFSET: u32 = HOOK_CHAINS_OFFSET
+        + (super::dynamic::MAX_FUNCTION_CHAINS
+            * core::mem::size_of::<super::dynamic::FunctionHookChain>()) as u32;
+    /// The QEMU-only module arena's next free address.
+    pub const ARENA_NEXT_OFFSET: u32 = 0x700;
+    /// Bytes allocated for the registry.
+    pub const LEN: u32 = ARENA_NEXT_OFFSET + 4;
+
+    const _: () = assert!(
+        MODULE_LEN_OFFSET < HOOK_CHAINS_OFFSET
+            && HANDLER_TABLE_OFFSET + super::dynamic::MAX_FUNCTION_CHAINS as u32 * 4
+                <= ARENA_NEXT_OFFSET
+            // Dispatch stubs reach each handler with a 12-bit load offset.
+            && ARENA_NEXT_OFFSET < 0x1000
+    );
+
+    /// The registry pointer word for a MAIN image loaded at `main_base`.
+    pub const fn pointer_for_main_base(main_base: u32) -> u32 {
+        if main_base == 0x8000_1000 {
+            L6_POINTER
+        } else {
+            L6MAX_POINTER
+        }
+    }
+}
 
 /// Experimental fixed-address bundles emitted by `l6patch`.
 ///
@@ -554,7 +589,7 @@ pub mod dynamic {
     pub const HOOK_RECORD_LEN: usize = 12;
     pub const RELOCATION_RECORD_LEN: usize = 12;
     /// Maximum number of distinct hook sites the resident loader can index.
-    /// Keep this synchronized with the fixed registry reserved by Patch loader.
+    /// The registry layout in [`crate::registry`] is sized from it.
     // The L6max catalog exposes ten dynamic sites. Keep the registry sized
     // for the complete catalog and bound per-module loader stack use.
     pub const MAX_FUNCTION_CHAINS: usize = 10;
