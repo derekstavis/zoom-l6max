@@ -4,7 +4,7 @@
   "module_base": "0x800c0000",
   "name": "patch-loader",
   "payload_file": "patch-loader-L6-800b6af0.bin",
-  "payload_length": 11339,
+  "payload_length": 11739,
   "reserve_end": "0x800c8000",
   "sites": [
     {

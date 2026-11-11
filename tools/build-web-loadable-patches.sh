@@ -40,43 +40,40 @@ print(pathlib.Path(report["patches"][0]["file"]).name)
 PY_REPORT
 )"
   cp "$output/PATCHES/$module_file" "$destination/$file_name"
-  shasum -a 256 "$destination/$file_name" | awk '{print $1}'
 }
 
-l6max_midi_sha="$(build_module L6max "$l6max_source" midi-sync MIDI.BIN)"
-l6_midi_sha="$(build_module L6 "$l6_source" midi-sync MIDI.BIN)"
-l6max_knob_sha="$(build_module L6max "$l6max_source" knob-dialog KNOB.BIN)"
+build_module L6max "$l6max_source" midi-sync MIDI.BIN
+build_module L6 "$l6_source" midi-sync MIDI.BIN
+build_module L6max "$l6max_source" knob-dialog KNOB.BIN
 
-python3 - "$repo_root/web/public/loadable-patches/manifest.json" "$l6max_midi_sha" "$l6_midi_sha" "$l6max_knob_sha" <<'PY'
+python3 - "$repo_root/web/public/loadable-patches" <<'PY'
+import hashlib
 import json
+import pathlib
+import struct
 import sys
 
-manifest_path, l6max_midi_sha, l6_midi_sha, l6max_knob_sha = sys.argv[1:]
-modules = [{
-    "id": "midi-sync",
-    "model": "L6max",
-    "file": "L6max/MIDI.BIN",
-    "format_version": 8,
-    "loader_abi": 2,
-    "sha256": l6max_midi_sha,
-}]
-modules.append({
-    "id": "midi-sync",
-    "model": "L6",
-    "file": "L6/MIDI.BIN",
-    "format_version": 8,
-    "loader_abi": 2,
-    "sha256": l6_midi_sha,
-})
-modules.append({
-    "id": "knob-dialog",
-    "model": "L6max",
-    "file": "L6max/KNOB.BIN",
-    "format_version": 8,
-    "loader_abi": 2,
-    "sha256": l6max_knob_sha,
-})
-with open(manifest_path, "w", encoding="utf-8") as manifest:
+root = pathlib.Path(sys.argv[1])
+modules = []
+for patch_id, model, file in [
+    ("midi-sync", "L6max", "L6max/MIDI.BIN"),
+    ("midi-sync", "L6", "L6/MIDI.BIN"),
+    ("knob-dialog", "L6max", "L6max/KNOB.BIN"),
+]:
+    data = (root / file).read_bytes()
+    if data[:4] != b"L6SB":
+        sys.exit(f"{file}: not an SD patch module")
+    # Record what the module declares rather than restating the format here.
+    format_version, loader_abi = struct.unpack_from("<HH", data, 4)
+    modules.append({
+        "id": patch_id,
+        "model": model,
+        "file": file,
+        "format_version": format_version,
+        "loader_abi": loader_abi,
+        "sha256": hashlib.sha256(data).hexdigest(),
+    })
+with open(root / "manifest.json", "w", encoding="utf-8") as manifest:
     json.dump({"modules": modules}, manifest, indent=2)
     manifest.write("\n")
 PY

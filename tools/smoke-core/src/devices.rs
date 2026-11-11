@@ -5315,7 +5315,8 @@ fn sd_dynamic_handler_slot(
     let table_offset = 0x100u32
         .checked_add(
             u32::try_from(core::mem::size_of::<
-                [patch_loader_core::dynamic::FunctionHookChain; 8],
+                [patch_loader_core::dynamic::FunctionHookChain;
+                    patch_loader_core::dynamic::MAX_FUNCTION_CHAINS],
             >())
             .map_err(|e| e.to_string())?,
         )
@@ -5363,7 +5364,9 @@ fn run_knob_dialog(
     use l6max_host::indicators::rings;
     use std::time::Instant;
 
-    const MAIN_SHA256: [&str; 3] = [
+    const MAIN_SHA256: [&str; 4] = [
+        // Templates regenerated from the current patch sources.
+        "98898165368380606e8a76954a4da92438030ef7a3f878e5a302ce84cfa7fe5a",
         "76925b4e017083910ef33c2d52e3930d3cdad819cc8b4ffe5f782dd2f07212d7",
         // Recorder-fix release rebuild of the same knob-dialog patch, version 0112.
         "90c7cbdd0fee494bdcaf805730b1eb3931117d27d96ab651fe5dc604695c3010",
