@@ -67,7 +67,7 @@ export const LOADABLE_PATCHES: LoadablePatchInfo[] = [
     description:
       'The same MIDI sync feature as above, packaged as an SD card patch. It loads when the card is mounted and clears from RAM when the mixer restarts.',
     fileName: 'MIDI.BIN',
-    loaderAbi: 2,
+    loaderAbi: 1,
     readmeUrl:
       'https://github.com/derekstavis/zoom-l6max/blob/main/patches/patch-loader/README.md',
   },
@@ -78,7 +78,7 @@ export const LOADABLE_PATCHES: LoadablePatchInfo[] = [
     description:
       'The same knob-value dialog as above, packaged as an SD card patch. It loads when the card is mounted and clears from RAM when the mixer restarts.',
     fileName: 'KNOB.BIN',
-    loaderAbi: 2,
+    loaderAbi: 1,
     readmeUrl:
       'https://github.com/derekstavis/zoom-l6max/blob/main/patches/patch-loader/README.md',
   },

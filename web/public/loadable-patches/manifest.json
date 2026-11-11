@@ -4,25 +4,25 @@
       "id": "midi-sync",
       "model": "L6max",
       "file": "L6max/MIDI.BIN",
-      "format_version": 8,
-      "loader_abi": 2,
-      "sha256": "d438e22288af7a5cbaff8fca705526cce428994c4b98afa5d83bf25f1ce402bf"
+      "format_version": 1,
+      "loader_abi": 1,
+      "sha256": "2869883f2d7369a7e161975e2dc1c664c71af958be3ee4e42427c0a8dedf4b41"
     },
     {
       "id": "midi-sync",
       "model": "L6",
       "file": "L6/MIDI.BIN",
-      "format_version": 8,
-      "loader_abi": 2,
-      "sha256": "582e173dce6a0d219159a2b2d002af40707e316668f2d667efb3517599c2db1f"
+      "format_version": 1,
+      "loader_abi": 1,
+      "sha256": "f5bccddbef6cdb76927b367d410ed4d981e56f8faea65bab4b5b3c1ae6321602"
     },
     {
       "id": "knob-dialog",
       "model": "L6max",
       "file": "L6max/KNOB.BIN",
-      "format_version": 8,
-      "loader_abi": 2,
-      "sha256": "795f0959640a7582b40e069122e2415804741914fef779a90680d9b7bb33069a"
+      "format_version": 1,
+      "loader_abi": 1,
+      "sha256": "a48cbdb4296528668886c8549029f68a6c6835ae65e6dae2817a02d67c398725"
     }
   ]
 }
