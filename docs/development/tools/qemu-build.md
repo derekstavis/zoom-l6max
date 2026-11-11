@@ -12,7 +12,9 @@ cargo run --offline --locked -p qemu-build -- /path/to/qemu-source
 ```
 
 The optional source path overrides the repository’s configured source tree.
-`--minimal` selects the minimal build configuration. Builds disable TCG plugin
+`--minimal` selects the minimal build configuration; it keeps only the host
+audio backend the native UI uses (CoreAudio on macOS, PulseAudio on Linux).
+Builds disable TCG plugin
 support by default, because its hooks cost CPU even when no plugin is loaded;
 `--plugins` keeps it for [QEMU plugins](cpu-profile.md#qemu-plugins). Each
 build reconfigures the staged tree, and test and host tools that rebuild a stale
