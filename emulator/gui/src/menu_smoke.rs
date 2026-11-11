@@ -1,10 +1,13 @@
-//! Exercise the real action dispatcher and native pickers without host input.
-use crate::{NativePanel, OpenAudioWindow, OpenFirmware, OpenPatchesWindow, OpenSdFolder};
+//! Exercise the native menu bar, its actions and native pickers without host input.
+use crate::NativePanel;
 use l6max_host::protocol;
 use std::{
     path::PathBuf,
     time::{Duration, Instant},
 };
+
+/// A failure from a menu operation queued outside the tick.
+static NATIVE_ERROR: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
 pub struct MenuSmoke {
     firmware: PathBuf,
@@ -80,12 +83,98 @@ impl MenuSmoke {
         Err("Native menu smoke requires macOS".into())
     }
 
+    /// Find a menu in the native menu bar by its title.
+    #[cfg(target_os = "macos")]
+    fn native_menu(menu: &str) -> Result<objc2::rc::Retained<objc2_app_kit::NSMenu>, String> {
+        use objc2_app_kit::NSApplication;
+        use objc2_foundation::{MainThreadMarker, NSString};
+        let marker = MainThreadMarker::new().ok_or("Menu check needs main thread")?;
+        let bar = NSApplication::sharedApplication(marker)
+            .mainMenu()
+            .ok_or("The application has no menu bar")?;
+        bar.itemAtIndex(bar.indexOfItemWithTitle(&NSString::from_str(menu)))
+            .and_then(|top| top.submenu())
+            .ok_or_else(|| format!("The menu bar has no {menu} menu"))
+    }
+
+    /// Run `work` on the main queue after this tick returns. Menu validation
+    /// and actions call back into GPUI, which this tick is still borrowing.
+    #[cfg(target_os = "macos")]
+    fn on_main_queue(work: Box<dyn FnOnce() -> Result<(), String>>) {
+        use std::ffi::c_void;
+        unsafe extern "C" {
+            static _dispatch_main_q: c_void;
+            fn dispatch_async_f(
+                queue: *const c_void,
+                context: *mut c_void,
+                work: extern "C" fn(*mut c_void),
+            );
+        }
+        extern "C" fn run(context: *mut c_void) {
+            let work =
+                unsafe { Box::from_raw(context.cast::<Box<dyn FnOnce() -> Result<(), String>>>()) };
+            if let Err(error) = work() {
+                *NATIVE_ERROR.lock().unwrap() = Some(error);
+            }
+        }
+        unsafe {
+            dispatch_async_f(
+                &raw const _dispatch_main_q,
+                Box::into_raw(Box::new(work)).cast(),
+                run,
+            );
+        }
+    }
+
+    /// Validate a menu's items, as AppKit does when the menu opens.
+    #[cfg(target_os = "macos")]
+    fn validate_menu(menu: &str) -> Result<(), String> {
+        let menu = menu.to_owned();
+        Self::on_main_queue(Box::new(move || {
+            Self::native_menu(&menu)?.update();
+            Ok(())
+        }));
+        Ok(())
+    }
+
+    /// Perform a menu item's action as a click does. A disabled item is an error.
+    #[cfg(target_os = "macos")]
+    fn click(menu: &str, item: &str) -> Result<(), String> {
+        let (menu, item) = (menu.to_owned(), item.to_owned());
+        Self::on_main_queue(Box::new(move || {
+            use objc2_foundation::NSString;
+            let submenu = Self::native_menu(&menu)?;
+            let index = submenu.indexOfItemWithTitle(&NSString::from_str(&item));
+            let entry = submenu
+                .itemAtIndex(index)
+                .ok_or_else(|| format!("The {menu} menu has no {item:?} item"))?;
+            if !entry.isEnabled() {
+                return Err(format!("{menu} → {item} is disabled"));
+            }
+            submenu.performActionForItemAtIndex(index);
+            Ok(())
+        }));
+        Ok(())
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn validate_menu(_: &str) -> Result<(), String> {
+        Err("Native menu smoke requires macOS".into())
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn click(_: &str, _: &str) -> Result<(), String> {
+        Err("Native menu smoke requires macOS".into())
+    }
+
     pub fn tick(
         &mut self,
         panel: &mut NativePanel,
-        window: &mut gpui::Window,
         cx: &mut gpui::Context<NativePanel>,
     ) -> Result<bool, String> {
+        if let Some(error) = NATIVE_ERROR.lock().unwrap().take() {
+            return Err(error);
+        }
         if Instant::now() > self.deadline {
             return Err(format!("Menu smoke timed out at stage {}", self.stage));
         }
@@ -100,7 +189,11 @@ impl MenuSmoke {
                     &panel.bundle.as_ref().unwrap().qemu,
                     &expected_qemu,
                 )?;
-                window.dispatch_action(Box::new(OpenFirmware), cx);
+                Self::validate_menu("File")?;
+                self.stage = 20;
+            }
+            20 => {
+                Self::click("File", "Open Firmware…")?;
                 self.stage = 1;
             }
             1 if panel.choosing_firmware && Self::cancel_picker(false)? => {
@@ -111,7 +204,11 @@ impl MenuSmoke {
                 // Import through the existing engine path, then check menu
                 // dispatch with a running guest, not only the first-run overlay.
                 panel.load_firmware(&self.firmware)?;
-                window.dispatch_action(Box::new(OpenFirmware), cx);
+                Self::validate_menu("File")?;
+                self.stage = 21;
+            }
+            21 => {
+                Self::click("File", "Open Firmware…")?;
                 self.stage = 3;
             }
             3 if panel.choosing_firmware && Self::cancel_picker(false)? => {
@@ -122,7 +219,11 @@ impl MenuSmoke {
                 if panel.controls.is_none() || panel.firmware_error.is_some() {
                     return Err("Cancelling firmware picker disturbed guest".into());
                 }
-                window.dispatch_action(Box::new(OpenSdFolder), cx);
+                Self::validate_menu("File")?;
+                self.stage = 24;
+            }
+            24 => {
+                Self::click("File", "Use SD Card Folder…")?;
                 self.stage = 5;
             }
             5 if panel.choosing_firmware && Self::cancel_picker(true)? => {
@@ -134,8 +235,12 @@ impl MenuSmoke {
                     return Err("Cancelling SD picker disturbed guest".into());
                 }
                 println!("PASS: picker cancellation keeps guest running and actions reusable");
-                window.dispatch_action(Box::new(OpenAudioWindow), cx);
+                Self::validate_menu("Audio Input")?;
                 self.deadline = Instant::now() + Duration::from_secs(120);
+                self.stage = 22;
+            }
+            22 => {
+                Self::click("Audio Input", "Channels and Playback…")?;
                 self.stage = 7;
             }
             7 if panel.audio_window.is_some() => {
@@ -207,7 +312,11 @@ impl MenuSmoke {
                     return Err("Cleared audio stayed in the configuration".into());
                 }
                 println!("PASS: clearing channels removes their audio and saved files");
-                window.dispatch_action(Box::new(OpenPatchesWindow), cx);
+                Self::validate_menu("File")?;
+                self.stage = 23;
+            }
+            23 => {
+                Self::click("File", "Firmware Patches…")?;
                 self.stage = 14;
             }
             14 if panel.patches_window.is_some() => {

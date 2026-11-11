@@ -133,8 +133,10 @@ struct Connections {
 }
 
 /// The menu bar. The Connections menu offers only the action that changes the
-/// current state.
-fn app_menus(bundled: bool, connections: Connections) -> Vec<Menu> {
+/// current state. Without firmware selection, Open Firmware and Use SD Card
+/// Folder have no handler, which is what disables them: AppKit's menu
+/// validation overrides `MenuItem::disabled`.
+fn app_menus(connections: Connections) -> Vec<Menu> {
     let usb = if connections.usb {
         MenuItem::action("Disconnect USB", DisconnectUsb)
     } else {
@@ -148,9 +150,9 @@ fn app_menus(bundled: bool, connections: Connections) -> Vec<Menu> {
     vec![
         Menu::new("L6 Emulator").items([MenuItem::action("Quit L6 Emulator", Quit)]),
         Menu::new("File").items([
-            MenuItem::action("Open Firmware…", OpenFirmware).disabled(!bundled),
+            MenuItem::action("Open Firmware…", OpenFirmware),
             MenuItem::action("Firmware Patches…", OpenPatchesWindow),
-            MenuItem::action("Use SD Card Folder…", OpenSdFolder).disabled(!bundled),
+            MenuItem::action("Use SD Card Folder…", OpenSdFolder),
             MenuItem::action("Eject SD Card", EjectSdCard),
         ]),
         Menu::new("Audio Input").items([
@@ -1390,6 +1392,12 @@ fn main() {
                 tracing::error!(%error, "Could not prepare demo SD card");
                 std::process::exit(1);
             });
+            // Configured firmware still leaves the File menu able to open
+            // other firmware and SD card folders, as a packaged app can.
+            // A volatile run has no device to switch, so it keeps them disabled.
+            if let (Some(qemu), Some(state)) = (options.qemu.clone(), options.state_dir.as_ref()) {
+                bundle = Some(bundle::Bundle::development_for_state(qemu, state));
+            }
         }
     }
     let bundled = bundle.is_some();
@@ -1503,22 +1511,24 @@ fn main() {
                 },
             )
             .expect("open L6 family native window");
-        cx.on_action(move |_: &OpenFirmware, cx| {
-            // Global actions bubble while GPUI holds the active window. Updating
-            // it here fails with "window not found"; defer until dispatch ends.
-            cx.defer(move |cx| {
-                if let Err(error) = view.update(cx, |panel, _, cx| panel.choose_firmware(cx)) {
-                    tracing::error!(%error, "Open Firmware action failed");
-                }
+        if bundled {
+            cx.on_action(move |_: &OpenFirmware, cx| {
+                // Global actions bubble while GPUI holds the active window. Updating
+                // it here fails with "window not found"; defer until dispatch ends.
+                cx.defer(move |cx| {
+                    if let Err(error) = view.update(cx, |panel, _, cx| panel.choose_firmware(cx)) {
+                        tracing::error!(%error, "Open Firmware action failed");
+                    }
+                });
             });
-        });
-        cx.on_action(move |_: &OpenSdFolder, cx| {
-            cx.defer(move |cx| {
-                if let Err(error) = view.update(cx, |panel, _, cx| panel.choose_sd_folder(cx)) {
-                    tracing::error!(%error, "SD Card Folder action failed");
-                }
+            cx.on_action(move |_: &OpenSdFolder, cx| {
+                cx.defer(move |cx| {
+                    if let Err(error) = view.update(cx, |panel, _, cx| panel.choose_sd_folder(cx)) {
+                        tracing::error!(%error, "SD Card Folder action failed");
+                    }
+                });
             });
-        });
+        }
         cx.on_action(|_: &Quit, cx| cx.quit());
         cx.on_action(move |_: &OpenPatchesWindow, cx| {
             cx.defer(move |cx| {
@@ -1617,7 +1627,7 @@ fn main() {
             // Command on macOS, Control elsewhere.
             KeyBinding::new("secondary-alt-i", OpenAudioWindow, None),
         ]);
-        cx.set_menus(app_menus(bundled, Connections::default()));
+        cx.set_menus(app_menus(Connections::default()));
         // macOS normally keeps apps alive after their last window closes.
         cx.on_window_closed(move |cx, _| {
             let panel_open = cx
@@ -1684,7 +1694,7 @@ fn main() {
                                 menu_connections = connections;
                                 // Outside this window update: rebuilding the
                                 // menu bar can validate items against it.
-                                cx.defer(move |cx| cx.set_menus(app_menus(bundled, connections)));
+                                cx.defer(move |cx| cx.set_menus(app_menus(connections)));
                             }
                             if panel.window_model != panel.model {
                                 panel.window_model = panel.model;
@@ -1740,7 +1750,7 @@ fn main() {
                             let controls_changed = control_revision != panel.last_control_revision;
                             panel.last_control_revision = control_revision;
                             if let Some(mut test) = panel.menu_smoke.take() {
-                                match test.tick(panel, window, cx) {
+                                match test.tick(panel, cx) {
                                     Ok(true) => {
                                         passed.store(true, std::sync::atomic::Ordering::Relaxed);
                                         cx.quit();
@@ -1905,7 +1915,7 @@ mod menu_tests {
             (false, true, ["Connect USB", "Disconnect MIDI"]),
             (true, true, ["Disconnect USB", "Disconnect MIDI"]),
         ] {
-            let menus = app_menus(true, Connections { usb, midi });
+            let menus = app_menus(Connections { usb, midi });
             assert_eq!(labels(&menus, "Connections"), expected);
         }
     }
@@ -1913,7 +1923,7 @@ mod menu_tests {
     #[test]
     fn audio_window_has_a_platform_shortcut() {
         assert_eq!(
-            labels(&app_menus(true, Connections::default()), "Audio Input")[0],
+            labels(&app_menus(Connections::default()), "Audio Input")[0],
             "Channels and Playback…"
         );
         let binding = KeyBinding::new("secondary-alt-i", OpenAudioWindow, None);

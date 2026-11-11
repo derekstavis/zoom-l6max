@@ -64,7 +64,10 @@ runs reuse both, and QEMU rebuilds itself when the board model changes. Every
 binary in the workspace does the same, so `cargo run -p l6max-host` and the
   test tools need no setup commands. Use `--firmware-package FILE` or
 `L6_FIRMWARE=FILE` for a package elsewhere, `--qemu PATH` for your own build,
-and `--no-auto-setup` to disable all of this.
+and `--no-auto-setup` to disable all of this. **File → Open Firmware…** and
+**File → Use SD Card Folder…** also work in these runs; their imports and device
+state stay under the run's state directory (`emulator/state` by default). A
+`--volatile` run keeps both disabled.
 
 On first L6max launch, complete Date/Time and Battery Type setup using the
 panel buttons. The L6 UI has verified hit targets for its six mutes, MONO and

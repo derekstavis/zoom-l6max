@@ -171,8 +171,13 @@ L6_MENU_SMOKE_FIRMWARE=/path/to/stock/L6max.bin \
   "emulator/dist/L6max Emulator.app/Contents/MacOS/l6max-gui"
 ```
 
-This dispatches the File menu actions through GPUI, checks the native file and
-directory pickers, and cancels them through AppKit. It checks Open Firmware
+This performs the File and Audio Input items through the native menu bar, as a
+click does after AppKit validates the menu, so an item that is shown but has no
+working handler fails. It checks the native file and directory pickers and
+cancels them through AppKit. The same check runs from a repository build with
+`cargo run -p l6max-gui -- --config FILE --state-dir DIR` and
+`L6_MENU_SMOKE_QEMU_SHA256` set to the repository QEMU's hash; use scratch paths,
+since it saves firmware and patch choices to that configuration. It checks Open Firmware
 before and after loading a guest, repeated invocation after cancellation, and
 that cancellation keeps the guest running, and that applying and removing a
 firmware patch changes the application on the saved device. Use a fresh data
