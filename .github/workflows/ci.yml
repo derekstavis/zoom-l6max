@@ -87,6 +87,8 @@ jobs:
           cargo run --locked -p qemu-build -- --minimal --optimized
       - name: Test panel flash and timer MMIO
         run: python3 emulator/qemu/tests/panel-qtest.py emulator/qemu/build-source/build/qemu-system-arm
+      - name: Check CoreAudio backend
+        run: emulator/qemu/build-source/build/qemu-system-arm -audiodev help | grep -qx coreaudio
       - name: Package and verify app
         env:
           RELEASE_BUILD: ${{ inputs.release || false }}

@@ -457,12 +457,16 @@ pub fn build(request: &Request) -> Result<PathBuf, String> {
     if !request.plugins {
         configure.arg("--disable-plugins");
     }
-    // CI bundles need TCG and the board's peripherals, without unrelated
-    // optional host services discovered from the runner's installed libraries.
+    // CI bundles need TCG, the board's peripherals and the host audio backend
+    // the native UI selects, without unrelated optional host services
+    // discovered from the runner's installed libraries.
     if minimal {
         configure.args(["--without-default-features", "--enable-tcg"]);
         if cfg!(target_os = "linux") {
             configure.arg("--enable-pa");
+        }
+        if cfg!(target_os = "macos") {
+            configure.arg("--enable-coreaudio");
         }
     }
     // Linux builds use Clang like macOS; CC and CXX select a versioned one.
