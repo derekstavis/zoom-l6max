@@ -295,7 +295,7 @@ Use the local configuration above and the scenario catalog for prerequisites.
 ## Firmware patch
 
 Patch, factory, and update cases need explicit local configuration and matching
-firmware. Use `knob-dialog`, `popup-concurrency`, `patched-update`,
+firmware. Use `knob-dialog`, `patched-update`,
 `firmware-update`, and `wasm-patch` as appropriate. `l6-patch-heap` and
 `l6max-patch-heap` check heap headroom with every patch for the model applied.
 

@@ -522,9 +522,6 @@ impl Runner {
                 Action::KnobDialog => {
                     return Ok(Progress::Device(devices::Operation::KnobDialog));
                 }
-                Action::PopupConcurrency => {
-                    return Ok(Progress::Device(devices::Operation::PopupConcurrency));
-                }
                 Action::FirmwareUpdate => {
                     return Ok(Progress::Device(devices::Operation::FirmwareUpdate));
                 }
