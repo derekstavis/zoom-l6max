@@ -5315,7 +5315,8 @@ fn sd_dynamic_handler_slot(
     let table_offset = 0x100u32
         .checked_add(
             u32::try_from(core::mem::size_of::<
-                [patch_loader_core::dynamic::FunctionHookChain; 8],
+                [patch_loader_core::dynamic::FunctionHookChain;
+                    patch_loader_core::dynamic::MAX_FUNCTION_CHAINS],
             >())
             .map_err(|e| e.to_string())?,
         )
