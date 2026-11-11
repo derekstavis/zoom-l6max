@@ -10,6 +10,7 @@ pub mod heap;
 pub mod input;
 pub mod protocol;
 pub mod qmp;
+pub mod sd_patches;
 pub mod shared_memory;
 
 pub mod controls;

@@ -31,6 +31,10 @@ struct Emulator {
     /// Firmware patches to run, applied to the stock package.
     #[serde(default)]
     patches: Vec<String>,
+    /// Patches the Patch loader reads from the SD card. Selecting any installs
+    /// the loader in the firmware.
+    #[serde(default)]
+    sd_patches: Vec<String>,
     /// WAV files by input channel.
     #[serde(default)]
     input_patch: BTreeMap<String, PathBuf>,
@@ -74,11 +78,12 @@ impl Config {
         for model in config.firmware.keys().chain(config.emulator.keys()) {
             parse_model(model)?;
         }
-        for emulator in config.emulator.values() {
+        for (model, emulator) in &config.emulator {
             emulator
                 .patches
                 .iter()
                 .try_for_each(|name| check_patch(name))?;
+            crate::sd_patches::check(parse_model(model)?, &emulator.sd_patches)?;
         }
         Ok(config)
     }
@@ -119,6 +124,12 @@ impl Config {
         self.emulator
             .get(model_name(model))
             .map_or(&[], |emulator| &emulator.patches)
+    }
+
+    pub fn sd_patches(&self, model: l6fw::Model) -> &[String] {
+        self.emulator
+            .get(model_name(model))
+            .map_or(&[], |emulator| &emulator.sd_patches)
     }
 
     /// A model's files by one-based channel, without checking that they exist, so
@@ -233,13 +244,21 @@ pub fn save_sd_card(path: &Path, model: l6fw::Model, card: &Path) -> Result<(), 
     })
 }
 
-pub fn save_patches(path: &Path, model: l6fw::Model, patches: &[String]) -> Result<(), String> {
+/// Save the patches installed in the firmware and those loaded from the SD card.
+pub fn save_patches(
+    path: &Path,
+    model: l6fw::Model,
+    patches: &[String],
+    sd_patches: &[String],
+) -> Result<(), String> {
     edit(path, |document| {
         let emulator = emulator_table(document, model);
-        if patches.is_empty() {
-            emulator.remove("patches");
-        } else {
-            emulator["patches"] = toml_edit::value(patches.iter().collect::<toml_edit::Array>());
+        for (key, list) in [("patches", patches), ("sd_patches", sd_patches)] {
+            if list.is_empty() {
+                emulator.remove(key);
+            } else {
+                emulator[key] = toml_edit::value(list.iter().collect::<toml_edit::Array>());
+            }
         }
     })
 }
@@ -276,6 +295,12 @@ mod tests {
         assert!(Config::parse("version=1\n[emulator.l7]\nsd_card='x'").is_err());
         assert!(Config::parse("version=1\n[test]\nqemu='q'").is_err());
         assert!(Config::parse("version=1\n[emulator.l6]\npatches=['nope']").is_err());
+        // L6 has no knob dialog, and din-mixer-control has no SD module.
+        assert!(Config::parse("version=1\n[emulator.l6]\nsd_patches=['knob-dialog']").is_err());
+        assert!(
+            Config::parse("version=1\n[emulator.l6max]\nsd_patches=['din-mixer-control']").is_err()
+        );
+        assert!(Config::parse("version=1\n[emulator.l6max]\nsd_patches=['knob-dialog']").is_ok());
         let config = Config::parse(
             "version=1\n[emulator.l6.input_patch]\n1='/missing.wav'\n[emulator.l6max.input_patch]\n9='/x.wav'",
         )
@@ -351,12 +376,16 @@ mod tests {
             config.input_patch(l6fw::Model::L6).unwrap().unwrap()[&2],
             wav
         );
-        save_patches(&file, l6fw::Model::L6, &["midi-sync".to_owned()]).unwrap();
+        save_patches(&file, l6fw::Model::L6, &["midi-sync".to_owned()], &[]).unwrap();
         assert_eq!(
             Config::load(&file).unwrap().patches(l6fw::Model::L6),
             ["midi-sync"]
         );
-        save_patches(&file, l6fw::Model::L6, &[]).unwrap();
+        save_patches(&file, l6fw::Model::L6, &[], &["midi-sync".to_owned()]).unwrap();
+        let config = Config::load(&file).unwrap();
+        assert!(config.patches(l6fw::Model::L6).is_empty());
+        assert_eq!(config.sd_patches(l6fw::Model::L6), ["midi-sync"]);
+        save_patches(&file, l6fw::Model::L6, &[], &[]).unwrap();
         assert!(!fs::read_to_string(&file).unwrap().contains("patches"));
         save_input_patch(&file, l6fw::Model::L6, &BTreeMap::new()).unwrap();
         assert!(

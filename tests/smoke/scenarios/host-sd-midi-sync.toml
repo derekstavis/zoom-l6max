@@ -1,0 +1,36 @@
+version = 1
+name = "host-sd-midi-sync"
+models = ["l6", "l6max"]
+backends = ["headless"]
+state = "setup-complete"
+card = "empty"
+# The engine installs the Patch loader in the stock firmware and writes the
+# hosted midi-sync module to the card, as `--sd-patch midi-sync` and the
+# emulator's SD card choice do.
+installed_sd_patches = ["midi-sync"]
+
+# USB MIDI is usable after the same boot interval as the installed-patch cases.
+[[step]]
+action = "delay"
+guest_ms = 40000
+guest_timeout_ms = 45000
+wall_timeout_s = 900
+
+[[step]]
+action = "press"
+control = "rec-record"
+
+[[step]]
+action = "expect-card-entry"
+path = "RECORDER"
+wall_timeout_s = 60
+
+[[step]]
+action = "direct-usb-midi-round-trip"
+guest_timeout_ms = 15000
+wall_timeout_s = 120
+
+[[step]]
+action = "host-midi-sync"
+guest_timeout_ms = 30000
+wall_timeout_s = 120

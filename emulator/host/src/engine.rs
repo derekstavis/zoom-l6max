@@ -34,6 +34,9 @@ pub struct Options {
     pub config_path: Option<PathBuf>,
     /// Patches chosen for this run in place of the configured ones.
     pub patches: Option<Vec<String>>,
+    /// Patches the Patch loader reads from the SD card, chosen for this run in
+    /// place of the configured ones.
+    pub sd_patches: Option<Vec<String>>,
     /// Which configured firmware to run; L6max when both are configured.
     pub model: Option<l6fw::Model>,
     pub firmware_dir: PathBuf,
@@ -188,11 +191,28 @@ impl Options {
     }
 
     /// The patches a model runs with.
+    /// The patches to install in the firmware. A patch also selected for the SD
+    /// card loads from the card instead.
     pub fn selected_patches(&self, model: l6fw::Model) -> Vec<String> {
-        self.patches.clone().unwrap_or_else(|| {
+        let sd = self.selected_sd_patches(model);
+        self.patches
+            .clone()
+            .unwrap_or_else(|| {
+                self.config
+                    .as_ref()
+                    .map_or_else(Vec::new, |config| config.patches(model).to_vec())
+            })
+            .into_iter()
+            .filter(|patch| !sd.contains(patch))
+            .collect()
+    }
+
+    /// The patches the Patch loader reads from the SD card.
+    pub fn selected_sd_patches(&self, model: l6fw::Model) -> Vec<String> {
+        self.sd_patches.clone().unwrap_or_else(|| {
             self.config
                 .as_ref()
-                .map_or_else(Vec::new, |config| config.patches(model).to_vec())
+                .map_or_else(Vec::new, |config| config.sd_patches(model).to_vec())
         })
     }
 
@@ -217,6 +237,7 @@ impl Options {
             defer_input_patch: false,
             config_path: None,
             patches: None,
+            sd_patches: None,
             model: None,
             firmware_dir: workspace.join("unpacked"),
             firmware_package: env::var_os("L6_FIRMWARE").map(PathBuf::from),
@@ -251,6 +272,12 @@ impl Options {
                     let name = name.to_string_lossy().into_owned();
                     crate::config::check_patch(&name)?;
                     options.patches.get_or_insert_default().push(name);
+                }
+                "--sd-patch" => {
+                    let name = args.next().ok_or("--sd-patch requires a patch name")?;
+                    let name = name.to_string_lossy().into_owned();
+                    crate::config::check_patch(&name)?;
+                    options.sd_patches.get_or_insert_default().push(name);
                 }
                 "--no-patches" => no_patches = true,
                 "--ui-input-smoke" => {
@@ -292,7 +319,7 @@ impl Options {
                 "--volatile" => options.state_dir = None,
                 "--help" | "-h" => {
                     println!(
-                        "Engine options: [QEMU] [--qemu PATH] [--audio-device 'driver=...,id=...'] [--config FILE] [--model l6|l6max] [--patch NAME]... [--no-patches] [--firmware-dir DIR | --firmware-package PACKAGE] [--update-package PACKAGE] [--no-auto-setup] [--logs DIR] [--state-dir DIR | --volatile] [--sd-image FILE | --no-sd] [--update-bootloader] [--usb] [--midi] [--trace-sd] [--smoke-scenario FILE] [--gdb-socket PATH] [--control-socket PATH] [--start-paused]"
+                        "Engine options: [QEMU] [--qemu PATH] [--audio-device 'driver=...,id=...'] [--config FILE] [--model l6|l6max] [--patch NAME]... [--sd-patch NAME]... [--no-patches] [--firmware-dir DIR | --firmware-package PACKAGE] [--update-package PACKAGE] [--no-auto-setup] [--logs DIR] [--state-dir DIR | --volatile] [--sd-image FILE | --no-sd] [--update-bootloader] [--usb] [--midi] [--trace-sd] [--smoke-scenario FILE] [--gdb-socket PATH] [--control-socket PATH] [--start-paused]"
                     );
                     std::process::exit(0);
                 }
@@ -305,10 +332,11 @@ impl Options {
             return Err("--no-sd conflicts with --sd-image".into());
         }
         if no_patches {
-            if options.patches.is_some() {
-                return Err("--no-patches conflicts with --patch".into());
+            if options.patches.is_some() || options.sd_patches.is_some() {
+                return Err("--no-patches conflicts with --patch and --sd-patch".into());
             }
             options.patches = Some(Vec::new());
+            options.sd_patches = Some(Vec::new());
         }
         options.qemu = options.qemu.or_else(crate::setup::existing_qemu);
         options.apply_config(config_file, &workspace)?;
@@ -416,7 +444,7 @@ impl Engine {
                 crate::firmware_patches::forget_installed(state)?;
             }
         }
-        let firmware = crate::firmware_patches::prepare(options, &firmware, model)?
+        let firmware = crate::firmware_patches::prepare(options, &firmware, model, sd.as_deref())?
             .canonicalize()
             .map_err(|e| e.to_string())?;
         engine.display_memory = Some(

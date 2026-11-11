@@ -44,6 +44,17 @@ impl Bundle {
         }
     }
 
+    /// Firmware selection for a repository run that already has a device state
+    /// directory, `<root>/models/<model>`. Selected firmware keeps using that root.
+    pub fn development_for_state(qemu: PathBuf, model_state: &Path) -> Self {
+        let root = model_state
+            .parent()
+            .filter(|models| models.file_name().is_some_and(|name| name == "models"))
+            .and_then(Path::parent)
+            .unwrap_or(model_state);
+        Self::development(qemu, root)
+    }
+
     pub fn restore(&self, options: &mut Options) -> Result<bool, String> {
         options.qemu = None;
         options.logs = self.data.join("logs");
@@ -241,6 +252,18 @@ fn resources_for(executable: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn development_selection_keeps_the_runs_state_root() {
+        let qemu = PathBuf::from("/q");
+        let separated = Bundle::development_for_state(qemu.clone(), Path::new("/s/models/l6max"));
+        assert_eq!(separated.devices, Path::new("/s/models"));
+        assert_eq!(separated.data, Path::new("/s/imported"));
+        let direct = Bundle::development_for_state(qemu, Path::new("/custom"));
+        assert_eq!(direct.devices, Path::new("/custom/models"));
+        assert_eq!(direct.data, Path::new("/custom/imported"));
+    }
+
     #[test]
     fn recognizes_bundle_without_checkout_paths() {
         assert_eq!(

@@ -16,11 +16,6 @@ pub fn at_local(region: Region, s: f32, content: impl IntoElement) -> Div {
         .child(content)
 }
 
-/// Center a model identifier in a panel's printed nameplate area.
-pub fn panel_identifier(region: Region, text: &str, s: f32, font: f32) -> Div {
-    panel_identifier_at(at(region, s, div()), text, s, font)
-}
-
 /// Center a model identifier using panel-local coordinates.
 pub fn panel_identifier_local(region: Region, text: &str, s: f32, font: f32) -> Div {
     panel_identifier_at(at_local(region, s, div()), text, s, font)

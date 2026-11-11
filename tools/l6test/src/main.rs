@@ -40,6 +40,7 @@ struct Fixture {
     firmware_package: Option<PathBuf>,
     patches: Vec<String>,
     installed_patches: Vec<String>,
+    installed_sd_patches: Vec<String>,
     sd_patches: Option<Vec<String>>,
     sd_bundle_mode: Option<String>,
     sd_bundle: Option<PathBuf>,
@@ -357,6 +358,7 @@ fn case_fixture(
         firmware_package: Some(firmware.clone()),
         patches: scenario.map_or_else(Vec::new, |s| s.patches.clone()),
         installed_patches: scenario.map_or_else(Vec::new, |s| s.installed_patches.clone()),
+        installed_sd_patches: scenario.map_or_else(Vec::new, |s| s.installed_sd_patches.clone()),
         sd_patches: scenario.and_then(|s| s.sd_patches.clone()),
         sd_bundle_mode: scenario.and_then(|s| s.sd_bundle_mode.clone()),
         sd_bundle: None,
@@ -693,8 +695,11 @@ fn fixture_options(
     for patch in &fixture.installed_patches {
         args.extend(["--patch".into(), patch.into()]);
     }
+    for patch in &fixture.installed_sd_patches {
+        args.extend(["--sd-patch".into(), patch.into()]);
+    }
     let options = Options::parse_args(args)?;
-    let manifest = json!({"fixture":fixture.name,"model":fixture.model,"firmware":files(&firmware)?,"package_sha256":selected_package.as_ref().map(|p|hash(p)).transpose()?,"patches":fixture.patches,"sd_patches":fixture.sd_patches,"sd_bundle_mode":fixture.sd_bundle_mode,"sd_patch_set_sha256":fixture.sd_bundle.as_ref().map(|p|hash_patch_directory(p)).transpose()?,"update_package_sha256":fixture.update_package.as_ref().map(|p|hash(p)).transpose()? ,"state_spec":state_spec,"sd_sha256":sd_hash,"audio_device":audio_device,"qemu_sha256":config.qemu_sha256});
+    let manifest = json!({"fixture":fixture.name,"model":fixture.model,"firmware":files(&firmware)?,"package_sha256":selected_package.as_ref().map(|p|hash(p)).transpose()?,"patches":fixture.patches,"sd_patches":fixture.sd_patches,"installed_patches":fixture.installed_patches,"installed_sd_patches":fixture.installed_sd_patches,"sd_bundle_mode":fixture.sd_bundle_mode,"sd_patch_set_sha256":fixture.sd_bundle.as_ref().map(|p|hash_patch_directory(p)).transpose()?,"update_package_sha256":fixture.update_package.as_ref().map(|p|hash(p)).transpose()? ,"state_spec":state_spec,"sd_sha256":sd_hash,"audio_device":audio_device,"qemu_sha256":config.qemu_sha256});
     Ok((options, manifest))
 }
 fn engine_args(options: &Options) -> Vec<String> {
@@ -730,6 +735,9 @@ fn engine_args(options: &Options) -> Vec<String> {
     }
     for patch in options.patches.iter().flatten() {
         result.extend(["--patch".into(), patch.clone()]);
+    }
+    for patch in options.sd_patches.iter().flatten() {
+        result.extend(["--sd-patch".into(), patch.clone()]);
     }
     if options.update_bootloader {
         result.push("--update-bootloader".into());
@@ -1601,6 +1609,7 @@ mod tests {
             firmware_package: Some(package),
             patches: static_patches,
             installed_patches: vec![],
+            installed_sd_patches: vec![],
             sd_patches: Some(selected.clone()),
             sd_bundle_mode: None,
             sd_bundle: None,
@@ -1662,6 +1671,7 @@ mod tests {
             firmware_package: None,
             patches: vec![],
             installed_patches: vec![],
+            installed_sd_patches: vec![],
             sd_patches: None,
             sd_bundle_mode: None,
             sd_bundle: None,

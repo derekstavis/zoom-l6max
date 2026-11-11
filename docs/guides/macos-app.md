@@ -37,6 +37,13 @@ L6max offers `knob-dialog`, `midi-sync` and `din-mixer-control`; L6 offers
 when the selected firmware is another. The patches ship in the app and
 need no compiler. See the [patch catalog](../../patches/README.md).
 
+Patches the web patcher hosts as SD card modules (`midi-sync` on both models,
+and `knob-dialog` on L6max) also have a **Firmware | SD card** switch. **SD card** loads the patch the way the
+[Patch loader](../../patches/patch-loader/README.md) does on a device: the app
+installs the loader in the firmware and copies the patch to the card's
+`PATCHES/` folder, removing only files it copied itself. It needs a card, and
+inserting a different card copies the selected patches onto it first.
+
 The supported package layout and revision scope are described in
 [firmware packages](firmware-packages.md). The application validates integrity,
 not manufacturer authenticity.
@@ -48,7 +55,7 @@ Select a folder containing the files and subdirectories you want on the card.
 The app imports it in the background, then inserts it live into the running
 guest's SD slot — no restart, like inserting a card into the real slot. The
 selected card is remembered per model. **File → Eject SD Card** removes it
-the same way.
+the same way, and **File → Insert SD Card** then puts the same card back.
 
 The folder is copied into a private FAT card; it is not a live shared folder.
 Guest writes persist in that copy and never sync back into the original folder.
@@ -64,9 +71,10 @@ Previously imported cards are retained in Application Support.
 
 ## Audio input
 
-**Audio Input → Channels and Playback…** assigns a WAV file to each input channel and plays
-them together. See [audio emulation](../emulator/audio.md#input) for what the channels
-receive.
+**Audio Input → Channels and Playback…** (⌥⌘I) assigns a WAV file to each input channel and plays
+them together. The Audio Input menu also offers **Play** or **Pause**, whichever
+applies, with Stop and Rewind. See [audio emulation](../emulator/audio.md#input)
+for what the channels receive.
 
 ## Local storage
 
@@ -171,8 +179,13 @@ L6_MENU_SMOKE_FIRMWARE=/path/to/stock/L6max.bin \
   "emulator/dist/L6max Emulator.app/Contents/MacOS/l6max-gui"
 ```
 
-This dispatches the File menu actions through GPUI, checks the native file and
-directory pickers, and cancels them through AppKit. It checks Open Firmware
+This performs the File and Audio Input items through the native menu bar, as a
+click does after AppKit validates the menu, so an item that is shown but has no
+working handler fails. It checks the native file and directory pickers and
+cancels them through AppKit. The same check runs from a repository build with
+`cargo run -p l6max-gui -- --config FILE --state-dir DIR` and
+`L6_MENU_SMOKE_QEMU_SHA256` set to the repository QEMU's hash; use scratch paths,
+since it saves firmware and patch choices to that configuration. It checks Open Firmware
 before and after loading a guest, repeated invocation after cancellation, and
 that cancellation keeps the guest running, and that applying and removing a
 firmware patch changes the application on the saved device. Use a fresh data

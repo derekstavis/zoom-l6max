@@ -131,6 +131,14 @@ combine them:
 cargo run -p l6max-gui -- --patch knob-dialog --patch midi-sync
 ```
 
+A patch can also load from the SD card, as the
+[Patch loader](../patches/patch-loader/README.md) does on a device: choose
+**SD card** for it in the Patches window, list it in `sd_patches`, or pass
+`--sd-patch NAME`. The emulator then installs the loader in the firmware and
+writes the patch's file to the card's `PATCHES/` folder; it removes only files it
+wrote itself. midi-sync can load from an L6 or L6max card, and knob-dialog from
+an L6max card.
+
 A run given `--firmware-dir` or `--firmware-package` ignores the configured patches;
 only `--patch` applies to it. Patches apply to the stock 1.10 package. A saved device keeps its settings. Its
 application changes when the selection does, and an SD card update is replaced

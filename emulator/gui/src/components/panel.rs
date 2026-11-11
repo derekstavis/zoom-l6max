@@ -73,6 +73,15 @@ impl PanelInteractions {
     }
 }
 
+/// Where each model prints its name, in panel-local coordinates. Nothing there
+/// responds to input, so the main window shows its notices over it.
+pub fn nameplate(model: l6fw::Model) -> super::layout::Region {
+    match model {
+        l6fw::Model::L6 => super::layout::Region::new(206.0, 246.0, 410.0, 38.0),
+        l6fw::Model::L6max => super::layout::Region::new(318.0, 296.0, 352.0, 36.0).local(),
+    }
+}
+
 pub fn panel(
     layout: &Layout,
     scale: f32,

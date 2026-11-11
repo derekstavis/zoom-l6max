@@ -116,6 +116,7 @@ actions!(
         ConnectMidi,
         DisconnectMidi,
         EjectSdCard,
+        InsertSdCard,
         OpenPatchesWindow,
         OpenAudioWindow,
         PlayAudioInputs,
@@ -125,12 +126,115 @@ actions!(
     ]
 );
 
+/// The emulator state the menu bar follows.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+struct MenuState {
+    /// Whether the emulated USB cable and MIDI jacks are connected.
+    usb: bool,
+    midi: bool,
+    /// Whether a card is in the slot, and whether an ejected one can go back.
+    card: bool,
+    ejected_card: bool,
+    /// Whether the audio inputs are playing.
+    playing: bool,
+}
+
+/// The menu bar. Items that toggle state offer only the action that changes the
+/// current state. Without firmware selection, Open Firmware and Use SD Card
+/// Folder have no handler, which is what disables them: AppKit's menu
+/// validation overrides `MenuItem::disabled`.
+fn app_menus(state: MenuState) -> Vec<Menu> {
+    let usb = if state.usb {
+        MenuItem::action("Disconnect USB", DisconnectUsb)
+    } else {
+        MenuItem::action("Connect USB", ConnectUsb)
+    };
+    let midi = if state.midi {
+        MenuItem::action("Disconnect MIDI", DisconnectMidi)
+    } else {
+        MenuItem::action("Connect MIDI", ConnectMidi)
+    };
+    let mut file = vec![
+        MenuItem::action("Open Firmware…", OpenFirmware),
+        MenuItem::action("Firmware Patches…", OpenPatchesWindow),
+        MenuItem::action("Use SD Card Folder…", OpenSdFolder),
+    ];
+    if state.card {
+        file.push(MenuItem::action("Eject SD Card", EjectSdCard));
+    } else if state.ejected_card {
+        file.push(MenuItem::action("Insert SD Card", InsertSdCard));
+    }
+    let play = if state.playing {
+        MenuItem::action("Pause", PauseAudioInputs)
+    } else {
+        MenuItem::action("Play", PlayAudioInputs)
+    };
+    vec![
+        Menu::new("L6 Emulator").items([MenuItem::action("Quit L6 Emulator", Quit)]),
+        Menu::new("File").items(file),
+        Menu::new("Audio Input").items([
+            MenuItem::action("Channels and Playback…", OpenAudioWindow),
+            MenuItem::separator(),
+            play,
+            MenuItem::action("Stop", StopAudioInputs),
+            MenuItem::action("Rewind", RewindAudioInputs),
+        ]),
+        Menu::new("Connections").items([usb, midi]),
+    ]
+}
+
+/// A message shown along the top of the main window, over the jacks rather than
+/// the controls. Errors and hints stay until
+/// dismissed or resolved; confirmations fade.
+struct Notice {
+    text: SharedString,
+    error: bool,
+    sticky: bool,
+    shown: Instant,
+}
+
+/// How long a confirmation stays.
+const NOTICE_SECONDS: u64 = 3;
+
+/// Centre a notice on the model's nameplate, inside the scaled panel.
+pub(crate) fn notice_anchor(model: l6fw::Model, scale: f32) -> gpui::Div {
+    let plate = components::panel::nameplate(model);
+    let (x, y) = (plate.x + plate.width / 2.0, plate.y + plate.height / 2.0);
+    div()
+        .absolute()
+        .left(px(x * scale - 300.0))
+        .top(px(y * scale - 30.0))
+        .w(px(600.0))
+        .h(px(60.0))
+        .flex()
+        .items_center()
+        .justify_center()
+}
+
+/// The notice element, shared with headless rendering.
+pub(crate) fn notice_view(text: SharedString, error: bool) -> gpui::Div {
+    div()
+        .max_w(px(560.0))
+        .px_4()
+        .py_2()
+        .rounded_lg()
+        .border_1()
+        .border_color(rgb(if error { 0x7a3a40 } else { 0x34405c }))
+        .bg(rgb(if error { 0x3a1c22 } else { 0x171f30 }))
+        .text_sm()
+        .text_color(rgb(if error { 0xffb3a7 } else { 0xe8eef8 }))
+        .child(text)
+}
+
 struct NativePanel {
     /// The model the window is sized for.
     window_model: l6fw::Model,
     window_settling_frames: u8,
     audio_window: Option<gpui::WindowHandle<audio_window::AudioWindow>>,
     patches_window: Option<gpui::WindowHandle<patches_window::PatchesWindow>>,
+    /// The card taken out with Eject SD Card, which Insert SD Card puts back.
+    ejected_card: Option<std::path::PathBuf>,
+    notice: Option<Notice>,
     /// Set while a restart for a new patch selection runs in the background.
     applying_patches: bool,
     patch_error: Option<String>,
@@ -441,7 +545,11 @@ impl NativePanel {
         // Opening draws the window, which reads this panel: finish this update first.
         let panel = cx.entity();
         cx.defer(move |cx| {
-            let bounds = Bounds::centered(None, size(px(patches_window::WIDTH), px(300.0)), cx);
+            let bounds = Bounds::centered(
+                None,
+                size(px(patches_window::WIDTH), px(patches_window::HEIGHT)),
+                cx,
+            );
             let view = panel.clone();
             let window = cx.open_window(
                 WindowOptions {
@@ -457,7 +565,7 @@ impl NativePanel {
             panel.update(cx, |panel, cx| match window {
                 Ok(window) => panel.patches_window = Some(window),
                 Err(error) => {
-                    panel.status = format!("Could not open the patches window: {error}").into();
+                    panel.report(format!("Could not open the patches window: {error}"), true);
                     cx.notify();
                 }
             });
@@ -472,25 +580,42 @@ impl NativePanel {
             .map_or_else(Vec::new, |config| config.patches(self.model).to_vec())
     }
 
-    /// Restart the guest running `selected` without blocking the UI, and save the
+    /// The patches the configuration loads from this model's SD card.
+    fn saved_sd_patches(&self) -> Vec<String> {
+        self.options
+            .config
+            .as_ref()
+            .map_or_else(Vec::new, |config| config.sd_patches(self.model).to_vec())
+    }
+
+    /// Restart the guest running `selection` without blocking the UI, and save the
     /// choice once it has started. A selection that cannot apply keeps the guest running.
-    fn apply_patches(&mut self, selected: Vec<String>, cx: &mut Context<Self>) {
+    fn apply_patches(&mut self, selection: patches_window::Selection, cx: &mut Context<Self>) {
         if self.applying_patches {
             return;
         }
         self.applying_patches = true;
         self.patch_error = None;
         cx.notify();
+        let model = self.model;
+        let patches_window::Selection {
+            firmware: selected,
+            sd_card: sd_selected,
+        } = selection;
         let mut options = self.options.clone();
         options.patches = Some(selected.clone());
-        let previous = self.options.patches.clone();
-        let model = self.model;
+        options.sd_patches = Some(sd_selected.clone());
+        let previous = (
+            self.options.patches.clone(),
+            self.options.sd_patches.clone(),
+        );
         let starting = self.starting_engine.clone();
         cx.spawn(async move |this, cx| {
             let checked = {
                 let (options, selected) = (options.clone(), selected.clone());
+                let sd_selected = sd_selected.clone();
                 cx.background_spawn(async move {
-                    l6max_host::firmware_patches::check(&options, model, &selected)
+                    l6max_host::firmware_patches::check(&options, model, &selected, &sd_selected)
                 })
                 .await
             };
@@ -520,9 +645,15 @@ impl NativePanel {
                             let engine = panel.starting_engine.lock().unwrap().take().unwrap();
                             panel.adopt_engine(engine, &startup_keys)?;
                             if let Some(path) = panel.options.config_path.clone() {
-                                l6max_host::config::save_patches(&path, panel.model, &selected)?;
+                                l6max_host::config::save_patches(
+                                    &path,
+                                    panel.model,
+                                    &selected,
+                                    &sd_selected,
+                                )?;
                                 panel.options.reload_config()?;
                                 panel.options.patches = None;
+                                panel.options.sd_patches = None;
                             }
                             Ok(())
                         })
@@ -536,7 +667,7 @@ impl NativePanel {
             let _ = this.update(cx, |panel, cx| {
                 panel.applying_patches = false;
                 if let Err(error) = result {
-                    panel.options.patches = previous;
+                    (panel.options.patches, panel.options.sd_patches) = previous;
                     // With no guest left, the main window has to say why.
                     if panel.controls.is_none() {
                         panel.firmware_error = Some(error.clone());
@@ -578,7 +709,7 @@ impl NativePanel {
             panel.update(cx, |panel, cx| match window {
                 Ok(window) => panel.audio_window = Some(window),
                 Err(error) => {
-                    panel.status = format!("Could not open the audio window: {error}").into();
+                    panel.report(format!("Could not open the audio window: {error}"), true);
                     cx.notify();
                 }
             });
@@ -779,7 +910,7 @@ impl NativePanel {
             return;
         };
         if let Err(error) = inputs.main.audio_input_transport(command, 0) {
-            self.status = format!("Audio playback failed: {error}").into();
+            self.report(format!("Audio playback failed: {error}"), true);
             cx.notify();
         }
     }
@@ -791,10 +922,10 @@ impl NativePanel {
         let Some(engine) = self._qemu.as_mut() else {
             return;
         };
-        self.status = match engine.connect_usb() {
-            Ok(()) => "USB connected".into(),
-            Err(error) => format!("USB connect failed: {error}").into(),
-        };
+        match engine.connect_usb() {
+            Ok(()) => self.report("USB connected", false),
+            Err(error) => self.report(format!("USB connect failed: {error}"), true),
+        }
         cx.notify();
     }
     fn disconnect_usb(&mut self, cx: &mut Context<Self>) {
@@ -802,7 +933,7 @@ impl NativePanel {
             return;
         };
         engine.disconnect_usb();
-        self.status = "USB disconnected".into();
+        self.report("USB disconnected", false);
         cx.notify();
     }
     fn connect_midi(&mut self, cx: &mut Context<Self>) {
@@ -810,7 +941,7 @@ impl NativePanel {
             return;
         };
         engine.connect_midi();
-        self.status = "MIDI IN/OUT jacks connected".into();
+        self.report("MIDI IN/OUT jacks connected", false);
         cx.notify();
     }
     fn disconnect_midi(&mut self, cx: &mut Context<Self>) {
@@ -818,8 +949,45 @@ impl NativePanel {
             return;
         };
         engine.disconnect_midi();
-        self.status = "MIDI IN/OUT jacks disconnected".into();
+        self.report("MIDI IN/OUT jacks disconnected", false);
         cx.notify();
+    }
+
+    /// Show the result of an action in the window, and in its title.
+    fn report(&mut self, text: impl Into<SharedString>, error: bool) {
+        let text = text.into();
+        self.status = text.clone();
+        self.notice = Some(Notice {
+            text,
+            error,
+            sticky: error,
+            shown: Instant::now(),
+        });
+    }
+
+    /// Drop a confirmation once it has been read. Returns whether one went.
+    fn expire_notice(&mut self) -> bool {
+        let expired = self.notice.as_ref().is_some_and(|notice| {
+            !notice.sticky && notice.shown.elapsed() >= Duration::from_secs(NOTICE_SECONDS)
+        });
+        if expired {
+            self.notice = None;
+        }
+        expired
+    }
+
+    /// The state the menu bar shows.
+    fn menu_state(&self) -> MenuState {
+        let (usb, midi) = self._qemu.as_ref().map_or((false, false), |engine| {
+            (engine.usb_connected(), engine.midi_connected())
+        });
+        MenuState {
+            usb,
+            midi,
+            card: self.controls.is_some() && self.options.sd_image.is_some(),
+            ejected_card: self.controls.is_some() && self.ejected_card.is_some(),
+            playing: self.audio_position().1,
+        }
     }
 
     /// Like pulling the SD card out of the slot: no engine restart needed.
@@ -829,10 +997,22 @@ impl NativePanel {
         };
         match engine.eject_sd() {
             Ok(()) => {
-                self.options.sd_image = None;
-                self.status = "SD card ejected".into();
+                self.ejected_card = self.options.sd_image.take();
+                self.report("SD card ejected", false);
             }
-            Err(error) => self.status = format!("Eject SD card failed: {error}").into(),
+            Err(error) => self.report(format!("Eject SD card failed: {error}"), true),
+        }
+        cx.notify();
+    }
+
+    /// Put the card ejected last back in the slot.
+    fn insert_sd_card(&mut self, cx: &mut Context<Self>) {
+        let Some(card) = self.ejected_card.clone() else {
+            return;
+        };
+        match self.use_sd_image(card) {
+            Ok(()) => self.report("SD card inserted", false),
+            Err(error) => self.report(format!("Insert SD card failed: {error}"), true),
         }
         cx.notify();
     }
@@ -848,7 +1028,15 @@ impl NativePanel {
 
     fn use_sd_image(&mut self, image: std::path::PathBuf) -> Result<(), String> {
         let engine = self._qemu.as_ref().ok_or("no running engine")?;
+        // The Patch loader scans the card when it mounts, so a new card needs
+        // the selected patches before it goes in. With none selected, the card
+        // is used as it is.
+        let sd_selected = self.options.selected_sd_patches(self.model);
+        if !sd_selected.is_empty() {
+            l6max_host::sd_patches::install(&image, self.model, &sd_selected)?;
+        }
         engine.insert_sd(&image)?;
+        self.ejected_card = None;
         self.options.sd_image = Some(image.clone());
         self.options.no_sd = false;
         if let Some(path) = self.options.config_path.clone() {
@@ -944,6 +1132,8 @@ impl NativePanel {
         self.powered_off_signal
             .store(false, std::sync::atomic::Ordering::Relaxed);
         self.status = "Starting firmware".into();
+        // A hint about the stopped guest no longer applies; errors stay.
+        self.notice = self.notice.take().filter(|notice| notice.error);
         Ok(())
     }
 
@@ -954,7 +1144,7 @@ impl NativePanel {
                 .swap(false, std::sync::atomic::Ordering::Relaxed)
         {
             if let Err(error) = self.power_on() {
-                self.status = format!("Power-on failed: {error}").into();
+                self.report(format!("Power-on failed: {error}"), true);
             }
             return;
         }
@@ -983,11 +1173,16 @@ impl NativePanel {
         self.powered_off = true;
         self.powered_off_signal
             .store(true, std::sync::atomic::Ordering::Relaxed);
-        self.status = if self.model == l6fw::Model::L6 {
-            "Powered off · select startup buttons, then press Power".into()
+        let hint = if self.model == l6fw::Model::L6 {
+            "Powered off · select startup buttons, then press Power"
         } else {
-            "Powered off · press Power to start".into()
+            "Powered off · press Power to start"
         };
+        self.report(hint, false);
+        // The hint stays until power returns.
+        if let Some(notice) = &mut self.notice {
+            notice.sticky = true;
+        }
     }
     fn refresh_frame(&mut self) -> bool {
         let Some(display) = &self.display else {
@@ -997,7 +1192,7 @@ impl NativePanel {
             Ok(Some(frame)) => frame,
             Ok(None) => return false,
             Err(error) => {
-                self.status = format!("Display disconnected: {error}").into();
+                self.report(format!("Display disconnected: {error}"), true);
                 return true;
             }
         };
@@ -1097,6 +1292,29 @@ impl Render for NativePanel {
                     } else {
                         div()
                     })
+                    .when_some(
+                        self.notice
+                            .as_ref()
+                            .filter(|_| !self.applying_patches)
+                            .map(|notice| (notice.text.clone(), notice.error)),
+                        |element, (text, error)| {
+                            element.child(
+                                notice_anchor(self.model, scale).child(
+                                    notice_view(text, error)
+                                        .id("notice")
+                                        .cursor(CursorStyle::PointingHand)
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(|panel, _, _, cx| {
+                                                cx.stop_propagation();
+                                                panel.notice = None;
+                                                cx.notify();
+                                            }),
+                                        ),
+                                ),
+                            )
+                        },
+                    ),
             )
             .when(self.applying_patches, |element| {
                 element.child(
@@ -1240,6 +1458,20 @@ fn main() {
     }
     let context = l6max_host::logging::context("gui");
     let _entered = context.enter();
+    if args.first().is_some_and(|arg| arg == "--render-patches") {
+        #[cfg(feature = "headless-screenshots")]
+        if let Err(error) = headless_screenshot::render_patches(&args[1..]) {
+            tracing::error!(%error, "Could not render the Patches window");
+            std::process::exit(1);
+        }
+        #[cfg(not(feature = "headless-screenshots"))]
+        {
+            eprintln!("Rebuild with --features headless-screenshots to render the Patches window");
+            std::process::exit(2);
+        }
+        #[cfg(feature = "headless-screenshots")]
+        return;
+    }
     if args.first().is_some_and(|arg| arg == "--render-panel") {
         #[cfg(feature = "headless-screenshots")]
         if let Err(error) = headless_screenshot::render(&args[1..]) {
@@ -1350,6 +1582,12 @@ fn main() {
                 tracing::error!(%error, "Could not prepare demo SD card");
                 std::process::exit(1);
             });
+            // Configured firmware still leaves the File menu able to open
+            // other firmware and SD card folders, as a packaged app can.
+            // A volatile run has no device to switch, so it keeps them disabled.
+            if let (Some(qemu), Some(state)) = (options.qemu.clone(), options.state_dir.as_ref()) {
+                bundle = Some(bundle::Bundle::development_for_state(qemu, state));
+            }
         }
     }
     let bundled = bundle.is_some();
@@ -1423,6 +1661,8 @@ fn main() {
                         window_settling_frames: 0,
                         audio_window: None,
                         patches_window: None,
+                        ejected_card: None,
+                        notice: None,
                         applying_patches: false,
                         patch_error: None,
                         starting_engine: Arc::new(Mutex::new(None)),
@@ -1463,22 +1703,24 @@ fn main() {
                 },
             )
             .expect("open L6 family native window");
-        cx.on_action(move |_: &OpenFirmware, cx| {
-            // Global actions bubble while GPUI holds the active window. Updating
-            // it here fails with "window not found"; defer until dispatch ends.
-            cx.defer(move |cx| {
-                if let Err(error) = view.update(cx, |panel, _, cx| panel.choose_firmware(cx)) {
-                    tracing::error!(%error, "Open Firmware action failed");
-                }
+        if bundled {
+            cx.on_action(move |_: &OpenFirmware, cx| {
+                // Global actions bubble while GPUI holds the active window. Updating
+                // it here fails with "window not found"; defer until dispatch ends.
+                cx.defer(move |cx| {
+                    if let Err(error) = view.update(cx, |panel, _, cx| panel.choose_firmware(cx)) {
+                        tracing::error!(%error, "Open Firmware action failed");
+                    }
+                });
             });
-        });
-        cx.on_action(move |_: &OpenSdFolder, cx| {
-            cx.defer(move |cx| {
-                if let Err(error) = view.update(cx, |panel, _, cx| panel.choose_sd_folder(cx)) {
-                    tracing::error!(%error, "SD Card Folder action failed");
-                }
+            cx.on_action(move |_: &OpenSdFolder, cx| {
+                cx.defer(move |cx| {
+                    if let Err(error) = view.update(cx, |panel, _, cx| panel.choose_sd_folder(cx)) {
+                        tracing::error!(%error, "SD Card Folder action failed");
+                    }
+                });
             });
-        });
+        }
         cx.on_action(|_: &Quit, cx| cx.quit());
         cx.on_action(move |_: &OpenPatchesWindow, cx| {
             cx.defer(move |cx| {
@@ -1563,6 +1805,13 @@ fn main() {
                 }
             });
         });
+        cx.on_action(move |_: &InsertSdCard, cx| {
+            cx.defer(move |cx| {
+                if let Err(error) = view.update(cx, |panel, _, cx| panel.insert_sd_card(cx)) {
+                    tracing::error!(%error, "Insert SD card action failed");
+                }
+            });
+        });
         cx.on_action(move |_: &EjectSdCard, cx| {
             cx.defer(move |cx| {
                 if let Err(error) = view.update(cx, |panel, _, cx| panel.eject_sd_card(cx)) {
@@ -1574,30 +1823,10 @@ fn main() {
             KeyBinding::new("cmd-o", OpenFirmware, None),
             KeyBinding::new("cmd-shift-o", OpenSdFolder, None),
             KeyBinding::new("cmd-q", Quit, None),
+            // Command on macOS, Control elsewhere.
+            KeyBinding::new("secondary-alt-i", OpenAudioWindow, None),
         ]);
-        cx.set_menus([
-            Menu::new("L6 Emulator").items([MenuItem::action("Quit L6 Emulator", Quit)]),
-            Menu::new("File").items([
-                MenuItem::action("Open Firmware…", OpenFirmware).disabled(!bundled),
-                MenuItem::action("Firmware Patches…", OpenPatchesWindow),
-                MenuItem::action("Use SD Card Folder…", OpenSdFolder).disabled(!bundled),
-                MenuItem::action("Eject SD Card", EjectSdCard),
-            ]),
-            Menu::new("Audio Input").items([
-                MenuItem::action("Channels and Playback…", OpenAudioWindow),
-                MenuItem::separator(),
-                MenuItem::action("Play", PlayAudioInputs),
-                MenuItem::action("Pause", PauseAudioInputs),
-                MenuItem::action("Stop", StopAudioInputs),
-                MenuItem::action("Rewind", RewindAudioInputs),
-            ]),
-            Menu::new("Connections").items([
-                MenuItem::action("Connect USB", ConnectUsb),
-                MenuItem::action("Disconnect USB", DisconnectUsb),
-                MenuItem::action("Connect MIDI", ConnectMidi),
-                MenuItem::action("Disconnect MIDI", DisconnectMidi),
-            ]),
-        ]);
+        cx.set_menus(app_menus(MenuState::default()));
         // macOS normally keeps apps alive after their last window closes.
         cx.on_window_closed(move |cx, _| {
             let panel_open = cx
@@ -1623,6 +1852,7 @@ fn main() {
         cx.activate(true);
         if run_tick {
             cx.spawn(async move |cx| {
+                let mut menu_state = MenuState::default();
                 loop {
                     // Tick once per display frame. macOS coalesces short
                     // timers to about 24 Hz, which shows a fast lamp blink,
@@ -1649,6 +1879,15 @@ fn main() {
                     frame.await;
                     if view
                         .update(cx, |panel, window, cx| {
+                            // This state changes from the menus, the windows, a
+                            // restart or a failure, so follow the emulator's.
+                            let state = panel.menu_state();
+                            if state != menu_state {
+                                menu_state = state;
+                                // Outside this window update: rebuilding the
+                                // menu bar can validate items against it.
+                                cx.defer(move |cx| cx.set_menus(app_menus(state)));
+                            }
                             if panel.window_model != panel.model {
                                 panel.window_model = panel.model;
                                 let width = components::layout::window_width(panel.model);
@@ -1703,7 +1942,7 @@ fn main() {
                             let controls_changed = control_revision != panel.last_control_revision;
                             panel.last_control_revision = control_revision;
                             if let Some(mut test) = panel.menu_smoke.take() {
-                                match test.tick(panel, window, cx) {
+                                match test.tick(panel, cx) {
                                     Ok(true) => {
                                         passed.store(true, std::sync::atomic::Ordering::Relaxed);
                                         cx.quit();
@@ -1765,7 +2004,9 @@ fn main() {
                                     panel.status
                                 ));
                             }
+                            let notice_expired = panel.expire_notice();
                             if panel.status != previous
+                                || notice_expired
                                 || panel.powered_off != previous_powered_off
                                 || frame_changed
                                 || controls_changed
@@ -1840,6 +2081,94 @@ mod next_frame {
                 state.1 = Some(cx.waker().clone());
                 Poll::Pending
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod menu_tests {
+    use super::*;
+
+    fn labels(menus: &[Menu], menu: &str) -> Vec<String> {
+        let menu = menus.iter().find(|m| m.name == menu).unwrap();
+        menu.items
+            .iter()
+            .map(|item| match item {
+                MenuItem::Action { name, .. } => name.to_string(),
+                MenuItem::Separator => "-".into(),
+                _ => "?".into(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn connections_menu_offers_the_opposite_of_each_state() {
+        for (usb, midi, expected) in [
+            (false, false, ["Connect USB", "Connect MIDI"]),
+            (true, false, ["Disconnect USB", "Connect MIDI"]),
+            (false, true, ["Connect USB", "Disconnect MIDI"]),
+            (true, true, ["Disconnect USB", "Disconnect MIDI"]),
+        ] {
+            let menus = app_menus(MenuState {
+                usb,
+                midi,
+                ..Default::default()
+            });
+            assert_eq!(labels(&menus, "Connections"), expected);
+        }
+    }
+
+    #[test]
+    fn file_menu_ejects_a_card_or_puts_the_last_one_back() {
+        let file = |card, ejected_card| {
+            labels(
+                &app_menus(MenuState {
+                    card,
+                    ejected_card,
+                    ..Default::default()
+                }),
+                "File",
+            )
+            .last()
+            .unwrap()
+            .clone()
+        };
+        assert_eq!(file(true, false), "Eject SD Card");
+        assert_eq!(file(false, true), "Insert SD Card");
+        // Nothing to put back: only Use SD Card Folder adds one.
+        assert_eq!(file(false, false), "Use SD Card Folder…");
+    }
+
+    #[test]
+    fn audio_menu_offers_play_or_pause() {
+        let playback = |playing| {
+            labels(
+                &app_menus(MenuState {
+                    playing,
+                    ..Default::default()
+                }),
+                "Audio Input",
+            )[2]
+            .clone()
+        };
+        assert_eq!(playback(false), "Play");
+        assert_eq!(playback(true), "Pause");
+    }
+
+    #[test]
+    fn audio_window_has_a_platform_shortcut() {
+        assert_eq!(
+            labels(&app_menus(MenuState::default()), "Audio Input")[0],
+            "Channels and Playback…"
+        );
+        let binding = KeyBinding::new("secondary-alt-i", OpenAudioWindow, None);
+        let keystroke = &binding.keystrokes()[0];
+        assert_eq!(keystroke.key(), "i");
+        assert!(keystroke.modifiers().alt);
+        if cfg!(target_os = "macos") {
+            assert!(keystroke.modifiers().platform && !keystroke.modifiers().control);
+        } else {
+            assert!(keystroke.modifiers().control && !keystroke.modifiers().platform);
         }
     }
 }
