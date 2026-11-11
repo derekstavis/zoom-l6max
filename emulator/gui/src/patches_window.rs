@@ -12,6 +12,16 @@ pub const HEIGHT: f32 = 380.0;
 /// `midi-control` stays available to `--patch`, `config.toml` and tests.
 const OFFERED: [&str; 3] = ["knob-dialog", "midi-sync", "din-mixer-control"];
 
+/// The titles the web patcher shows (`web/src/lib/patches.ts`).
+fn title(patch: &str) -> &'static str {
+    match patch {
+        "knob-dialog" => "Show knob values on display",
+        "midi-sync" => "Read mixer values over MIDI",
+        "din-mixer-control" => "Mixer control over MIDI jack",
+        _ => "",
+    }
+}
+
 fn description(patch: &str) -> &'static str {
     match patch {
         "knob-dialog" => "Show channel encoder values on the display",
@@ -269,13 +279,23 @@ impl Render for PatchesWindow {
                                 .flex()
                                 .flex_col()
                                 .child(
+                                    // The name config.toml and --patch use stays visible.
                                     div()
-                                        .text_color(rgb(if togglable {
-                                            0xe8eef8
-                                        } else {
-                                            0x6a7388
-                                        }))
-                                        .child(patch),
+                                        .flex()
+                                        .items_baseline()
+                                        .gap_2()
+                                        .child(
+                                            div()
+                                                .text_color(rgb(if togglable {
+                                                    0xe8eef8
+                                                } else {
+                                                    0x6a7388
+                                                }))
+                                                .child(title(patch)),
+                                        )
+                                        .child(
+                                            div().text_xs().text_color(rgb(0x6a7388)).child(patch),
+                                        ),
                                 )
                                 .child(
                                     div()
@@ -393,6 +413,16 @@ mod tests {
 
     fn names(list: &[&str]) -> Vec<String> {
         list.iter().map(|name| (*name).to_owned()).collect()
+    }
+
+    #[test]
+    fn every_offered_patch_has_a_title_and_description() {
+        for patch in OFFERED {
+            assert!(
+                !title(patch).is_empty() && !description(patch).is_empty(),
+                "{patch}"
+            );
+        }
     }
 
     #[test]
