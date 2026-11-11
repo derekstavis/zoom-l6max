@@ -2,20 +2,20 @@
   "base": "0x801097b0",
   "hooks": [
     {
-      "address": "0x80036a40",
-      "continuation_site": "panel_handle_main_button_event",
-      "continuation_slot_offset": 40,
-      "length": 4,
-      "symbol": "report_page_button",
-      "target": "0x80109b88"
-    },
-    {
       "address": "0x8003f7c8",
       "continuation_site": "midi_in",
-      "continuation_slot_offset": 72,
+      "continuation_slot_offset": 40,
       "length": 4,
       "symbol": "midi_control_in",
       "target": "0x801099cc"
+    },
+    {
+      "address": "0x80036a40",
+      "continuation_site": "panel_handle_main_button_event",
+      "continuation_slot_offset": 72,
+      "length": 4,
+      "symbol": "report_page_button",
+      "target": "0x80109b88"
     },
     {
       "address": "0x80046d80",
@@ -53,16 +53,16 @@
   "model": "L6max",
   "name": "midi-control",
   "payload_file": "midi-control-801097b0.bin",
-  "payload_length": 2243,
+  "payload_length": 2227,
   "window_byte_total": 24,
   "windows": [
     {
-      "firmware_address": "0x80036a40",
+      "firmware_address": "0x8003f7c8",
       "length": 4,
       "payload_offset": 44
     },
     {
-      "firmware_address": "0x8003f7c8",
+      "firmware_address": "0x80036a40",
       "length": 4,
       "payload_offset": 76
     },
