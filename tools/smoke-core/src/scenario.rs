@@ -1171,6 +1171,20 @@ impl Scenario {
             )
         })
     }
+
+    /// Patch builds share Cargo's target executable, so cases that invoke
+    /// `l6patch` must not run concurrently with another patch build.
+    pub fn uses_patch_builds(&self) -> bool {
+        self.sd_patches.is_some()
+            || !self.patches.is_empty()
+            || !self.installed_patches.is_empty()
+            || !self.installed_sd_patches.is_empty()
+            || !self.update_patches.is_empty()
+            || self
+                .step
+                .iter()
+                .any(|step| matches!(step.action, Action::WasmPatch))
+    }
 }
 /// Environment variable the driver sets to `1` for cases whose persistent
 /// state was built from a state spec.

@@ -1321,10 +1321,14 @@ fn execute() -> Result<i32, String> {
                 None => vec![if case.gui { "gui" } else { "headless" }],
             };
             for backend in selected {
-                // GUI windows, native host MIDI ports and external executables
-                // are host-wide resources; such cases run alone.
-                let exclusive =
-                    backend == "gui" || scenario.as_ref().is_none_or(Scenario::uses_native_midi);
+                // GUI windows, native host MIDI ports and Cargo's shared
+                // l6patch executable are host-wide resources; such cases run
+                // alone to avoid replacing the executable during another
+                // `cargo run` invocation.
+                let exclusive = backend == "gui"
+                    || scenario.as_ref().is_some_and(|scenario| {
+                        scenario.uses_native_midi() || scenario.uses_patch_builds()
+                    });
                 jobs.push(Job {
                     case,
                     model: model.clone(),
@@ -1869,6 +1873,17 @@ mod tests {
             apply_expected(&mut result, &json!({"failed_step":step}), &failures);
             assert_eq!(result.outcome, expected);
         }
+    }
+
+    #[test]
+    fn patch_build_scenarios_are_marked_exclusive() {
+        let scenarios = l6max_host::paths::repository_root().join("tests/smoke/scenarios");
+        for name in ["sd-all-patches", "sd-midi-sync", "sd-knob-dialog-dynamic"] {
+            let scenario = Scenario::load(&scenarios.join(format!("{name}.toml"))).unwrap();
+            assert!(scenario.uses_patch_builds(), "{name}");
+        }
+        let scenario = Scenario::load(&scenarios.join("controls.toml")).unwrap();
+        assert!(!scenario.uses_patch_builds());
     }
     #[test]
     fn scheduler_bounds_concurrency_and_isolates_exclusive_jobs() {
