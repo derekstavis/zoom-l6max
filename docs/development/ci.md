@@ -40,13 +40,24 @@ all-target check is what compiles binaries outside their test harness, so it als
 catches warnings that only a normal build reports. For a local build that must
 ignore them, set `RUSTFLAGS=--cap-lints=warn`.
 
-## Linux job
+## Linux jobs
 
-The `linux` job runs on `ubuntu-22.04` (the oldest hosted image, to keep the
-AppImage's C library requirement low). It installs the packages from the
-[Linux guide](../guides/linux.md#prerequisites), then runs the same Rust
-format, check and test steps as macOS, builds QEMU from the submodule, and
-runs `linux-package` to produce `L6max-Emulator-x86_64.AppImage`. The packager
+Both Linux jobs use the `ubuntu-26.04` runner, and apt retries failed downloads.
+
+`linux` (*Linux checks*) installs the build packages from the
+[Linux guide](../guides/linux.md#prerequisites) that the Rust workspace needs,
+then runs the same Rust format, check and test steps as macOS.
+
+`linux-appimage` (*Linux AppImage*) runs in an `ubuntu:22.04` container. An
+AppImage needs the C library it was built against or a newer one, so building
+in the oldest supported Ubuntu keeps it running on older distributions while
+the runner itself stays current. The container starts bare: the job installs
+the native packages, Clang 21 from apt.llvm.org (Jammy's own is too old to read
+profiles from current LLVM) and the pinned Rust toolchain through rustup. Its
+Cargo cache uses its own `rust-jammy` key, because build scripts compiled on
+the newer runner cannot run in the older container. It builds QEMU from the
+submodule and runs `linux-package` to produce `L6max-Emulator-x86_64.AppImage`.
+The packager
 verifies that the bundled QEMU starts with only bundled and host libraries and
 provides `l6max-main`, before and after AppImage assembly. `appimagetool` 1.9.1
 and the type 2 runtime 20251108 are downloaded by URL and verified against

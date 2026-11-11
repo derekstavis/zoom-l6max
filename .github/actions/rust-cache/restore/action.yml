@@ -1,6 +1,11 @@
 name: Restore Rust cache
 description: Restore the Cargo sources and dependency builds that main saved.
 
+inputs:
+  prefix:
+    description: Cache key prefix; jobs whose builds cannot share dependencies use their own.
+    default: rust
+
 outputs:
   hit:
     description: Whether a cache for exactly these dependencies exists.
@@ -18,5 +23,5 @@ runs:
           ~/.cargo/registry
           ~/.cargo/git
           target
-        key: rust-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml') }}
-        restore-keys: ${{ github.ref != 'refs/heads/main' && format('rust-{0}-{1}-', runner.os, runner.arch) || '' }}
+        key: ${{ inputs.prefix }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml') }}
+        restore-keys: ${{ github.ref != 'refs/heads/main' && format('{0}-{1}-{2}-', inputs.prefix, runner.os, runner.arch) || '' }}
