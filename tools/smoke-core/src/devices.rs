@@ -6545,13 +6545,18 @@ fn run_knob_dialog(
                 return Err("stock notification did not clear after its timeout".into());
             }
         };
-        if qmp.read_memory(0, 0x8020a59c + 20, 4)? != active_slot5.to_le_bytes()
-            || qmp.read_memory(0, text_table + 179 * 4, 4)? != shared_resource_pointer.to_le_bytes()
-            || qmp.read_memory(0, shared_resource_pointer, 512)? != scene_text_before_notification
+        let callback_after_expiry = qmp.read_memory(0, 0x8020a59c + 20, 4)?;
+        let resource_pointer_after_expiry = qmp.read_memory(0, text_table + 179 * 4, 4)?;
+        let resource_after_expiry = qmp.read_memory(0, shared_resource_pointer, 512)?;
+        if callback_after_expiry != active_slot5.to_le_bytes()
+            || resource_pointer_after_expiry != shared_resource_pointer.to_le_bytes()
+            || resource_after_expiry != scene_text_before_notification
         {
-            return Err(
-                "stock notification expiry damaged or prematurely removed the custom scene".into(),
-            );
+            return Err(format!(
+                "stock notification expiry damaged or prematurely removed the custom scene: callback {callback_after_expiry:02x?} vs {active_slot5:08x}, resource pointer {resource_pointer_after_expiry:02x?} vs {shared_resource_pointer:08x}, resource modified={}, guest ms since notification {}",
+                resource_after_expiry != scene_text_before_notification,
+                inputs.panel.snapshot().guest_ms.wrapping_sub(notification_start)
+            ).into());
         }
         let timeout_start = inputs.panel.snapshot().guest_ms;
         loop {
