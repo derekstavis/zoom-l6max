@@ -19,11 +19,9 @@ const IMAGE_LEN: usize = 0x107fe8;
 #[cfg(sd_l6)]
 const IMAGE_LEN: usize = 0xb5ae4;
 #[cfg(not(sd_l6))]
-const MODULE_BASE: usize = 0x8021_0000;
+const REGISTRY_BASE: usize = core_loader::L6MAX_REGISTRY_BASE as usize;
 #[cfg(sd_l6)]
-const MODULE_BASE: usize = 0x801f_0000;
-const MODULE_LIMIT: usize = 0x8000;
-const REGISTRY_BASE: usize = MODULE_BASE + MODULE_LIMIT;
+const REGISTRY_BASE: usize = core_loader::L6_REGISTRY_BASE as usize;
 // Cap a single code + zero-filled state allocation at 384 KiB. Larger modules
 // are rejected before allocating from the shared FreeRTOS heap.
 const MODULE_CAPACITY: usize = 0x60000;
@@ -43,6 +41,12 @@ const MAX_FUNCTION_CHAINS: usize = core_loader::dynamic::MAX_FUNCTION_CHAINS;
 const DYNAMIC_HANDLER_TABLE: usize = HOOK_CHAIN_TABLE
     + core::mem::size_of::<[core_loader::dynamic::FunctionHookChain; MAX_FUNCTION_CHAINS]>();
 const MAX_RELOCATIONS: u32 = 256;
+// The tables must fit below the QEMU arena word, inside the reserved registry.
+const _: () = assert!(
+    MODULE_LEN_WORD < HOOK_CHAIN_TABLE
+        && DYNAMIC_HANDLER_TABLE + MAX_FUNCTION_CHAINS * 4 <= REGISTRY_BASE + 0x700
+        && 0x704 <= core_loader::REGISTRY_LIMIT as usize
+);
 #[cfg(not(sd_l6))]
 const SHA: [u8; 32] = [
     0x98, 0x0d, 0x92, 0x27, 0x2c, 0x1f, 0x84, 0xbe, 0xd2, 0x00, 0xb4, 0xd2, 0xf8, 0x35, 0x75, 0x20,

@@ -3281,7 +3281,7 @@ impl State {
                 .find(|(address, _, _)| *address == HOOK)
                 .map(|(_, _, offset)| *offset)
                 .ok_or("dynamic SD bundle has no L6 midi-sync entry")?;
-            let registry = 0x801f_8000;
+            let registry = patch_loader_core::L6_REGISTRY_BASE;
             let loaded_base =
                 u32::from_le_bytes(qmp.read_memory(0, registry + 160, 4)?.try_into().unwrap());
             let slot = sd_dynamic_handler_slot(options, session.engine.model(), registry, HOOK)
@@ -3649,11 +3649,10 @@ impl State {
                         .into());
                     }
                 }
-                let module_base = match session.engine.model() {
-                    l6fw::Model::L6 => 0x801f_0000,
-                    l6fw::Model::L6max => 0x8021_0000,
+                let registry = match session.engine.model() {
+                    l6fw::Model::L6 => patch_loader_core::L6_REGISTRY_BASE,
+                    l6fw::Model::L6max => patch_loader_core::L6MAX_REGISTRY_BASE,
                 };
-                let registry = module_base + 0x8000;
                 let loaded_base =
                     u32::from_le_bytes(qmp.read_memory(0, registry + 160, 4)?.try_into().unwrap());
                 let loaded_len =

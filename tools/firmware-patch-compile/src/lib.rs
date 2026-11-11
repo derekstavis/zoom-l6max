@@ -639,9 +639,9 @@ fn generate_continuations_from_metadata(
     // continuation without disturbing any arguments.
     if generate_dynamic_sites && !dynamic {
         let registry_base = if main_base == 0x8000_1000 {
-            0x801f_8000u32
+            patch_loader_core::L6_REGISTRY_BASE
         } else {
-            0x8021_8000u32
+            patch_loader_core::L6MAX_REGISTRY_BASE
         };
         let handler_table = registry_base
             + 0x100

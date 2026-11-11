@@ -3,6 +3,19 @@
 #[cfg(test)]
 extern crate std;
 
+/// Where the resident Patch loader keeps its fixed hook registry on L6 1.10.
+///
+/// The L6 scatter table places `.data` at 0x801f5400, so the first 0x5400 bytes
+/// of the 64 KiB bank at 0x801f0000 are RAM the firmware never references. The
+/// registry must stay below 0x801f5400: an earlier 0x801f8000 overwrote live
+/// `.data`, and the firmware then never started its USB controller.
+pub const L6_REGISTRY_BASE: u32 = 0x801f_0000;
+/// Where the resident Patch loader keeps its fixed hook registry on L6max 1.10.
+pub const L6MAX_REGISTRY_BASE: u32 = 0x8021_8000;
+/// Bytes the registry may use from its base. The handler table and the QEMU
+/// arena word sit well inside it.
+pub const REGISTRY_LIMIT: u32 = 0x800;
+
 /// Experimental fixed-address bundles emitted by `l6patch`.
 ///
 /// Validation only: publishing edits to a live firmware image requires a
