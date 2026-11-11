@@ -27,6 +27,7 @@ Each scenario declares what it runs from, so the local file only supplies firmwa
 | `card` | Build [`tests/smoke/cards`](../../tests/smoke/cards)`/<model>-<card>.toml` for each run. Without it, the case has no card. |
 | `patches` | Apply named guarded patches to the model's package, using the same implementation as the browser patcher. |
 | `installed_patches` | Have the engine install named patches on a device seeded with the stock firmware, as `--patch` does. |
+| `installed_sd_patches` | Have the engine install the Patch loader and write the named patches' hosted modules to the case's card, as `--sd-patch` does. |
 | `update_patches` | Build the case's update package from the model's package, per model, for example `{ l6 = ["midi-sync"] }`. |
 | `gdb` | Enable the case's debugger socket. |
 | `audio_device` | QEMU audio-device syntax, with `{logs}` as the case's log directory. |

@@ -30,6 +30,10 @@ pub struct Scenario {
     /// Patches the engine installs on a device already running the stock firmware.
     #[serde(default)]
     pub installed_patches: Vec<String>,
+    /// Patches the engine delivers on the case's card, as `--sd-patch` does: it
+    /// installs the Patch loader and writes the hosted modules to `PATCHES/`.
+    #[serde(default)]
+    pub installed_sd_patches: Vec<String>,
     /// Build the experimental persistent Patch loader and the selected SD bundle.
     /// An empty list installs only the loader for a no-module baseline.
     pub sd_patches: Option<Vec<String>>,
@@ -442,6 +446,13 @@ impl Scenario {
                     "sd_bundle_mode requires sd_patches and a supported bundle fixture mode".into(),
                 );
             }
+        }
+        if !value.installed_sd_patches.is_empty()
+            && (value.card.is_none() || value.sd_patches.is_some())
+        {
+            return Err(
+                "installed_sd_patches need a card spec and cannot combine sd_patches".into(),
+            );
         }
         if let Some(patches) = &value.sd_patches {
             if !patches.is_empty() && value.card.is_none() {

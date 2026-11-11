@@ -599,6 +599,14 @@ no_sd = true
 wall_timeout_s = 900
 
 [[case]]
+id = "host-sd-midi-sync"
+suites = ["sd-matrix", "full"]
+models = ["l6max"]
+scenario = "scenarios/host-sd-midi-sync.toml"
+needs_configuration = true
+wall_timeout_s = 1200
+
+[[case]]
 id = "l6max-eq-audio-update"
 suites = ["regression", "full"]
 models = ["l6max"]

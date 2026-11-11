@@ -43,13 +43,28 @@ pub fn available(options: &Options, model: l6fw::Model) -> Result<Vec<&'static s
 }
 
 /// Check that a selection can apply, before stopping a running guest for it.
-pub fn check(options: &Options, model: l6fw::Model, selected: &[String]) -> Result<(), String> {
-    if selected.is_empty() {
+pub fn check(
+    options: &Options,
+    model: l6fw::Model,
+    selected: &[String],
+    sd_selected: &[String],
+) -> Result<(), String> {
+    crate::sd_patches::check(model, sd_selected)?;
+    if let Some(patch) = selected.iter().find(|patch| sd_selected.contains(patch)) {
+        return Err(format!(
+            "{patch} is selected both in the firmware and on the SD card"
+        ));
+    }
+    if !sd_selected.is_empty() && options.no_sd {
+        return Err("SD card patches need an SD card".into());
+    }
+    if selected.is_empty() && sd_selected.is_empty() {
         return Ok(());
     }
     let package = stock_package(options, &options.firmware_dir, model)?;
     let names: Vec<&str> = selected.iter().map(String::as_str).collect();
-    firmware_patch_wasm::apply_patches(&package, &names).map(|_| ())
+    firmware_patch_wasm::apply_patches_with_loader(&package, &names, !sd_selected.is_empty())
+        .map(|_| ())
 }
 
 fn read_segments(directory: &Path) -> Result<[Vec<u8>; 3], String> {
@@ -69,16 +84,35 @@ fn install(state: &Path, directory: &Path) -> Result<(), String> {
 }
 
 /// Bring a device to the selected patches. Returns the directory to boot from.
-/// Runs while no guest owns the device's storage.
-pub fn prepare(options: &Options, stock: &Path, model: l6fw::Model) -> Result<PathBuf, String> {
+/// Patches selected for the SD card install the Patch loader in the firmware
+/// and their modules on `card`. Runs while no guest owns the device's storage.
+pub fn prepare(
+    options: &Options,
+    stock: &Path,
+    model: l6fw::Model,
+    card: Option<&Path>,
+) -> Result<PathBuf, String> {
     let selected = options.selected_patches(model);
+    let sd_selected = options.selected_sd_patches(model);
+    match card {
+        Some(card) => {
+            crate::sd_patches::install(card, model, &sd_selected)?;
+        }
+        None if !sd_selected.is_empty() => {
+            return Err(format!(
+                "SD card patches ({}) need an SD card",
+                sd_selected.join(", ")
+            ));
+        }
+        None => {}
+    }
     let state = options.state_dir.as_deref();
     let directory = state.unwrap_or(&options.logs).join("patched-firmware");
     if directory.exists() {
         fs::remove_dir_all(&directory).map_err(|e| e.to_string())?;
     }
     let installed = state.map(|state| state.join(INSTALLED));
-    if selected.is_empty() {
+    if selected.is_empty() && sd_selected.is_empty() {
         if let (Some(state), Some(installed)) = (state, installed.filter(|path| path.is_file())) {
             install(state, stock)?;
             fs::remove_file(installed).map_err(|e| e.to_string())?;
@@ -87,8 +121,15 @@ pub fn prepare(options: &Options, stock: &Path, model: l6fw::Model) -> Result<Pa
     }
     let package = stock_package(options, stock, model)?;
     let names: Vec<&str> = selected.iter().map(String::as_str).collect();
-    let (patched, _) = firmware_patch_wasm::apply_patches(&package, &names)
-        .map_err(|e| format!("cannot apply patches {}: {e}", selected.join(", ")))?;
+    let loader = !sd_selected.is_empty();
+    let (patched, _) = firmware_patch_wasm::apply_patches_with_loader(&package, &names, loader)
+        .map_err(|e| {
+            let mut all = selected.clone();
+            if loader {
+                all.push("the SD Patch loader".into());
+            }
+            format!("cannot apply {}: {e}", all.join(", "))
+        })?;
     let parent = directory.parent().unwrap();
     fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     let file = parent.join("patched-firmware.partial");

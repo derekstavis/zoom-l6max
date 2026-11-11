@@ -523,16 +523,18 @@ impl NativePanel {
         self.applying_patches = true;
         self.patch_error = None;
         cx.notify();
+        let model = self.model;
         let mut options = self.options.clone();
         options.patches = Some(selected.clone());
+        let sd_selected = self.options.selected_sd_patches(model);
         let previous = self.options.patches.clone();
-        let model = self.model;
         let starting = self.starting_engine.clone();
         cx.spawn(async move |this, cx| {
             let checked = {
                 let (options, selected) = (options.clone(), selected.clone());
+                let sd_selected = sd_selected.clone();
                 cx.background_spawn(async move {
-                    l6max_host::firmware_patches::check(&options, model, &selected)
+                    l6max_host::firmware_patches::check(&options, model, &selected, &sd_selected)
                 })
                 .await
             };
@@ -562,7 +564,12 @@ impl NativePanel {
                             let engine = panel.starting_engine.lock().unwrap().take().unwrap();
                             panel.adopt_engine(engine, &startup_keys)?;
                             if let Some(path) = panel.options.config_path.clone() {
-                                l6max_host::config::save_patches(&path, panel.model, &selected)?;
+                                l6max_host::config::save_patches(
+                                    &path,
+                                    panel.model,
+                                    &selected,
+                                    &sd_selected,
+                                )?;
                                 panel.options.reload_config()?;
                                 panel.options.patches = None;
                             }
