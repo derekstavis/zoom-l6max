@@ -34,19 +34,6 @@ const MODULES: [Module; 3] = [
     },
 ];
 
-/// Why a model's SD patches should not be offered yet, if they should not.
-pub fn known_issue(model: l6fw::Model) -> Option<&'static str> {
-    match model {
-        // Reproduced with the loader alone and with the l6patch-built loader:
-        // the firmware never touches its USB controller, so USB MIDI is lost.
-        l6fw::Model::L6 => Some(
-            "With the Patch loader installed, the L6 does not start USB in the emulator, \
-             so SD card patches are not offered for it yet.",
-        ),
-        l6fw::Model::L6max => None,
-    }
-}
-
 /// The patches `model` can load from its SD card, in catalog order.
 pub fn available(model: l6fw::Model) -> Vec<&'static str> {
     firmware_patch_core::PATCHES

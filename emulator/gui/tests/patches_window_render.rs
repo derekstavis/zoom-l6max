@@ -25,6 +25,7 @@ fn patches_window_renders_its_states() {
             &["l6max", "--no-card", "--active-sd-card", "midi-sync"][..],
         ),
         ("l6", &["l6", "--active-firmware", "midi-sync"][..]),
+        ("l6-sd", &["l6", "--sd-card", "midi-sync"][..]),
         (
             "error",
             &[

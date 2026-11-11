@@ -601,7 +601,7 @@ wall_timeout_s = 900
 [[case]]
 id = "host-sd-midi-sync"
 suites = ["sd-matrix", "full"]
-models = ["l6max"]
+models = ["l6", "l6max"]
 scenario = "scenarios/host-sd-midi-sync.toml"
 needs_configuration = true
 wall_timeout_s = 1200

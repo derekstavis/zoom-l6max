@@ -1,9 +1,6 @@
 version = 1
 name = "host-sd-midi-sync"
-# L6 is excluded: with the Patch loader installed, L6 firmware never starts its
-# USB device controller in the emulator, with or without modules on the card
-# (the fixture-built loader behaves the same). See l6max_host::sd_patches::known_issue.
-models = ["l6max"]
+models = ["l6", "l6max"]
 backends = ["headless"]
 state = "setup-complete"
 card = "empty"

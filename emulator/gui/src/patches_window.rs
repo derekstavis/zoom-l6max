@@ -228,12 +228,7 @@ impl Render for PatchesWindow {
             patch_error,
             ..
         } = status;
-        let issue = l6max_host::sd_patches::known_issue(model);
-        let loadable = if issue.is_some() {
-            Vec::new()
-        } else {
-            l6max_host::sd_patches::available(model)
-        };
+        let loadable = l6max_host::sd_patches::available(model);
         let available = self.available.as_deref().unwrap_or(&[]).to_vec();
         let enabled = self.selection != active && can_start;
         let rows = OFFERED.iter().map(|&patch| {
@@ -349,15 +344,12 @@ impl Render for PatchesWindow {
                     )
                 })
         });
-        let card_note = if let Some(issue) = issue {
-            Some(issue.to_owned())
-        } else if !has_card {
-            Some("Insert an SD card (File → Use SD Card Folder…) to load patches from it.".into())
+        let card_note: Option<&str> = if !has_card {
+            Some("Insert an SD card (File → Use SD Card Folder…) to load patches from it.")
         } else if !self.selection.sd_card.is_empty() {
             Some(
                 "SD card patches add the Patch loader to the firmware and copy each patch \
-                 to the card's PATCHES folder."
-                    .into(),
+                 to the card's PATCHES folder.",
             )
         } else {
             None
