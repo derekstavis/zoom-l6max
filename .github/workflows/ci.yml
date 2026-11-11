@@ -127,45 +127,26 @@ jobs:
         uses: ./.github/actions/rust-cache/save
 
   linux:
-    name: Linux checks and AppImage
-    # The oldest hosted image keeps the AppImage's C library requirement low.
-    runs-on: ubuntu-22.04
-    timeout-minutes: 90
+    name: Linux checks
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
     env:
       CARGO_INCREMENTAL: '0'
       CARGO_PROFILE_DEV_DEBUG: '0'
       CARGO_PROFILE_TEST_DEBUG: '0'
-      # Pinned packaging tools; checksums are verified before use.
-      APPIMAGETOOL_URL: https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
-      APPIMAGETOOL_SHA256: ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
-      APPIMAGE_RUNTIME_URL: https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-x86_64
-      APPIMAGE_RUNTIME_SHA256: 2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           submodules: true
           persist-credentials: false
-      - name: Prepare native toolchains
+      - name: Install build dependencies
         run: |
-          if [[ "${{ inputs.release || false }}" == true ]]; then
-            # Release builds also publish the Debian sources of bundled libraries.
-            sudo sed -i 's/^# deb-src/deb-src/' /etc/apt/sources.list
-          fi
-          # QEMU builds with Clang. Jammy's default is too old to read profiles
-          # from current LLVM, so install a pinned release from apt.llvm.org.
-          curl -fsSL --retry 3 https://apt.llvm.org/llvm-snapshot.gpg.key \
-            | sudo gpg --dearmor -o /usr/share/keyrings/llvm.gpg
-          echo "deb [signed-by=/usr/share/keyrings/llvm.gpg] https://apt.llvm.org/jammy/ llvm-toolchain-jammy-21 main" \
-            | sudo tee /etc/apt/sources.list.d/llvm-21.list
+          # The hosted image's apt mirror drops lookups; retry instead of failing.
+          echo 'Acquire::Retries "5";' | sudo tee /etc/apt/apt.conf.d/80-retries
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
-            clang-21 lld-21 \
-            build-essential pkg-config ninja-build python3 python3-venv python3-pip \
-            python3-tomli \
-            libglib2.0-dev libpixman-1-dev libfdt-dev libasound2-dev libpulse-dev libfontconfig-dev \
-            libxkbcommon-dev jq
+            pkg-config libasound2-dev libpulse-dev libfontconfig-dev libxkbcommon-dev jq
           rustup show active-toolchain
-      # Published builds always start clean.
       - id: rust-cache
         if: ${{ !inputs.release }}
         uses: ./.github/actions/rust-cache/restore
@@ -177,6 +158,71 @@ jobs:
         run: cargo check --locked --workspace --all-targets
       - name: Test Rust workspace
         run: cargo test --locked --workspace
+      - if: ${{ !inputs.release && github.ref == 'refs/heads/main' && steps.rust-cache.outputs.hit != 'true' }}
+        uses: ./.github/actions/rust-cache/save
+
+  linux-appimage:
+    name: Linux AppImage
+    runs-on: ubuntu-26.04
+    # The AppImage needs the build system's C library or newer. Building in the
+    # oldest supported Ubuntu keeps it running on older distributions.
+    container: ubuntu:22.04
+    timeout-minutes: 90
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      DEBIAN_FRONTEND: noninteractive
+      # Pinned packaging tools; checksums are verified before use.
+      APPIMAGETOOL_URL: https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
+      APPIMAGETOOL_SHA256: ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
+      APPIMAGE_RUNTIME_URL: https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-x86_64
+      APPIMAGE_RUNTIME_SHA256: 2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d
+    steps:
+      # The container starts bare, so tools needed by checkout come first.
+      - name: Prepare native toolchains
+        run: |
+          echo 'Acquire::Retries "5";' > /etc/apt/apt.conf.d/80-retries
+          if [[ "${{ inputs.release || false }}" == true ]]; then
+            # Release builds also publish the Debian sources of bundled libraries.
+            sed -i 's/^# deb-src/deb-src/' /etc/apt/sources.list
+          fi
+          apt-get update
+          apt-get install --no-install-recommends -y \
+            ca-certificates curl git gnupg patch xz-utils lsb-release dpkg-dev
+          # QEMU builds with Clang. Jammy's default is too old to read profiles
+          # from current LLVM, so install a pinned release from apt.llvm.org.
+          curl -fsSL --retry 3 https://apt.llvm.org/llvm-snapshot.gpg.key \
+            | gpg --dearmor -o /usr/share/keyrings/llvm.gpg
+          echo "deb [signed-by=/usr/share/keyrings/llvm.gpg] https://apt.llvm.org/jammy/ llvm-toolchain-jammy-21 main" \
+            > /etc/apt/sources.list.d/llvm-21.list
+          apt-get update
+          apt-get install --no-install-recommends -y \
+            clang-21 lld-21 \
+            build-essential pkg-config ninja-build python3 python3-venv python3-pip \
+            python3-tomli \
+            libglib2.0-dev libpixman-1-dev libfdt-dev libasound2-dev libpulse-dev libfontconfig-dev \
+            libxkbcommon-dev jq
+          curl -fsSL --retry 3 https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+        shell: bash
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          submodules: true
+          persist-credentials: false
+      - name: Install the pinned Rust toolchain
+        run: |
+          # The checkout belongs to the runner user, not the container's root.
+          git config --global --add safe.directory '*'
+          rustup toolchain install
+          rustup show active-toolchain
+      # Published builds always start clean.
+      - id: rust-cache
+        if: ${{ !inputs.release }}
+        uses: ./.github/actions/rust-cache/restore
+        with:
+          prefix: rust-jammy
+      - name: Fetch locked Rust dependencies
+        run: cargo fetch --locked
       - name: Build custom QEMU
         env:
           CC: clang-21
@@ -194,6 +240,7 @@ jobs:
         env:
           RELEASE_BUILD: ${{ inputs.release || false }}
           APP_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || '0.1.0' }}
+        shell: bash
         run: |
           options=()
           if [[ "$RELEASE_BUILD" != true ]]; then options+=(--debug); fi
@@ -218,8 +265,7 @@ jobs:
             emulator/dist/SHA256SUMS
           if-no-files-found: error
           compression-level: 0
-          retention-days: 14
-      # Only main saves, so that every pull request reuses one cache, and only for
-      # dependencies it has none for.
       - if: ${{ !inputs.release && github.ref == 'refs/heads/main' && steps.rust-cache.outputs.hit != 'true' }}
         uses: ./.github/actions/rust-cache/save
+        with:
+          prefix: rust-jammy
