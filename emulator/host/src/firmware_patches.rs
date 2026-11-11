@@ -11,6 +11,10 @@ use std::{
 /// The SHA-256 of the patched MAIN image installed on a device. A device without
 /// this file runs whatever it has installed.
 const INSTALLED: &str = "installed-patches.sha256";
+/// Present while this device's card holds patches the emulator copied there.
+/// Without it the card is left alone, so a card's own modules stay even when
+/// they match the hosted ones byte for byte.
+const SD_INSTALLED: &str = "installed-sd-patches";
 
 fn stock_package(options: &Options, stock: &Path, model: l6fw::Model) -> Result<Vec<u8>, String> {
     let name = match model {
@@ -94,9 +98,22 @@ pub fn prepare(
 ) -> Result<PathBuf, String> {
     let selected = options.selected_patches(model);
     let sd_selected = options.selected_sd_patches(model);
+    let state = options.state_dir.as_deref();
     match card {
-        Some(card) => {
+        Some(card) if !sd_selected.is_empty() => {
             crate::sd_patches::install(card, model, &sd_selected)?;
+            if let Some(state) = state {
+                fs::write(state.join(SD_INSTALLED), sd_selected.join("\n"))
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+        Some(card) => {
+            if let Some(marker) = state.map(|state| state.join(SD_INSTALLED))
+                && marker.is_file()
+            {
+                crate::sd_patches::install(card, model, &[])?;
+                fs::remove_file(marker).map_err(|e| e.to_string())?;
+            }
         }
         None if !sd_selected.is_empty() => {
             return Err(format!(
@@ -106,7 +123,6 @@ pub fn prepare(
         }
         None => {}
     }
-    let state = options.state_dir.as_deref();
     let directory = state.unwrap_or(&options.logs).join("patched-firmware");
     if directory.exists() {
         fs::remove_dir_all(&directory).map_err(|e| e.to_string())?;

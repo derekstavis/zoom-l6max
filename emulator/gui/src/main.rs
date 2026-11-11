@@ -1029,12 +1029,12 @@ impl NativePanel {
     fn use_sd_image(&mut self, image: std::path::PathBuf) -> Result<(), String> {
         let engine = self._qemu.as_ref().ok_or("no running engine")?;
         // The Patch loader scans the card when it mounts, so a new card needs
-        // the selected patches before it goes in.
-        l6max_host::sd_patches::install(
-            &image,
-            self.model,
-            &self.options.selected_sd_patches(self.model),
-        )?;
+        // the selected patches before it goes in. With none selected, the card
+        // is used as it is.
+        let sd_selected = self.options.selected_sd_patches(self.model);
+        if !sd_selected.is_empty() {
+            l6max_host::sd_patches::install(&image, self.model, &sd_selected)?;
+        }
         engine.insert_sd(&image)?;
         self.ejected_card = None;
         self.options.sd_image = Some(image.clone());
