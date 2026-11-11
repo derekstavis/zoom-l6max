@@ -64,7 +64,7 @@ Previously imported cards are retained in Application Support.
 
 ## Audio input
 
-**Audio Input → Channels and Playback…** assigns a WAV file to each input channel and plays
+**Audio Input → Channels and Playback…** (⌥⌘I) assigns a WAV file to each input channel and plays
 them together. See [audio emulation](../emulator/audio.md#input) for what the channels
 receive.
 

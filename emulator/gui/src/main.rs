@@ -1614,6 +1614,8 @@ fn main() {
             KeyBinding::new("cmd-o", OpenFirmware, None),
             KeyBinding::new("cmd-shift-o", OpenSdFolder, None),
             KeyBinding::new("cmd-q", Quit, None),
+            // Command on macOS, Control elsewhere.
+            KeyBinding::new("secondary-alt-i", OpenAudioWindow, None),
         ]);
         cx.set_menus(app_menus(bundled, Connections::default()));
         // macOS normally keeps apps alive after their last window closes.
@@ -1905,6 +1907,23 @@ mod menu_tests {
         ] {
             let menus = app_menus(true, Connections { usb, midi });
             assert_eq!(labels(&menus, "Connections"), expected);
+        }
+    }
+
+    #[test]
+    fn audio_window_has_a_platform_shortcut() {
+        assert_eq!(
+            labels(&app_menus(true, Connections::default()), "Audio Input")[0],
+            "Channels and Playback…"
+        );
+        let binding = KeyBinding::new("secondary-alt-i", OpenAudioWindow, None);
+        let keystroke = &binding.keystrokes()[0];
+        assert_eq!(keystroke.key(), "i");
+        assert!(keystroke.modifiers().alt);
+        if cfg!(target_os = "macos") {
+            assert!(keystroke.modifiers().platform && !keystroke.modifiers().control);
+        } else {
+            assert!(keystroke.modifiers().control && !keystroke.modifiers().platform);
         }
     }
 }
