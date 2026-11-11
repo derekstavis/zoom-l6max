@@ -14,6 +14,8 @@ struct PanelSnapshot {
     model: l6fw::Model,
     data: PanelData,
     frame: Arc<RenderImage>,
+    /// A notice over the panel, and whether it reports an error.
+    notice: Option<(gpui::SharedString, bool)>,
 }
 
 impl Render for PanelSnapshot {
@@ -64,6 +66,12 @@ impl Render for PanelSnapshot {
                                         .object_fit(gpui::ObjectFit::Contain),
                                 ),
                         )
+                    })
+                    .when_some(self.notice.clone(), |element, (text, error)| {
+                        element.child(
+                            crate::notice_anchor(self.model, scale)
+                                .child(crate::notice_view(text, error)),
+                        )
                     }),
             )
     }
@@ -88,7 +96,7 @@ pub fn render(args: &[String]) -> Result<(), String> {
         Some("l6max") => l6fw::Model::L6max,
         _ => {
             return Err(
-                "usage: --render-panel <l6|l6max> [--data panel.json] [--powered-off] --output <path.png>".into(),
+                "usage: --render-panel <l6|l6max> [--data panel.json] [--powered-off] [--notice TEXT [--notice-error]] --output <path.png>".into(),
             );
         }
     };
@@ -175,7 +183,19 @@ pub fn render(args: &[String]) -> Result<(), String> {
     let handle = app
         .open_window(
             size(px(device_width), px(device_height)),
-            |_, cx: &mut App| cx.new(|_| PanelSnapshot { model, data, frame }),
+            |_, cx: &mut App| {
+                cx.new(|_| PanelSnapshot {
+                    model,
+                    data,
+                    frame,
+                    notice: option(args, "--notice").map(|text| {
+                        (
+                            text.to_owned().into(),
+                            args.iter().any(|arg| arg == "--notice-error"),
+                        )
+                    }),
+                })
+            },
         )
         .map_err(|error| error.to_string())?;
     app.run_until_parked();

@@ -171,6 +171,12 @@ part of the faceplate and are omitted from the rendering.
 
 ![Headless-rendered L6max panel](../images/l6max-panel-headless.png)
 
+Results of menu actions, such as connecting USB or ejecting the card, appear as
+a notice over the model's nameplate, where nothing responds to input.
+Confirmations fade after three seconds; errors and the power-off hint stay until
+clicked or resolved. `--render-panel MODEL --notice TEXT [--notice-error]` draws
+one for review.
+
 The Patches window renders the same way from fixed selections, for example
 `--render-patches l6max --sd-card midi-sync --no-card --output patches.png`; the
 `patches_window_render` test renders its states with

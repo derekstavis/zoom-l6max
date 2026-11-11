@@ -204,7 +204,7 @@ pub fn panel(
     // The physical unit's central wordmark is a removable sticker; show the
     // emulator's model identifier in the same panel area.
     panel = panel.child(panel_identifier_local(
-        Region::new(206.0, 246.0, 410.0, 38.0),
+        super::nameplate(l6fw::Model::L6),
         "ZOOM L6 Emulator",
         s,
         25.0,

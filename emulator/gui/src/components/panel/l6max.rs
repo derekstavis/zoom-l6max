@@ -8,7 +8,9 @@ use super::super::{
     encoder::{EncoderLedLevel, EncoderWithLeds},
     knobs,
 };
-use super::shared::{at, at_local, label, label_sized, line, panel_identifier, section_header};
+use super::shared::{
+    at, at_local, label, label_sized, line, panel_identifier_local, section_header,
+};
 use gpui::{Div, div, prelude::*, px, rgb};
 use l6max_host::indicators;
 
@@ -410,8 +412,8 @@ pub fn panel(
         .child(label(496.0, 117.0, 104.0, "LINE (-10dBu UNBAL)", s))
         .child(line(431.0, 124.0, 58.0, 1.0, s))
         .child(line(606.0, 124.0, 53.0, 1.0, s))
-        .child(panel_identifier(
-            Region::new(318.0, 296.0, 352.0, 36.0),
+        .child(panel_identifier_local(
+            super::nameplate(l6fw::Model::L6max),
             "ZOOM L6max Emulator",
             s,
             25.0,

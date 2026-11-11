@@ -258,6 +258,13 @@ impl MenuSmoke {
                 self.stage = 30;
             }
             30 if panel.options.sd_image.is_none() && panel.ejected_card.is_some() => {
+                if !panel
+                    .notice
+                    .as_ref()
+                    .is_some_and(|notice| notice.text == "SD card ejected" && !notice.error)
+                {
+                    return Err("Ejecting the card showed no notice in the window".into());
+                }
                 // The menu follows the state on the tick that saw it change.
                 Self::validate_menu("File")?;
                 self.stage = 31;

@@ -183,6 +183,49 @@ fn app_menus(state: MenuState) -> Vec<Menu> {
     ]
 }
 
+/// A message shown along the top of the main window, over the jacks rather than
+/// the controls. Errors and hints stay until
+/// dismissed or resolved; confirmations fade.
+struct Notice {
+    text: SharedString,
+    error: bool,
+    sticky: bool,
+    shown: Instant,
+}
+
+/// How long a confirmation stays.
+const NOTICE_SECONDS: u64 = 3;
+
+/// Centre a notice on the model's nameplate, inside the scaled panel.
+pub(crate) fn notice_anchor(model: l6fw::Model, scale: f32) -> gpui::Div {
+    let plate = components::panel::nameplate(model);
+    let (x, y) = (plate.x + plate.width / 2.0, plate.y + plate.height / 2.0);
+    div()
+        .absolute()
+        .left(px(x * scale - 300.0))
+        .top(px(y * scale - 30.0))
+        .w(px(600.0))
+        .h(px(60.0))
+        .flex()
+        .items_center()
+        .justify_center()
+}
+
+/// The notice element, shared with headless rendering.
+pub(crate) fn notice_view(text: SharedString, error: bool) -> gpui::Div {
+    div()
+        .max_w(px(560.0))
+        .px_4()
+        .py_2()
+        .rounded_lg()
+        .border_1()
+        .border_color(rgb(if error { 0x7a3a40 } else { 0x34405c }))
+        .bg(rgb(if error { 0x3a1c22 } else { 0x171f30 }))
+        .text_sm()
+        .text_color(rgb(if error { 0xffb3a7 } else { 0xe8eef8 }))
+        .child(text)
+}
+
 struct NativePanel {
     /// The model the window is sized for.
     window_model: l6fw::Model,
@@ -191,6 +234,7 @@ struct NativePanel {
     patches_window: Option<gpui::WindowHandle<patches_window::PatchesWindow>>,
     /// The card taken out with Eject SD Card, which Insert SD Card puts back.
     ejected_card: Option<std::path::PathBuf>,
+    notice: Option<Notice>,
     /// Set while a restart for a new patch selection runs in the background.
     applying_patches: bool,
     patch_error: Option<String>,
@@ -521,7 +565,7 @@ impl NativePanel {
             panel.update(cx, |panel, cx| match window {
                 Ok(window) => panel.patches_window = Some(window),
                 Err(error) => {
-                    panel.status = format!("Could not open the patches window: {error}").into();
+                    panel.report(format!("Could not open the patches window: {error}"), true);
                     cx.notify();
                 }
             });
@@ -665,7 +709,7 @@ impl NativePanel {
             panel.update(cx, |panel, cx| match window {
                 Ok(window) => panel.audio_window = Some(window),
                 Err(error) => {
-                    panel.status = format!("Could not open the audio window: {error}").into();
+                    panel.report(format!("Could not open the audio window: {error}"), true);
                     cx.notify();
                 }
             });
@@ -866,7 +910,7 @@ impl NativePanel {
             return;
         };
         if let Err(error) = inputs.main.audio_input_transport(command, 0) {
-            self.status = format!("Audio playback failed: {error}").into();
+            self.report(format!("Audio playback failed: {error}"), true);
             cx.notify();
         }
     }
@@ -878,10 +922,10 @@ impl NativePanel {
         let Some(engine) = self._qemu.as_mut() else {
             return;
         };
-        self.status = match engine.connect_usb() {
-            Ok(()) => "USB connected".into(),
-            Err(error) => format!("USB connect failed: {error}").into(),
-        };
+        match engine.connect_usb() {
+            Ok(()) => self.report("USB connected", false),
+            Err(error) => self.report(format!("USB connect failed: {error}"), true),
+        }
         cx.notify();
     }
     fn disconnect_usb(&mut self, cx: &mut Context<Self>) {
@@ -889,7 +933,7 @@ impl NativePanel {
             return;
         };
         engine.disconnect_usb();
-        self.status = "USB disconnected".into();
+        self.report("USB disconnected", false);
         cx.notify();
     }
     fn connect_midi(&mut self, cx: &mut Context<Self>) {
@@ -897,7 +941,7 @@ impl NativePanel {
             return;
         };
         engine.connect_midi();
-        self.status = "MIDI IN/OUT jacks connected".into();
+        self.report("MIDI IN/OUT jacks connected", false);
         cx.notify();
     }
     fn disconnect_midi(&mut self, cx: &mut Context<Self>) {
@@ -905,8 +949,31 @@ impl NativePanel {
             return;
         };
         engine.disconnect_midi();
-        self.status = "MIDI IN/OUT jacks disconnected".into();
+        self.report("MIDI IN/OUT jacks disconnected", false);
         cx.notify();
+    }
+
+    /// Show the result of an action in the window, and in its title.
+    fn report(&mut self, text: impl Into<SharedString>, error: bool) {
+        let text = text.into();
+        self.status = text.clone();
+        self.notice = Some(Notice {
+            text,
+            error,
+            sticky: error,
+            shown: Instant::now(),
+        });
+    }
+
+    /// Drop a confirmation once it has been read. Returns whether one went.
+    fn expire_notice(&mut self) -> bool {
+        let expired = self.notice.as_ref().is_some_and(|notice| {
+            !notice.sticky && notice.shown.elapsed() >= Duration::from_secs(NOTICE_SECONDS)
+        });
+        if expired {
+            self.notice = None;
+        }
+        expired
     }
 
     /// The state the menu bar shows.
@@ -931,9 +998,9 @@ impl NativePanel {
         match engine.eject_sd() {
             Ok(()) => {
                 self.ejected_card = self.options.sd_image.take();
-                self.status = "SD card ejected".into();
+                self.report("SD card ejected", false);
             }
-            Err(error) => self.status = format!("Eject SD card failed: {error}").into(),
+            Err(error) => self.report(format!("Eject SD card failed: {error}"), true),
         }
         cx.notify();
     }
@@ -943,10 +1010,10 @@ impl NativePanel {
         let Some(card) = self.ejected_card.clone() else {
             return;
         };
-        self.status = match self.use_sd_image(card) {
-            Ok(()) => "SD card inserted".into(),
-            Err(error) => format!("Insert SD card failed: {error}").into(),
-        };
+        match self.use_sd_image(card) {
+            Ok(()) => self.report("SD card inserted", false),
+            Err(error) => self.report(format!("Insert SD card failed: {error}"), true),
+        }
         cx.notify();
     }
 
@@ -1065,6 +1132,8 @@ impl NativePanel {
         self.powered_off_signal
             .store(false, std::sync::atomic::Ordering::Relaxed);
         self.status = "Starting firmware".into();
+        // A hint about the stopped guest no longer applies; errors stay.
+        self.notice = self.notice.take().filter(|notice| notice.error);
         Ok(())
     }
 
@@ -1075,7 +1144,7 @@ impl NativePanel {
                 .swap(false, std::sync::atomic::Ordering::Relaxed)
         {
             if let Err(error) = self.power_on() {
-                self.status = format!("Power-on failed: {error}").into();
+                self.report(format!("Power-on failed: {error}"), true);
             }
             return;
         }
@@ -1104,11 +1173,16 @@ impl NativePanel {
         self.powered_off = true;
         self.powered_off_signal
             .store(true, std::sync::atomic::Ordering::Relaxed);
-        self.status = if self.model == l6fw::Model::L6 {
-            "Powered off · select startup buttons, then press Power".into()
+        let hint = if self.model == l6fw::Model::L6 {
+            "Powered off · select startup buttons, then press Power"
         } else {
-            "Powered off · press Power to start".into()
+            "Powered off · press Power to start"
         };
+        self.report(hint, false);
+        // The hint stays until power returns.
+        if let Some(notice) = &mut self.notice {
+            notice.sticky = true;
+        }
     }
     fn refresh_frame(&mut self) -> bool {
         let Some(display) = &self.display else {
@@ -1118,7 +1192,7 @@ impl NativePanel {
             Ok(Some(frame)) => frame,
             Ok(None) => return false,
             Err(error) => {
-                self.status = format!("Display disconnected: {error}").into();
+                self.report(format!("Display disconnected: {error}"), true);
                 return true;
             }
         };
@@ -1218,6 +1292,29 @@ impl Render for NativePanel {
                     } else {
                         div()
                     })
+                    .when_some(
+                        self.notice
+                            .as_ref()
+                            .filter(|_| !self.applying_patches)
+                            .map(|notice| (notice.text.clone(), notice.error)),
+                        |element, (text, error)| {
+                            element.child(
+                                notice_anchor(self.model, scale).child(
+                                    notice_view(text, error)
+                                        .id("notice")
+                                        .cursor(CursorStyle::PointingHand)
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(|panel, _, _, cx| {
+                                                cx.stop_propagation();
+                                                panel.notice = None;
+                                                cx.notify();
+                                            }),
+                                        ),
+                                ),
+                            )
+                        },
+                    ),
             )
             .when(self.applying_patches, |element| {
                 element.child(
@@ -1565,6 +1662,7 @@ fn main() {
                         audio_window: None,
                         patches_window: None,
                         ejected_card: None,
+                        notice: None,
                         applying_patches: false,
                         patch_error: None,
                         starting_engine: Arc::new(Mutex::new(None)),
@@ -1906,7 +2004,9 @@ fn main() {
                                     panel.status
                                 ));
                             }
+                            let notice_expired = panel.expire_notice();
                             if panel.status != previous
+                                || notice_expired
                                 || panel.powered_off != previous_powered_off
                                 || frame_changed
                                 || controls_changed
