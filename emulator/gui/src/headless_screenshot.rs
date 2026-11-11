@@ -201,3 +201,72 @@ fn option<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
         .find(|pair| pair[0] == name)
         .map(|pair| pair[1].as_str())
 }
+
+/// Render the Patches window without an emulator, for review and as a smoke
+/// test of its layout.
+pub fn render_patches(args: &[String]) -> Result<(), String> {
+    use crate::patches_window::{HEIGHT, PatchesWindow, Selection, Status, WIDTH};
+    let usage = "usage: --render-patches <l6|l6max> [--firmware a,b] [--sd-card a,b] \
+                 [--active-firmware a,b] [--active-sd-card a,b] [--no-card] [--error TEXT] \
+                 --output <path.png>";
+    let model = match args.first().map(String::as_str) {
+        Some("l6") => l6fw::Model::L6,
+        Some("l6max") => l6fw::Model::L6max,
+        _ => return Err(usage.into()),
+    };
+    let output = option(args, "--output").ok_or(usage)?;
+    if Path::new(output).exists() {
+        return Err(format!("refusing to overwrite {output}"));
+    }
+    let list = |name: &str| -> Vec<String> {
+        option(args, name)
+            .map(|value| {
+                value
+                    .split(',')
+                    .filter(|item| !item.is_empty())
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let active = Selection::new(list("--active-firmware"), list("--active-sd-card"));
+    let selection = if option(args, "--firmware").is_some() || option(args, "--sd-card").is_some() {
+        Selection::new(list("--firmware"), list("--sd-card"))
+    } else {
+        active.clone()
+    };
+    // What the stock 1.10 packages offer.
+    let available = Ok(match model {
+        l6fw::Model::L6 => vec!["midi-sync"],
+        l6fw::Model::L6max => firmware_patch_core::PATCHES.to_vec(),
+    });
+    let status = Status {
+        model,
+        firmware: "fixed".into(),
+        can_start: true,
+        active,
+        has_card: !args.iter().any(|arg| arg == "--no-card"),
+        patch_error: option(args, "--error").map(str::to_owned),
+    };
+    let platform = current_platform(true);
+    let text_system = platform.text_system();
+    let mut app = HeadlessAppContext::with_platform(text_system, Arc::new(()), || {
+        current_headless_renderer()
+    });
+    let handle = app
+        .open_window(size(px(WIDTH), px(HEIGHT)), |_, cx: &mut App| {
+            cx.new(|_| PatchesWindow::fixed(status, available, selection))
+        })
+        .map_err(|error| error.to_string())?;
+    app.run_until_parked();
+    let image = app
+        .capture_screenshot(handle.into())
+        .map_err(|error| error.to_string())?;
+    image.save(output).map_err(|error| error.to_string())?;
+    println!(
+        "Saved {}x{} Patches window to {output}",
+        image.width(),
+        image.height()
+    );
+    Ok(())
+}

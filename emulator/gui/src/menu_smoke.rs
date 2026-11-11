@@ -11,6 +11,8 @@ static NATIVE_ERROR: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(No
 
 pub struct MenuSmoke {
     firmware: PathBuf,
+    /// The MAIN image with midi-sync installed in the firmware.
+    firmware_patched_main: Vec<u8>,
     stage: u8,
     deadline: Instant,
 }
@@ -49,6 +51,7 @@ impl MenuSmoke {
     pub fn from_environment() -> Option<Self> {
         std::env::var_os("L6_MENU_SMOKE_FIRMWARE").map(|path| Self {
             firmware: path.into(),
+            firmware_patched_main: Vec::new(),
             stage: 0,
             deadline: Instant::now() + Duration::from_secs(30),
         })
@@ -324,7 +327,9 @@ impl MenuSmoke {
                 // Applying updates the panel, which this tick is still updating.
                 cx.defer(move |cx| {
                     let _ = patches.update(cx, |patches, window, cx| {
-                        patches.apply(vec!["midi-sync".to_owned()], window, cx)
+                        let selection =
+                            crate::patches_window::Selection::new(vec!["midi-sync".into()], vec![]);
+                        patches.apply(selection, window, cx)
                     });
                 });
                 self.stage = 17;
@@ -351,7 +356,40 @@ impl MenuSmoke {
                     return Err("Applying a patch did not restart and save it".into());
                 }
                 println!("PASS: applying a patch installs it, restarts and saves it");
-                panel.apply_patches(Vec::new(), cx);
+                self.firmware_patched_main =
+                    std::fs::read(state.join("patched-firmware/main_firmware.bin"))
+                        .map_err(|e| e.to_string())?;
+                let selection =
+                    crate::patches_window::Selection::new(vec![], vec!["midi-sync".into()]);
+                panel.apply_patches(selection, cx);
+                self.stage = 18;
+            }
+            18 if !panel.applying_patches => {
+                if let Some(error) = &panel.patch_error {
+                    return Err(format!("Loading a patch from the SD card failed: {error}"));
+                }
+                let state = panel.options.state_dir.clone().ok_or("No device state")?;
+                let main = state.join("patched-firmware/main_firmware.bin");
+                check_installed(&state, &main)?;
+                let stock = std::fs::read(panel.options.firmware_dir.join("main_firmware.bin"))
+                    .map_err(|e| e.to_string())?;
+                let installed = std::fs::read(&main).map_err(|e| e.to_string())?;
+                if installed == stock || installed == self.firmware_patched_main {
+                    return Err("SD card delivery did not install the Patch loader".into());
+                }
+                let card = panel.options.sd_image.clone().ok_or("No SD card")?;
+                // Nothing to write means the card already holds exactly the module.
+                if l6max_host::sd_patches::install(&card, panel.model, &["midi-sync".into()])? {
+                    return Err("The SD card did not hold the midi-sync module".into());
+                }
+                if !panel.saved_patches().is_empty()
+                    || panel.saved_sd_patches() != ["midi-sync"]
+                    || panel.controls.is_none()
+                {
+                    return Err("SD card delivery did not restart and save it".into());
+                }
+                println!("PASS: loading a patch from the SD card installs the loader and module");
+                panel.apply_patches(Default::default(), cx);
                 self.stage = 16;
             }
             16 if !panel.applying_patches => {
@@ -364,10 +402,15 @@ impl MenuSmoke {
                     &panel.options.firmware_dir.join("main_firmware.bin"),
                 )?;
                 if !panel.saved_patches().is_empty()
+                    || !panel.saved_sd_patches().is_empty()
                     || panel.controls.is_none()
                     || state.join("patched-firmware").exists()
                 {
                     return Err("Removing patches did not restore the stock firmware".into());
+                }
+                let card = panel.options.sd_image.clone().ok_or("No SD card")?;
+                if l6max_host::sd_patches::install(&card, panel.model, &[])? {
+                    return Err("Removing patches left the module on the SD card".into());
                 }
                 println!("PASS: removing patches restores the stock firmware");
                 return Ok(true);

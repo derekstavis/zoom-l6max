@@ -1,10 +1,12 @@
-//! The window that selects which firmware patches the guest runs.
+//! The window that selects which patches the guest runs, and whether each is
+//! installed in the firmware or loaded from the SD card by the Patch loader.
 use crate::NativePanel;
 use firmware_patch_core::PATCHES;
 use gpui::{Context, CursorStyle, Entity, MouseButton, Render, Window, div, prelude::*, px, rgb};
 use std::path::PathBuf;
 
-pub const WIDTH: f32 = 480.0;
+pub const WIDTH: f32 = 520.0;
+pub const HEIGHT: f32 = 380.0;
 
 /// The patches offered here, in catalog order, as the web patcher offers them.
 /// `midi-control` stays available to `--patch`, `config.toml` and tests.
@@ -19,111 +21,327 @@ fn description(patch: &str) -> &'static str {
     }
 }
 
+/// Where a selected patch comes from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Delivery {
+    Firmware,
+    SdCard,
+}
+
+/// The patches to run, split by where each comes from. A patch is in at most
+/// one list.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Selection {
+    pub firmware: Vec<String>,
+    pub sd_card: Vec<String>,
+}
+
+impl Selection {
+    pub fn new(firmware: Vec<String>, sd_card: Vec<String>) -> Self {
+        let mut selection = Self { firmware, sd_card };
+        selection
+            .firmware
+            .retain(|patch| !selection.sd_card.contains(patch));
+        selection.ordered()
+    }
+
+    pub fn delivery(&self, patch: &str) -> Option<Delivery> {
+        if self.sd_card.iter().any(|name| name == patch) {
+            Some(Delivery::SdCard)
+        } else if self.firmware.iter().any(|name| name == patch) {
+            Some(Delivery::Firmware)
+        } else {
+            None
+        }
+    }
+
+    /// Select `patch` from `delivery`, or deselect it.
+    pub fn set(&mut self, patch: &str, delivery: Option<Delivery>) {
+        self.firmware.retain(|name| name != patch);
+        self.sd_card.retain(|name| name != patch);
+        match delivery {
+            Some(Delivery::Firmware) => self.firmware.push(patch.to_owned()),
+            Some(Delivery::SdCard) => self.sd_card.push(patch.to_owned()),
+            None => {}
+        }
+        *self = std::mem::take(self).ordered();
+    }
+
+    /// Turn `patch` off, or on from the firmware.
+    pub fn toggle(&mut self, patch: &str) {
+        let next = match self.delivery(patch) {
+            Some(_) => None,
+            None => Some(Delivery::Firmware),
+        };
+        self.set(patch, next);
+    }
+
+    /// Catalog order, so that the same selection always reads and saves the same.
+    fn ordered(self) -> Self {
+        let order = |list: Vec<String>| -> Vec<String> {
+            PATCHES
+                .iter()
+                .filter(|patch| list.iter().any(|name| name == *patch))
+                .map(|patch| (*patch).to_owned())
+                .collect()
+        };
+        Self {
+            firmware: order(self.firmware),
+            sd_card: order(self.sd_card),
+        }
+    }
+}
+
+/// What the window shows about the running emulator.
+#[derive(Clone)]
+pub struct Status {
+    pub model: l6fw::Model,
+    /// The firmware the other fields describe.
+    pub firmware: PathBuf,
+    pub can_start: bool,
+    pub active: Selection,
+    pub has_card: bool,
+    pub patch_error: Option<String>,
+}
+
+impl Status {
+    fn of(panel: &NativePanel) -> Self {
+        let model = panel.model;
+        Self {
+            model,
+            firmware: panel.options.firmware_dir.clone(),
+            can_start: panel.options.qemu.is_some(),
+            active: Selection::new(
+                panel.options.selected_patches(model),
+                panel.options.selected_sd_patches(model),
+            ),
+            has_card: panel.options.sd_image.is_some(),
+            patch_error: panel.patch_error.clone(),
+        }
+    }
+}
+
+enum Source {
+    Panel(Entity<NativePanel>),
+    /// A fixed status, for rendering without an emulator.
+    #[cfg_attr(not(feature = "headless-screenshots"), allow(dead_code))]
+    Fixed(Status),
+}
+
 pub struct PatchesWindow {
-    panel: Entity<NativePanel>,
-    /// The firmware that `available` and `selected` describe.
+    source: Source,
+    /// The firmware that `available` and `selection` describe.
     firmware: PathBuf,
     available: Result<Vec<&'static str>, String>,
-    selected: Vec<String>,
+    selection: Selection,
+}
+
+/// A small two-way switch for a row's delivery.
+fn segment(
+    id: String,
+    label: &'static str,
+    selected: bool,
+    bright: bool,
+) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(gpui::SharedString::from(id))
+        .px_2()
+        .py(px(2.0))
+        .text_sm()
+        .bg(rgb(if selected { 0x2a3550 } else { 0x171d2c }))
+        .text_color(rgb(match (selected, bright) {
+            (true, _) => 0xe8eef8,
+            (false, true) => 0x8b95aa,
+            (false, false) => 0x4a5266,
+        }))
+        .child(label)
 }
 
 impl PatchesWindow {
     pub fn new(panel: Entity<NativePanel>, _: &mut Context<Self>) -> Self {
         Self {
-            panel,
+            source: Source::Panel(panel),
             firmware: PathBuf::new(),
             available: Ok(Vec::new()),
-            selected: Vec::new(),
+            selection: Selection::default(),
         }
     }
 
-    fn toggle(&mut self, patch: &str) {
-        if let Some(index) = self.selected.iter().position(|name| name == patch) {
-            self.selected.remove(index);
-        } else {
-            self.selected.push(patch.to_owned());
+    /// A window showing `status`, with `selection` as the unapplied choice.
+    #[cfg_attr(not(feature = "headless-screenshots"), allow(dead_code))]
+    pub fn fixed(
+        status: Status,
+        available: Result<Vec<&'static str>, String>,
+        selection: Selection,
+    ) -> Self {
+        Self {
+            firmware: status.firmware.clone(),
+            available,
+            selection,
+            source: Source::Fixed(status),
         }
     }
 
     /// Close and restart with the selection. The main window shows the progress,
     /// and this window comes back if the selection cannot apply.
-    pub fn apply(&mut self, selected: Vec<String>, window: &mut Window, cx: &mut Context<Self>) {
-        // Catalog order, so that the same selection always reads the same.
-        let selected: Vec<String> = PATCHES
-            .iter()
-            .filter(|patch| selected.iter().any(|name| name == *patch))
-            .map(|patch| (*patch).to_owned())
-            .collect();
-        self.panel
-            .update(cx, |panel, cx| panel.apply_patches(selected, cx));
+    pub fn apply(&mut self, selection: Selection, window: &mut Window, cx: &mut Context<Self>) {
+        let selection = Selection::new(selection.firmware, selection.sd_card);
+        if let Source::Panel(panel) = &self.source {
+            panel.update(cx, |panel, cx| panel.apply_patches(selection, cx));
+        }
         window.remove_window();
     }
 }
 
 impl Render for PatchesWindow {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let panel = self.panel.read(cx);
-        let model = panel.model;
-        let can_start = panel.options.qemu.is_some();
-        let active = panel.options.selected_patches(model);
-        // Follow a change of firmware or model while the window is open.
-        if self.firmware != panel.options.firmware_dir {
-            self.firmware = panel.options.firmware_dir.clone();
-            self.available = l6max_host::firmware_patches::available(&panel.options, model);
-            self.selected = active.clone();
-        }
+        let status = match &self.source {
+            Source::Panel(panel) => {
+                let panel = panel.read(cx);
+                let status = Status::of(panel);
+                // Follow a change of firmware or model while the window is open.
+                if self.firmware != status.firmware {
+                    self.firmware = status.firmware.clone();
+                    self.available =
+                        l6max_host::firmware_patches::available(&panel.options, status.model);
+                    self.selection = status.active.clone();
+                }
+                status
+            }
+            Source::Fixed(status) => status.clone(),
+        };
+        let Status {
+            model,
+            can_start,
+            active,
+            has_card,
+            patch_error,
+            ..
+        } = status;
+        let issue = l6max_host::sd_patches::known_issue(model);
+        let loadable = if issue.is_some() {
+            Vec::new()
+        } else {
+            l6max_host::sd_patches::available(model)
+        };
         let available = self.available.as_deref().unwrap_or(&[]).to_vec();
-        let changed = PATCHES.iter().any(|patch| {
-            self.selected.iter().any(|name| name == patch)
-                != active.iter().any(|name| name == patch)
-        });
-        let enabled = changed && can_start;
-        let patch_error = panel.patch_error.clone();
+        let enabled = self.selection != active && can_start;
         let rows = OFFERED.iter().map(|&patch| {
             let usable = available.contains(&patch);
-            let checked = self.selected.iter().any(|name| name == patch);
+            let delivery = self.selection.delivery(patch);
+            let checked = delivery.is_some();
             // A saved patch can always be turned off, so that the guest can start again.
             let togglable = usable || checked;
+            let from_card = loadable.contains(&patch);
             div()
-                .id(patch)
                 .flex()
                 .items_center()
                 .gap_3()
-                .when(togglable, |row| {
-                    row.cursor(CursorStyle::PointingHand).on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |window, _, _, cx| {
-                            window.toggle(patch);
-                            cx.notify();
-                        }),
-                    )
-                })
                 .child(
                     div()
-                        .size(px(16.0))
-                        .rounded_sm()
-                        .border_1()
-                        .border_color(rgb(0x34405c))
-                        .bg(rgb(if checked { 0x5b8def } else { 0x171d2c })),
-                )
-                .child(
-                    div()
+                        .id(patch)
                         .flex_1()
+                        .min_w_0()
                         .flex()
-                        .flex_col()
+                        .items_center()
+                        .gap_3()
+                        .when(togglable, |row| {
+                            row.cursor(CursorStyle::PointingHand).on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |window, _, _, cx| {
+                                    window.selection.toggle(patch);
+                                    cx.notify();
+                                }),
+                            )
+                        })
                         .child(
                             div()
-                                .text_color(rgb(if togglable { 0xe8eef8 } else { 0x6a7388 }))
-                                .child(patch),
+                                .size(px(16.0))
+                                .rounded_sm()
+                                .border_1()
+                                .border_color(rgb(0x34405c))
+                                .bg(rgb(if checked { 0x5b8def } else { 0x171d2c })),
                         )
                         .child(
                             div()
-                                .text_sm()
-                                .text_color(rgb(0x8b95aa))
-                                .child(description(patch)),
+                                .flex_1()
+                                .min_w_0()
+                                .flex()
+                                .flex_col()
+                                .child(
+                                    div()
+                                        .text_color(rgb(if togglable {
+                                            0xe8eef8
+                                        } else {
+                                            0x6a7388
+                                        }))
+                                        .child(patch),
+                                )
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(rgb(0x8b95aa))
+                                        .child(description(patch)),
+                                ),
                         ),
                 )
+                .when(from_card && usable, |row| {
+                    // Choosing either side also turns the patch on.
+                    let choose = |delivery: Delivery| {
+                        cx.listener(move |window: &mut Self, _, _, cx| {
+                            window.selection.set(patch, Some(delivery));
+                            cx.notify();
+                        })
+                    };
+                    let card_enabled = has_card || delivery == Some(Delivery::SdCard);
+                    // Dim until the patch is on; either side still turns it on.
+                    row.child(
+                        div()
+                            .flex()
+                            .flex_none()
+                            .rounded_md()
+                            .border_1()
+                            .border_color(rgb(0x34405c))
+                            .overflow_hidden()
+                            .child(
+                                segment(
+                                    format!("{patch}-firmware"),
+                                    "Firmware",
+                                    delivery == Some(Delivery::Firmware),
+                                    checked,
+                                )
+                                .cursor(CursorStyle::PointingHand)
+                                .on_mouse_down(MouseButton::Left, choose(Delivery::Firmware)),
+                            )
+                            .child(
+                                segment(
+                                    format!("{patch}-sd-card"),
+                                    "SD card",
+                                    delivery == Some(Delivery::SdCard),
+                                    checked && card_enabled,
+                                )
+                                .when(card_enabled, |segment| {
+                                    segment
+                                        .cursor(CursorStyle::PointingHand)
+                                        .on_mouse_down(MouseButton::Left, choose(Delivery::SdCard))
+                                }),
+                            ),
+                    )
+                })
         });
+        let card_note = if let Some(issue) = issue {
+            Some(issue.to_owned())
+        } else if !has_card {
+            Some("Insert an SD card (File → Use SD Card Folder…) to load patches from it.".into())
+        } else if !self.selection.sd_card.is_empty() {
+            Some(
+                "SD card patches add the Patch loader to the firmware and copy each patch \
+                 to the card's PATCHES folder."
+                    .into(),
+            )
+        } else {
+            None
+        };
         let message = patch_error.or_else(|| self.available.as_ref().err().cloned());
         div()
             .size_full()
@@ -137,6 +355,7 @@ impl Render for PatchesWindow {
             .children(
                 message.map(|message| div().text_sm().text_color(rgb(0xf0a0a0)).child(message)),
             )
+            .children(card_note.map(|note| div().text_sm().text_color(rgb(0x8b95aa)).child(note)))
             .child(
                 div()
                     .text_sm()
@@ -159,11 +378,49 @@ impl Render for PatchesWindow {
                             button.cursor(CursorStyle::PointingHand).on_mouse_down(
                                 MouseButton::Left,
                                 cx.listener(|this, _, window, cx| {
-                                    this.apply(this.selected.clone(), window, cx)
+                                    this.apply(this.selection.clone(), window, cx)
                                 }),
                             )
                         }),
                 ),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn names(list: &[&str]) -> Vec<String> {
+        list.iter().map(|name| (*name).to_owned()).collect()
+    }
+
+    #[test]
+    fn a_patch_has_one_delivery() {
+        let mut selection = Selection::new(names(&["midi-sync"]), names(&["midi-sync"]));
+        assert_eq!(selection.delivery("midi-sync"), Some(Delivery::SdCard));
+        assert!(selection.firmware.is_empty());
+        selection.set("midi-sync", Some(Delivery::Firmware));
+        assert_eq!(selection, Selection::new(names(&["midi-sync"]), vec![]));
+    }
+
+    #[test]
+    fn toggling_turns_on_from_firmware_and_off_from_either() {
+        let mut selection = Selection::default();
+        selection.toggle("knob-dialog");
+        assert_eq!(selection.delivery("knob-dialog"), Some(Delivery::Firmware));
+        selection.set("knob-dialog", Some(Delivery::SdCard));
+        selection.toggle("knob-dialog");
+        assert_eq!(selection, Selection::default());
+    }
+
+    #[test]
+    fn choosing_a_delivery_turns_the_patch_on_in_catalog_order() {
+        let mut selection = Selection::default();
+        selection.set("midi-sync", Some(Delivery::SdCard));
+        selection.set("knob-dialog", Some(Delivery::SdCard));
+        selection.set("din-mixer-control", Some(Delivery::Firmware));
+        assert_eq!(selection.sd_card, names(&["knob-dialog", "midi-sync"]));
+        assert_eq!(selection.firmware, names(&["din-mixer-control"]));
     }
 }

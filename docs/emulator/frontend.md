@@ -171,6 +171,11 @@ part of the faceplate and are omitted from the rendering.
 
 ![Headless-rendered L6max panel](../images/l6max-panel-headless.png)
 
+The Patches window renders the same way from fixed selections, for example
+`--render-patches l6max --sd-card midi-sync --no-card --output patches.png`; the
+`patches_window_render` test renders its states with
+`cargo test -p l6max-gui --features headless-screenshots`.
+
 The optional `--powered-off` flag renders the L6 panel with its virtual POWER
 lamp off:
 

@@ -37,6 +37,15 @@ L6max offers `knob-dialog`, `midi-sync` and `din-mixer-control`; L6 offers
 when the selected firmware is another. The patches ship in the app and
 need no compiler. See the [patch catalog](../../patches/README.md).
 
+On L6max, `knob-dialog` and `midi-sync` also have a **Firmware | SD card**
+switch. **SD card** loads the patch the way the
+[Patch loader](../../patches/patch-loader/README.md) does on a device: the app
+installs the loader in the firmware and copies the patch to the card's
+`PATCHES/` folder, removing only files it copied itself. It needs a card, and
+inserting a different card copies the selected patches onto it first. L6 does not
+offer it yet, because the loader currently stops the L6 from starting USB in the
+emulator.
+
 The supported package layout and revision scope are described in
 [firmware packages](firmware-packages.md). The application validates integrity,
 not manufacturer authenticity.

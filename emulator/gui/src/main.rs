@@ -483,7 +483,11 @@ impl NativePanel {
         // Opening draws the window, which reads this panel: finish this update first.
         let panel = cx.entity();
         cx.defer(move |cx| {
-            let bounds = Bounds::centered(None, size(px(patches_window::WIDTH), px(300.0)), cx);
+            let bounds = Bounds::centered(
+                None,
+                size(px(patches_window::WIDTH), px(patches_window::HEIGHT)),
+                cx,
+            );
             let view = panel.clone();
             let window = cx.open_window(
                 WindowOptions {
@@ -514,9 +518,17 @@ impl NativePanel {
             .map_or_else(Vec::new, |config| config.patches(self.model).to_vec())
     }
 
-    /// Restart the guest running `selected` without blocking the UI, and save the
+    /// The patches the configuration loads from this model's SD card.
+    fn saved_sd_patches(&self) -> Vec<String> {
+        self.options
+            .config
+            .as_ref()
+            .map_or_else(Vec::new, |config| config.sd_patches(self.model).to_vec())
+    }
+
+    /// Restart the guest running `selection` without blocking the UI, and save the
     /// choice once it has started. A selection that cannot apply keeps the guest running.
-    fn apply_patches(&mut self, selected: Vec<String>, cx: &mut Context<Self>) {
+    fn apply_patches(&mut self, selection: patches_window::Selection, cx: &mut Context<Self>) {
         if self.applying_patches {
             return;
         }
@@ -524,10 +536,17 @@ impl NativePanel {
         self.patch_error = None;
         cx.notify();
         let model = self.model;
+        let patches_window::Selection {
+            firmware: selected,
+            sd_card: sd_selected,
+        } = selection;
         let mut options = self.options.clone();
         options.patches = Some(selected.clone());
-        let sd_selected = self.options.selected_sd_patches(model);
-        let previous = self.options.patches.clone();
+        options.sd_patches = Some(sd_selected.clone());
+        let previous = (
+            self.options.patches.clone(),
+            self.options.sd_patches.clone(),
+        );
         let starting = self.starting_engine.clone();
         cx.spawn(async move |this, cx| {
             let checked = {
@@ -572,6 +591,7 @@ impl NativePanel {
                                 )?;
                                 panel.options.reload_config()?;
                                 panel.options.patches = None;
+                                panel.options.sd_patches = None;
                             }
                             Ok(())
                         })
@@ -585,7 +605,7 @@ impl NativePanel {
             let _ = this.update(cx, |panel, cx| {
                 panel.applying_patches = false;
                 if let Err(error) = result {
-                    panel.options.patches = previous;
+                    (panel.options.patches, panel.options.sd_patches) = previous;
                     // With no guest left, the main window has to say why.
                     if panel.controls.is_none() {
                         panel.firmware_error = Some(error.clone());
@@ -897,6 +917,13 @@ impl NativePanel {
 
     fn use_sd_image(&mut self, image: std::path::PathBuf) -> Result<(), String> {
         let engine = self._qemu.as_ref().ok_or("no running engine")?;
+        // The Patch loader scans the card when it mounts, so a new card needs
+        // the selected patches before it goes in.
+        l6max_host::sd_patches::install(
+            &image,
+            self.model,
+            &self.options.selected_sd_patches(self.model),
+        )?;
         engine.insert_sd(&image)?;
         self.options.sd_image = Some(image.clone());
         self.options.no_sd = false;
@@ -1289,6 +1316,20 @@ fn main() {
     }
     let context = l6max_host::logging::context("gui");
     let _entered = context.enter();
+    if args.first().is_some_and(|arg| arg == "--render-patches") {
+        #[cfg(feature = "headless-screenshots")]
+        if let Err(error) = headless_screenshot::render_patches(&args[1..]) {
+            tracing::error!(%error, "Could not render the Patches window");
+            std::process::exit(1);
+        }
+        #[cfg(not(feature = "headless-screenshots"))]
+        {
+            eprintln!("Rebuild with --features headless-screenshots to render the Patches window");
+            std::process::exit(2);
+        }
+        #[cfg(feature = "headless-screenshots")]
+        return;
+    }
     if args.first().is_some_and(|arg| arg == "--render-panel") {
         #[cfg(feature = "headless-screenshots")]
         if let Err(error) = headless_screenshot::render(&args[1..]) {
