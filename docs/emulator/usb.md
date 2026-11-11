@@ -12,7 +12,7 @@ commands. Host requests reach those handlers through modeled peripherals.
 In the macOS bundle, **File → Use SD Card Folder…** imports a folder into a
 private persistent card and inserts it live, like inserting a card into the
 slot, with no engine restart; **File → Eject SD Card** removes it the same
-way. See the
+way and **File → Insert SD Card** puts it back. See the
 [app guide](../guides/macos-app.md#use-a-folder-as-the-sd-card) for semantics and limits.
 From a source checkout, create the same folder snapshot explicitly:
 

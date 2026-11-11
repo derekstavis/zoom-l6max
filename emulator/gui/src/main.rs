@@ -116,6 +116,7 @@ actions!(
         ConnectMidi,
         DisconnectMidi,
         EjectSdCard,
+        InsertSdCard,
         OpenPatchesWindow,
         OpenAudioWindow,
         PlayAudioInputs,
@@ -125,41 +126,56 @@ actions!(
     ]
 );
 
-/// Whether the emulated USB cable and MIDI jacks are connected.
+/// The emulator state the menu bar follows.
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
-struct Connections {
+struct MenuState {
+    /// Whether the emulated USB cable and MIDI jacks are connected.
     usb: bool,
     midi: bool,
+    /// Whether a card is in the slot, and whether an ejected one can go back.
+    card: bool,
+    ejected_card: bool,
+    /// Whether the audio inputs are playing.
+    playing: bool,
 }
 
-/// The menu bar. The Connections menu offers only the action that changes the
+/// The menu bar. Items that toggle state offer only the action that changes the
 /// current state. Without firmware selection, Open Firmware and Use SD Card
 /// Folder have no handler, which is what disables them: AppKit's menu
 /// validation overrides `MenuItem::disabled`.
-fn app_menus(connections: Connections) -> Vec<Menu> {
-    let usb = if connections.usb {
+fn app_menus(state: MenuState) -> Vec<Menu> {
+    let usb = if state.usb {
         MenuItem::action("Disconnect USB", DisconnectUsb)
     } else {
         MenuItem::action("Connect USB", ConnectUsb)
     };
-    let midi = if connections.midi {
+    let midi = if state.midi {
         MenuItem::action("Disconnect MIDI", DisconnectMidi)
     } else {
         MenuItem::action("Connect MIDI", ConnectMidi)
     };
+    let mut file = vec![
+        MenuItem::action("Open Firmware…", OpenFirmware),
+        MenuItem::action("Firmware Patches…", OpenPatchesWindow),
+        MenuItem::action("Use SD Card Folder…", OpenSdFolder),
+    ];
+    if state.card {
+        file.push(MenuItem::action("Eject SD Card", EjectSdCard));
+    } else if state.ejected_card {
+        file.push(MenuItem::action("Insert SD Card", InsertSdCard));
+    }
+    let play = if state.playing {
+        MenuItem::action("Pause", PauseAudioInputs)
+    } else {
+        MenuItem::action("Play", PlayAudioInputs)
+    };
     vec![
         Menu::new("L6 Emulator").items([MenuItem::action("Quit L6 Emulator", Quit)]),
-        Menu::new("File").items([
-            MenuItem::action("Open Firmware…", OpenFirmware),
-            MenuItem::action("Firmware Patches…", OpenPatchesWindow),
-            MenuItem::action("Use SD Card Folder…", OpenSdFolder),
-            MenuItem::action("Eject SD Card", EjectSdCard),
-        ]),
+        Menu::new("File").items(file),
         Menu::new("Audio Input").items([
             MenuItem::action("Channels and Playback…", OpenAudioWindow),
             MenuItem::separator(),
-            MenuItem::action("Play", PlayAudioInputs),
-            MenuItem::action("Pause", PauseAudioInputs),
+            play,
             MenuItem::action("Stop", StopAudioInputs),
             MenuItem::action("Rewind", RewindAudioInputs),
         ]),
@@ -173,6 +189,8 @@ struct NativePanel {
     window_settling_frames: u8,
     audio_window: Option<gpui::WindowHandle<audio_window::AudioWindow>>,
     patches_window: Option<gpui::WindowHandle<patches_window::PatchesWindow>>,
+    /// The card taken out with Eject SD Card, which Insert SD Card puts back.
+    ejected_card: Option<std::path::PathBuf>,
     /// Set while a restart for a new patch selection runs in the background.
     applying_patches: bool,
     patch_error: Option<String>,
@@ -891,6 +909,20 @@ impl NativePanel {
         cx.notify();
     }
 
+    /// The state the menu bar shows.
+    fn menu_state(&self) -> MenuState {
+        let (usb, midi) = self._qemu.as_ref().map_or((false, false), |engine| {
+            (engine.usb_connected(), engine.midi_connected())
+        });
+        MenuState {
+            usb,
+            midi,
+            card: self.controls.is_some() && self.options.sd_image.is_some(),
+            ejected_card: self.controls.is_some() && self.ejected_card.is_some(),
+            playing: self.audio_position().1,
+        }
+    }
+
     /// Like pulling the SD card out of the slot: no engine restart needed.
     fn eject_sd_card(&mut self, cx: &mut Context<Self>) {
         let Some(engine) = self._qemu.as_ref() else {
@@ -898,11 +930,23 @@ impl NativePanel {
         };
         match engine.eject_sd() {
             Ok(()) => {
-                self.options.sd_image = None;
+                self.ejected_card = self.options.sd_image.take();
                 self.status = "SD card ejected".into();
             }
             Err(error) => self.status = format!("Eject SD card failed: {error}").into(),
         }
+        cx.notify();
+    }
+
+    /// Put the card ejected last back in the slot.
+    fn insert_sd_card(&mut self, cx: &mut Context<Self>) {
+        let Some(card) = self.ejected_card.clone() else {
+            return;
+        };
+        self.status = match self.use_sd_image(card) {
+            Ok(()) => "SD card inserted".into(),
+            Err(error) => format!("Insert SD card failed: {error}").into(),
+        };
         cx.notify();
     }
 
@@ -925,6 +969,7 @@ impl NativePanel {
             &self.options.selected_sd_patches(self.model),
         )?;
         engine.insert_sd(&image)?;
+        self.ejected_card = None;
         self.options.sd_image = Some(image.clone());
         self.options.no_sd = false;
         if let Some(path) = self.options.config_path.clone() {
@@ -1519,6 +1564,7 @@ fn main() {
                         window_settling_frames: 0,
                         audio_window: None,
                         patches_window: None,
+                        ejected_card: None,
                         applying_patches: false,
                         patch_error: None,
                         starting_engine: Arc::new(Mutex::new(None)),
@@ -1661,6 +1707,13 @@ fn main() {
                 }
             });
         });
+        cx.on_action(move |_: &InsertSdCard, cx| {
+            cx.defer(move |cx| {
+                if let Err(error) = view.update(cx, |panel, _, cx| panel.insert_sd_card(cx)) {
+                    tracing::error!(%error, "Insert SD card action failed");
+                }
+            });
+        });
         cx.on_action(move |_: &EjectSdCard, cx| {
             cx.defer(move |cx| {
                 if let Err(error) = view.update(cx, |panel, _, cx| panel.eject_sd_card(cx)) {
@@ -1675,7 +1728,7 @@ fn main() {
             // Command on macOS, Control elsewhere.
             KeyBinding::new("secondary-alt-i", OpenAudioWindow, None),
         ]);
-        cx.set_menus(app_menus(Connections::default()));
+        cx.set_menus(app_menus(MenuState::default()));
         // macOS normally keeps apps alive after their last window closes.
         cx.on_window_closed(move |cx, _| {
             let panel_open = cx
@@ -1701,7 +1754,7 @@ fn main() {
         cx.activate(true);
         if run_tick {
             cx.spawn(async move |cx| {
-                let mut menu_connections = Connections::default();
+                let mut menu_state = MenuState::default();
                 loop {
                     // Tick once per display frame. macOS coalesces short
                     // timers to about 24 Hz, which shows a fast lamp blink,
@@ -1728,21 +1781,14 @@ fn main() {
                     frame.await;
                     if view
                         .update(cx, |panel, window, cx| {
-                            // Connections change from the menu, a restart or a
-                            // failed connect, so follow the engine's state.
-                            let connections =
-                                panel
-                                    ._qemu
-                                    .as_ref()
-                                    .map_or_else(Connections::default, |engine| Connections {
-                                        usb: engine.usb_connected(),
-                                        midi: engine.midi_connected(),
-                                    });
-                            if connections != menu_connections {
-                                menu_connections = connections;
+                            // This state changes from the menus, the windows, a
+                            // restart or a failure, so follow the emulator's.
+                            let state = panel.menu_state();
+                            if state != menu_state {
+                                menu_state = state;
                                 // Outside this window update: rebuilding the
                                 // menu bar can validate items against it.
-                                cx.defer(move |cx| cx.set_menus(app_menus(connections)));
+                                cx.defer(move |cx| cx.set_menus(app_menus(state)));
                             }
                             if panel.window_model != panel.model {
                                 panel.window_model = panel.model;
@@ -1963,15 +2009,56 @@ mod menu_tests {
             (false, true, ["Connect USB", "Disconnect MIDI"]),
             (true, true, ["Disconnect USB", "Disconnect MIDI"]),
         ] {
-            let menus = app_menus(Connections { usb, midi });
+            let menus = app_menus(MenuState {
+                usb,
+                midi,
+                ..Default::default()
+            });
             assert_eq!(labels(&menus, "Connections"), expected);
         }
     }
 
     #[test]
+    fn file_menu_ejects_a_card_or_puts_the_last_one_back() {
+        let file = |card, ejected_card| {
+            labels(
+                &app_menus(MenuState {
+                    card,
+                    ejected_card,
+                    ..Default::default()
+                }),
+                "File",
+            )
+            .last()
+            .unwrap()
+            .clone()
+        };
+        assert_eq!(file(true, false), "Eject SD Card");
+        assert_eq!(file(false, true), "Insert SD Card");
+        // Nothing to put back: only Use SD Card Folder adds one.
+        assert_eq!(file(false, false), "Use SD Card Folder…");
+    }
+
+    #[test]
+    fn audio_menu_offers_play_or_pause() {
+        let playback = |playing| {
+            labels(
+                &app_menus(MenuState {
+                    playing,
+                    ..Default::default()
+                }),
+                "Audio Input",
+            )[2]
+            .clone()
+        };
+        assert_eq!(playback(false), "Play");
+        assert_eq!(playback(true), "Pause");
+    }
+
+    #[test]
     fn audio_window_has_a_platform_shortcut() {
         assert_eq!(
-            labels(&app_menus(Connections::default()), "Audio Input")[0],
+            labels(&app_menus(MenuState::default()), "Audio Input")[0],
             "Channels and Playback…"
         );
         let binding = KeyBinding::new("secondary-alt-i", OpenAudioWindow, None);

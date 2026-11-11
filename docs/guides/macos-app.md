@@ -57,7 +57,7 @@ Select a folder containing the files and subdirectories you want on the card.
 The app imports it in the background, then inserts it live into the running
 guest's SD slot — no restart, like inserting a card into the real slot. The
 selected card is remembered per model. **File → Eject SD Card** removes it
-the same way.
+the same way, and **File → Insert SD Card** then puts the same card back.
 
 The folder is copied into a private FAT card; it is not a live shared folder.
 Guest writes persist in that copy and never sync back into the original folder.
@@ -74,8 +74,9 @@ Previously imported cards are retained in Application Support.
 ## Audio input
 
 **Audio Input → Channels and Playback…** (⌥⌘I) assigns a WAV file to each input channel and plays
-them together. See [audio emulation](../emulator/audio.md#input) for what the channels
-receive.
+them together. The Audio Input menu also offers **Play** or **Pause**, whichever
+applies, with Stop and Rewind. See [audio emulation](../emulator/audio.md#input)
+for what the channels receive.
 
 ## Local storage
 

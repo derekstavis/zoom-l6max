@@ -160,6 +160,19 @@ impl MenuSmoke {
         Ok(())
     }
 
+    /// Whether the native menu currently lists `item`.
+    #[cfg(target_os = "macos")]
+    fn has_item(menu: &str, item: &str) -> Result<bool, String> {
+        use objc2_foundation::NSString;
+        let submenu = Self::native_menu(menu)?;
+        Ok(submenu.indexOfItemWithTitle(&NSString::from_str(item)) >= 0)
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn has_item(_: &str, _: &str) -> Result<bool, String> {
+        Err("Native menu smoke requires macOS".into())
+    }
+
     #[cfg(not(target_os = "macos"))]
     fn validate_menu(_: &str) -> Result<(), String> {
         Err("Native menu smoke requires macOS".into())
@@ -238,6 +251,23 @@ impl MenuSmoke {
                     return Err("Cancelling SD picker disturbed guest".into());
                 }
                 println!("PASS: picker cancellation keeps guest running and actions reusable");
+                if panel.options.sd_image.is_none() {
+                    return Err("The guest has no SD card to eject".into());
+                }
+                Self::click("File", "Eject SD Card")?;
+                self.stage = 30;
+            }
+            30 if panel.options.sd_image.is_none() && panel.ejected_card.is_some() => {
+                // The menu follows the state on the tick that saw it change.
+                Self::validate_menu("File")?;
+                self.stage = 31;
+            }
+            31 => {
+                Self::click("File", "Insert SD Card")?;
+                self.stage = 32;
+            }
+            32 if panel.options.sd_image.is_some() && panel.ejected_card.is_none() => {
+                println!("PASS: Eject SD Card and Insert SD Card swap in the File menu");
                 Self::validate_menu("Audio Input")?;
                 self.deadline = Instant::now() + Duration::from_secs(120);
                 self.stage = 22;
@@ -280,16 +310,26 @@ impl MenuSmoke {
                         return Err("Audio assignment was not saved".into());
                     }
                     println!("PASS: audio window opens and converts assigned files");
-                    let controls = panel.controls.as_ref().ok_or("No guest inputs")?;
-                    controls
-                        .main
-                        .audio_input_transport(protocol::AUDIO_INPUT_PLAY, 0)
-                        .map_err(|e| e.to_string())?;
-                    self.stage = 9;
+                    Self::validate_menu("Audio Input")?;
+                    self.stage = 33;
                 }
+            }
+            33 => {
+                Self::click("Audio Input", "Play")?;
+                self.stage = 9;
             }
             9 if panel.audio_position().1 && panel.audio_position().0 > 0 => {
                 println!("PASS: assigned audio plays and reports its position");
+                self.stage = 34;
+            }
+            34 => {
+                // The tick that saw playback start rebuilt the menu.
+                if !Self::has_item("Audio Input", "Pause")?
+                    || Self::has_item("Audio Input", "Play")?
+                {
+                    return Err("The Audio Input menu did not switch Play to Pause".into());
+                }
+                println!("PASS: the Audio Input menu offers Pause while playing");
                 let controls = panel.controls.as_ref().ok_or("No guest inputs")?;
                 controls
                     .main
