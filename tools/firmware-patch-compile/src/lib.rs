@@ -633,34 +633,30 @@ fn generate_continuations_from_metadata(
 
     // The resident loader patches every catalog entry marked for dynamic
     // dispatch to one of these ABI-transparent tail-call stubs. The handler
-    // pointer table lives beside the loader's fixed hook-chain registry.
-    // Each module handler is a normal typed Rust hook and owns its continuation
-    // slot; the resident stub only selects the current chain head or stock
-    // continuation without disturbing any arguments.
+    // table lives in the loader's heap-allocated registry, which the stub finds
+    // through the registry pointer word; without a registry it takes the stock
+    // path. Each module handler is a normal typed Rust hook and owns its
+    // continuation slot; the stub only selects the current chain head or stock
+    // continuation, and restores r0 and r1 before branching.
     if generate_dynamic_sites && !dynamic {
-        let registry_base = if main_base == 0x8000_1000 {
-            0x801f_8000u32
-        } else {
-            0x8021_8000u32
-        };
-        let handler_table = registry_base
-            + 0x100
-            + (patch_loader_core::dynamic::MAX_FUNCTION_CHAINS as u32)
-                * (core::mem::size_of::<patch_loader_core::dynamic::FunctionHookChain>() as u32);
+        use patch_loader_core::registry;
+        let pointer = registry::pointer_for_main_base(main_base);
         let mut dynamic_index = 0usize;
         for site in sites.iter().filter(|site| site.dynamic_dispatch) {
             let dispatcher = format!("dispatch_{}", site.name);
             let original = format!("original_{}", site.name);
             validate_asm_symbol(&dispatcher)?;
-            let slot_address = handler_table
+            let slot_offset = registry::HANDLER_TABLE_OFFSET
                 .checked_add(u32::try_from(
                     dynamic_index
                         .checked_mul(4)
                         .ok_or("handler slot overflow")?,
                 )?)
-                .ok_or("handler table address overflow")?;
+                .filter(|offset| *offset < registry::ARENA_NEXT_OFFSET)
+                .ok_or("handler table offset overflow")?;
             assembly.push_str(&format!(
-                ".section .text.{dispatcher}, \"ax\"\n.global {dispatcher}\n.thumb_func\n{dispatcher}:\n    push {{r0}}\n    ldr r0, ={registry_base:#x}\n    ldr r0, [r0]\n    ldr r12, =0x4c365244\n    cmp r0, r12\n    pop {{r0}}\n    bne 1f\n    ldr r12, ={slot_address:#x}\n    ldr r12, [r12]\n    cmp r12, #0\n    bne 2f\n1:  ldr r12, ={original}\n2:  bx r12\n.ltorg\n"
+                ".section .text.{dispatcher}, \"ax\"\n.global {dispatcher}\n.thumb_func\n{dispatcher}:\n    push {{r0, r1}}\n    ldr r0, ={pointer:#x}\n    ldr r0, [r0]\n    cbz r0, 1f\n    ldr r1, [r0]\n    ldr r12, ={magic:#x}\n    cmp r1, r12\n    bne 1f\n    ldr.w r12, [r0, #{slot_offset}]\n    cmp r12, #0\n    bne 2f\n1:  ldr r12, ={original}\n2:  pop {{r0, r1}}\n    bx r12\n.ltorg\n",
+                magic = registry::MAGIC,
             ));
             wrappers.push(format!(
                 "unsafe extern \"C\" {{ fn {dispatcher}(); }}\n#[used]\nstatic __L6_KEEP_DYNAMIC_DISPATCH_{}: unsafe extern \"C\" fn() = {dispatcher};",
