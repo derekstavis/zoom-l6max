@@ -8,37 +8,31 @@ const FOLDER: &str = "PATCHES";
 struct Module {
     patch: &'static str,
     model: l6fw::Model,
-    /// The file name, with the numeric prefix the web patcher also uses.
-    file: &'static str,
     bytes: &'static [u8],
 }
 
-const MODULES: [Module; 3] = [
-    Module {
-        patch: "midi-sync",
-        model: l6fw::Model::L6max,
-        file: "01-MIDI.BIN",
-        bytes: include_bytes!("../../../web/public/loadable-patches/L6max/MIDI.BIN"),
-    },
-    Module {
-        patch: "midi-sync",
-        model: l6fw::Model::L6,
-        file: "01-MIDI.BIN",
-        bytes: include_bytes!("../../../web/public/loadable-patches/L6/MIDI.BIN"),
-    },
-    Module {
-        patch: "knob-dialog",
-        model: l6fw::Model::L6max,
-        file: "01-KNOB.BIN",
-        bytes: include_bytes!("../../../web/public/loadable-patches/L6max/KNOB.BIN"),
-    },
-];
+include!(concat!(env!("OUT_DIR"), "/sd_modules.rs"));
+
+fn card_file_name(module: &Module) -> String {
+    let package = firmware_patch_core::patch_package(module.patch)
+        .expect("embedded SD module must have a package entry");
+    format!("{:02}-{}", package.order, package.file_name)
+}
 
 /// The patches `model` can load from its SD card, in catalog order.
 pub fn available(model: l6fw::Model) -> Vec<&'static str> {
-    firmware_patch_core::PATCHES
-        .into_iter()
-        .filter(|patch| module(model, patch).is_some())
+    let model_name = crate::config::model_name(model);
+    firmware_patch_core::patch_catalog()
+        .iter()
+        .filter(|package| {
+            package.kind == "patch"
+                && package
+                    .emulator_sd_models
+                    .iter()
+                    .any(|name| name.eq_ignore_ascii_case(model_name))
+        })
+        .filter(|package| module(model, &package.name).is_some())
+        .map(|package| package.name.as_str())
         .collect()
 }
 
@@ -81,7 +75,7 @@ pub fn install(card: &Path, model: l6fw::Model, selected: &[String]) -> Result<b
             let path = format!("{FOLDER}/{}", entry.name);
             let keep = wanted
                 .iter()
-                .any(|module| module.file.eq_ignore_ascii_case(&entry.name));
+                .any(|module| card_file_name(module).eq_ignore_ascii_case(&entry.name));
             if keep
                 || !MODULES
                     .iter()
@@ -100,7 +94,7 @@ pub fn install(card: &Path, model: l6fw::Model, selected: &[String]) -> Result<b
         changed = true;
     }
     for module in wanted {
-        let path = format!("{FOLDER}/{}", module.file);
+        let path = format!("{FOLDER}/{}", card_file_name(module));
         if volume.read(&path).is_ok_and(|bytes| bytes == module.bytes) {
             continue;
         }
@@ -153,10 +147,13 @@ mod tests {
         let path = card("install");
         let both = ["knob-dialog".to_owned(), "midi-sync".to_owned()];
         assert!(install(&path, l6fw::Model::L6max, &both).unwrap());
-        assert_eq!(files(&path), ["01-KNOB.BIN", "01-MIDI.BIN"]);
+        assert_eq!(
+            files(&path),
+            ["10-KNOB-DIALOG-1.0.0.BIN", "30-MIDI-SYNC-1.0.0.BIN"]
+        );
         let mut volume = sd_image::open(&path).unwrap();
         assert_eq!(
-            volume.read("PATCHES/01-MIDI.BIN").unwrap(),
+            volume.read("PATCHES/30-midi-sync-1.0.0.bin").unwrap(),
             module(l6fw::Model::L6max, "midi-sync").unwrap().bytes
         );
         volume.write("PATCHES/02-MINE.BIN", b"user patch").unwrap();
@@ -164,7 +161,7 @@ mod tests {
         drop(volume);
         assert!(!install(&path, l6fw::Model::L6max, &both).unwrap());
         assert!(install(&path, l6fw::Model::L6max, &["midi-sync".into()]).unwrap());
-        assert_eq!(files(&path), ["01-MIDI.BIN", "02-MINE.BIN"]);
+        assert_eq!(files(&path), ["02-MINE.BIN", "30-MIDI-SYNC-1.0.0.BIN"]);
         assert!(install(&path, l6fw::Model::L6max, &[]).unwrap());
         assert_eq!(files(&path), ["02-MINE.BIN"]);
         std::fs::remove_file(path).unwrap();

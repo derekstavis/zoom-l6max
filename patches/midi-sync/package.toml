@@ -1,3 +1,21 @@
 [package]
 name = "midi-sync"
+version = "1.0.0"
+kind = "patch"
+order = 30
+title = "Read mixer values over MIDI"
+summary = "Send the current mixer state as Control Change on request."
+description = "Lets a MIDI controller (for example a motorized-fader surface or the editor app) request the mixer's entire current state. Pairs with mixer control above: without it, a motorized surface starts out of sync until you touch each fader. The stock firmware only ever announces changes made after the controller connects."
+models = ["L6", "L6max"]
+firmware_models = ["L6", "L6max"]
+sd_card_models = ["L6", "L6max"]
+wasm_models = ["L6", "L6max"]
+website = true
+website_order = 30
+website_sd_models = ["L6", "L6max"]
+emulator_gui = true
+emulator_order = 30
+emulator_sd_models = ["L6", "L6max"]
+readme = "README.md"
+request_command = "Send Control Change 127 with a value of 64 or higher, on the mixer's configured MIDI channel."
 requires = []

@@ -1,3 +1,21 @@
 [package]
 name = "din-mixer-control"
+version = "1.0.0"
+kind = "patch"
+order = 40
+title = "Mixer control over MIDI jack"
+summary = "Let the MIDI IN/OUT jacks control the mixer."
+description = "Makes the mixer's documented \"Mixer Control via MIDI\" setting work over the physical TRS MIDI IN jack, not just USB — the stock firmware never implements that direction despite the setting existing."
+models = ["L6max"]
+firmware_models = ["L6max"]
+sd_card_models = []
+wasm_models = ["L6max"]
+website = true
+website_order = 20
+website_sd_models = []
+emulator_gui = true
+emulator_order = 20
+emulator_sd_models = []
+readme = "README.md"
+demo_image = "din-mixer-control.webp"
 requires = []

@@ -225,23 +225,44 @@ patch runtime, firmware catalog, and allocation. Hook handlers for the same
 function keep separate continuation slots and follow dependency order, then
 the user's requested patch order.
 
-This file is limited to package identity and composition dependencies:
+The same package record is the source for patch names, versions, model and
+installation support, dependency resolution, and the web and emulator catalogs:
 
 ```toml
 [package]
 name = "dual-efx"
+version = "1.0.0"
+kind = "patch"
+order = 50
+title = "Dual EFX"
+summary = "Run two effects at once."
+description = "Runs both send effects with per-channel routing and editable parameters."
+models = ["L6max"]
+firmware_models = ["L6max"]
+sd_card_models = ["L6max"]
+wasm_models = []
+website = false
+website_order = 0
+website_sd_models = []
+emulator_gui = false
+emulator_order = 0
+emulator_sd_models = []
+readme = "README.md"
 requires = ["knob-dialog"]
 ```
 
-Patch descriptions and other presentation metadata belong outside
-`package.toml`.
+`firmware-patch-core` validates and enumerates these files through
+`patch_catalog()`. Its build script generates the native package catalog and
+the patch-name arrays from the same metadata. The web build exports that API
+as JSON instead of maintaining a second patch list.
 
 Composition is a build-time operation. It creates one BIN file named from the
-requested patch names followed by dependency-only patch names, such as
-`dual-efx-knob-dialog.bin`. A dependency shared by multiple requested patches
-is included once in that combined file. Removing the file removes all included
-features together. No runtime patch registry, initializer, or patch-to-patch
-function table is required.
+requested patch names and versions followed by dependency-only patch names and
+versions, such as `dual-efx-1.0.0-knob-dialog-1.0.0.bin`. A dependency shared
+by multiple requested patches is included once in that combined file. Separate
+builds each contain their own dependency copy. Removing the file removes all
+included features together. No runtime patch registry, initializer, or
+patch-to-patch function table is required.
 
 ## Calling an original continuation
 

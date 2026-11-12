@@ -5,9 +5,10 @@
   "type": "module",
   "scripts": {
     "wasm:build": "cd .. && cargo build --release --target wasm32-unknown-unknown -p firmware-patch-wasm && wasm-bindgen --target web --out-dir web/src/wasm/generated target/wasm32-unknown-unknown/release/firmware_patch_wasm.wasm",
-    "predev": "npm run wasm:build",
+    "patch-catalog:build": "mkdir -p src/generated && cd .. && cargo run --offline --locked -p firmware-patch-core --bin patch-catalog > web/src/generated/patch-catalog.json",
+    "predev": "npm run patch-catalog:build && npm run wasm:build",
     "dev": "vite",
-    "prebuild": "npm run wasm:build",
+    "prebuild": "npm run patch-catalog:build && npm run wasm:build",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview"

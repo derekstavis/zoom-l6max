@@ -1,34 +1,20 @@
 //! The window that selects which patches the guest runs, and whether each is
 //! installed in the firmware or loaded from the SD card by the Patch loader.
 use crate::NativePanel;
-use firmware_patch_core::PATCHES;
+use firmware_patch_core::{PATCHES, PatchPackage, patch_catalog};
 use gpui::{Context, CursorStyle, Entity, MouseButton, Render, Window, div, prelude::*, px, rgb};
 use std::path::PathBuf;
 
 pub const WIDTH: f32 = 520.0;
 pub const HEIGHT: f32 = 380.0;
 
-/// The patches offered here, in catalog order, as the web patcher offers them.
-/// `midi-control` stays available to `--patch`, `config.toml` and tests.
-const OFFERED: [&str; 3] = ["knob-dialog", "midi-sync", "din-mixer-control"];
-
-/// The titles the web patcher shows (`web/src/lib/patches.ts`).
-fn title(patch: &str) -> &'static str {
-    match patch {
-        "knob-dialog" => "Show knob values on display",
-        "midi-sync" => "Read mixer values over MIDI",
-        "din-mixer-control" => "Mixer control over MIDI jack",
-        _ => "",
-    }
-}
-
-fn description(patch: &str) -> &'static str {
-    match patch {
-        "knob-dialog" => "Show channel encoder values on the display",
-        "midi-sync" => "Send the mixer state as Control Change on request",
-        "din-mixer-control" => "Let the MIDI IN/OUT jacks control the mixer",
-        _ => "",
-    }
+fn offered() -> Vec<&'static PatchPackage> {
+    let mut packages = patch_catalog()
+        .iter()
+        .filter(|package| package.emulator_gui)
+        .collect::<Vec<_>>();
+    packages.sort_by_key(|package| package.emulator_order);
+    packages
 }
 
 /// Where a selected patch comes from.
@@ -231,7 +217,8 @@ impl Render for PatchesWindow {
         let loadable = l6max_host::sd_patches::available(model);
         let available = self.available.as_deref().unwrap_or(&[]).to_vec();
         let enabled = self.selection != active && can_start;
-        let rows = OFFERED.iter().map(|&patch| {
+        let rows = offered().into_iter().map(|package| {
+            let patch = package.name.as_str();
             let usable = available.contains(&patch);
             let delivery = self.selection.delivery(patch);
             let checked = delivery.is_some();
@@ -286,7 +273,7 @@ impl Render for PatchesWindow {
                                                 } else {
                                                     0x6a7388
                                                 }))
-                                                .child(title(patch)),
+                                                .child(package.title.as_str()),
                                         )
                                         .child(
                                             div().text_xs().text_color(rgb(0x6a7388)).child(patch),
@@ -296,7 +283,7 @@ impl Render for PatchesWindow {
                                     div()
                                         .text_sm()
                                         .text_color(rgb(0x8b95aa))
-                                        .child(description(patch)),
+                                        .child(package.summary.as_str()),
                                 ),
                         ),
                 )
@@ -409,10 +396,11 @@ mod tests {
 
     #[test]
     fn every_offered_patch_has_a_title_and_description() {
-        for patch in OFFERED {
+        for package in offered() {
             assert!(
-                !title(patch).is_empty() && !description(patch).is_empty(),
-                "{patch}"
+                !package.title.is_empty() && !package.summary.is_empty(),
+                "{}",
+                package.name
             );
         }
     }

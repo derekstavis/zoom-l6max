@@ -10,8 +10,9 @@
 include!(concat!(env!("OUT_DIR"), "/templates_generated.rs"));
 
 use firmware_patch_core::{
-    FirmwareModel, HookEdit, L6_MAIN_BASE, L6_SLOT_END, PATCHES, PatchEdits, apply_patch_with_map,
-    branch, first_payload_for, verify_firmware_for, write_image_length_and_version,
+    FirmwareModel, HookEdit, L6_MAIN_BASE, L6_SLOT_END, PatchEdits, WASM_PATCHES,
+    apply_patch_with_map, branch, first_payload_for, supports_wasm_patch, verify_firmware_for,
+    write_image_length_and_version,
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -139,7 +140,7 @@ fn parse_unit(payload: &[u8], metadata_json: &str) -> Result<Unit, String> {
 }
 
 /// Finds the one embedded unit for `name` at exactly `base` — every
-/// non-empty subset of `PATCHES` resolves to an embedded unit, so
+/// non-empty subset of `WASM_PATCHES` resolves to an embedded unit, so
 /// this only fails if the embedded templates are stale or corrupt.
 fn find_unit(name: &str, model: FirmwareModel, base: u32) -> Result<Unit, String> {
     for (unit_name, payload, metadata) in EMBEDDED_UNITS {
@@ -268,13 +269,13 @@ pub fn available_patches(package: &[u8]) -> Result<Vec<&'static str>, String> {
         .get("main_firmware.bin")
         .ok_or("package has no main_firmware.bin segment")?;
     verify_firmware_for(model, firmware)?;
-    Ok(match model {
-        FirmwareModel::L6 => vec!["midi-sync"],
-        FirmwareModel::L6max => PATCHES.to_vec(),
-    })
+    Ok(WASM_PATCHES
+        .into_iter()
+        .filter(|name| supports_wasm_patch(name, model))
+        .collect())
 }
 
-/// Applies `selected` (a non-empty subset of `firmware_patch_core::PATCHES`,
+/// Applies `selected` (a non-empty subset of `firmware_patch_core::WASM_PATCHES`,
 /// any order) to `package` — a full Zoom update package, byte for byte what
 /// `l6fw::unpack`/`repack` round-trip — and returns the patched package plus
 /// a small JSON report. `package` is the only untrusted input: every other
@@ -296,19 +297,25 @@ pub fn apply_patches_with_loader(
         l6fw::Model::L6max => FirmwareModel::L6max,
     };
     for name in selected {
-        if !PATCHES.contains(name) {
+        if !WASM_PATCHES.contains(name) {
             return Err(format!("unknown patch: {name}"));
         }
+        if !supports_wasm_patch(name, model) {
+            return Err(format!(
+                "patch {name} is not available for {} firmware in the browser patcher",
+                match model {
+                    FirmwareModel::L6 => "L6",
+                    FirmwareModel::L6max => "L6max",
+                }
+            ));
+        }
     }
-    let ordered: Vec<&str> = PATCHES
+    let ordered: Vec<&str> = WASM_PATCHES
         .into_iter()
         .filter(|p| selected.contains(p))
         .collect();
     if ordered.is_empty() && !install_patch_loader {
         return Err("select at least one patch".into());
-    }
-    if model == FirmwareModel::L6 && ordered.iter().any(|name| *name != "midi-sync") {
-        return Err("L6 firmware detected; only the midi-sync patch is supported".into());
     }
 
     let (mut manifest, mut segments) = l6fw::unpack_bytes(package)?;

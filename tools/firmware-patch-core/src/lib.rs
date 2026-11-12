@@ -1,17 +1,156 @@
-//! Pure, I/O-free firmware-splicing logic shared by the native `l6patch`
+//! Shared firmware patch catalog and pure firmware-splicing logic for the
+//! native `l6patch`
 //! CLI (which also compiles payloads via `rustc`/`lld`/`llvm-objcopy`, a step
 //! that stays native-only) and the browser-based WASM patcher (which applies
 //! payloads precompiled ahead of time). Every function here only moves bytes
 //! around in memory; none of it touches the filesystem or shells out.
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::sync::OnceLock;
 
-/// Patches in catalog order. Output never depends on the order patches are requested in.
-pub const PATCHES: [&str; 4] = [
-    "knob-dialog",
-    "midi-control",
-    "midi-sync",
-    "din-mixer-control",
-];
+include!(concat!(env!("OUT_DIR"), "/generated_catalog.rs"));
+
+/// One patch or loader package, generated from its `package.toml`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PatchPackage {
+    pub name: String,
+    pub version: String,
+    pub kind: String,
+    pub order: u32,
+    pub title: String,
+    pub summary: String,
+    pub description: String,
+    pub models: Vec<String>,
+    pub firmware_models: Vec<String>,
+    pub sd_card_models: Vec<String>,
+    pub wasm_models: Vec<String>,
+    pub website: bool,
+    pub website_order: u32,
+    pub website_sd_models: Vec<String>,
+    pub emulator_gui: bool,
+    pub emulator_order: u32,
+    pub emulator_sd_models: Vec<String>,
+    pub readme: String,
+    pub demo_image: Option<String>,
+    pub request_command: Option<String>,
+    pub requires: Vec<String>,
+    pub file_name: String,
+}
+
+/// Every package's metadata in package order. This is generated at build time
+/// from the checked-in `patches/*/package.toml` files and is available to
+/// native tools and the browser catalog exporter without runtime filesystem
+/// access.
+pub fn patch_catalog() -> &'static [PatchPackage] {
+    static CATALOG: OnceLock<Vec<PatchPackage>> = OnceLock::new();
+    CATALOG.get_or_init(|| {
+        let value: serde_json::Value =
+            serde_json::from_str(PATCH_CATALOG_JSON).expect("generated package catalog is valid");
+        serde_json::from_value(value["packages"].clone())
+            .expect("generated package catalog matches PatchPackage")
+    })
+}
+
+pub fn patch_package(name: &str) -> Option<&'static PatchPackage> {
+    patch_catalog().iter().find(|package| package.name == name)
+}
+
+fn model_name(model: FirmwareModel) -> &'static str {
+    match model {
+        FirmwareModel::L6 => "L6",
+        FirmwareModel::L6max => "L6max",
+    }
+}
+
+pub fn supports_firmware_patch(name: &str, model: FirmwareModel) -> bool {
+    patch_package(name).is_some_and(|package| {
+        package.kind == "patch"
+            && package
+                .firmware_models
+                .iter()
+                .any(|value| value == model_name(model))
+    })
+}
+
+pub fn supports_sd_patch(name: &str, model: FirmwareModel) -> bool {
+    patch_package(name).is_some_and(|package| {
+        package.kind == "patch"
+            && package
+                .sd_card_models
+                .iter()
+                .any(|value| value == model_name(model))
+    })
+}
+
+pub fn supports_wasm_patch(name: &str, model: FirmwareModel) -> bool {
+    patch_package(name).is_some_and(|package| {
+        package.kind == "patch"
+            && package
+                .wasm_models
+                .iter()
+                .any(|value| value == model_name(model))
+    })
+}
+
+/// Resolve selected patch dependencies once, preserving requested order while
+/// placing each dependency before its consumer and including shared dependencies once.
+pub fn resolve_patch_dependencies(requested: &[String]) -> Result<Vec<String>, String> {
+    fn visit(
+        name: &str,
+        active: &mut std::collections::BTreeSet<String>,
+        complete: &mut std::collections::BTreeSet<String>,
+        ordered: &mut Vec<String>,
+    ) -> Result<(), String> {
+        if complete.contains(name) {
+            return Ok(());
+        }
+        let package = patch_package(name)
+            .filter(|package| package.kind == "patch")
+            .ok_or_else(|| format!("patch `{name}` has no patches/{name}/package.toml"))?;
+        if !active.insert(name.to_owned()) {
+            return Err(format!("patch dependency cycle at `{name}`"));
+        }
+        for dependency in &package.requires {
+            visit(dependency, active, complete, ordered)?;
+        }
+        active.remove(name);
+        complete.insert(name.to_owned());
+        ordered.push(name.to_owned());
+        Ok(())
+    }
+
+    let mut active = std::collections::BTreeSet::new();
+    let mut complete = std::collections::BTreeSet::new();
+    let mut ordered = Vec::new();
+    for name in requested {
+        visit(name, &mut active, &mut complete, &mut ordered)?;
+    }
+    Ok(ordered)
+}
+
+/// Return a versioned filename for a composed module. Requested packages are
+/// named first; dependency-only packages follow in their resolved order.
+pub fn composed_patch_file_name(requested: &[String]) -> Result<String, String> {
+    let ordered = resolve_patch_dependencies(requested)?;
+    let mut members = Vec::<&PatchPackage>::new();
+    for name in requested.iter().chain(ordered.iter()) {
+        let package = patch_package(name).ok_or_else(|| format!("unknown patch `{name}`"))?;
+        if !members.iter().any(|member| member.name == package.name) {
+            members.push(package);
+        }
+    }
+    if members.is_empty() {
+        return Err("composed bundle needs at least one patch name".into());
+    }
+    Ok(format!(
+        "{}.bin",
+        members
+            .iter()
+            .map(|package| format!("{}-{}", package.name, package.version))
+            .collect::<Vec<_>>()
+            .join("-")
+    ))
+}
 pub const FIRST_PAYLOAD: u32 = 0x80108000;
 pub const SLOT_END: u32 = 0x801a2ff8;
 /// SHA-256 of the supported stock L6max MAIN firmware image (1.10).
@@ -223,6 +362,40 @@ pub fn write_image_length_and_version(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn package_catalog_is_generated_from_package_files() {
+        let catalog = patch_catalog();
+        assert_eq!(
+            PATCHES,
+            [
+                "knob-dialog",
+                "midi-control",
+                "midi-sync",
+                "din-mixer-control"
+            ]
+        );
+        assert_eq!(WASM_PATCHES, PATCHES);
+        let knob = patch_package("knob-dialog").unwrap();
+        assert_eq!(knob.version, "1.0.0");
+        assert_eq!(knob.title, "Show knob values on display");
+        assert!(supports_firmware_patch("knob-dialog", FirmwareModel::L6max));
+        assert!(!supports_firmware_patch("knob-dialog", FirmwareModel::L6));
+        assert!(supports_sd_patch("midi-sync", FirmwareModel::L6));
+        assert_eq!(catalog.len(), 5);
+    }
+
+    #[test]
+    fn package_filename_includes_id_and_version() {
+        assert_eq!(
+            composed_patch_file_name(&["midi-sync".to_owned()]).unwrap(),
+            "midi-sync-1.0.0.bin"
+        );
+        assert_eq!(
+            patch_package("midi-sync").unwrap().file_name,
+            "midi-sync-1.0.0.bin"
+        );
+    }
 
     #[test]
     fn generic_firmware_verification_detects_both_models_from_reset_vector() {

@@ -2,7 +2,7 @@
 //! real Zoom firmware (by design — see the repo's firmware-handling policy).
 //!
 //! Produces the static templates the browser-based patcher ships: for each
-//! non-empty subset of `firmware_patch_core::PATCHES`, and for each
+//! non-empty subset of `firmware_patch_core::WASM_PATCHES`, and for each
 //! patch within it, the payload `l6patch` would compile at that
 //! patch's position — but with every displaced byte copied verbatim by a
 //! continuation veneer zeroed out, plus metadata recording which firmware
@@ -31,7 +31,7 @@ use firmware_patch_compile::{
 };
 use firmware_patch_core::{
     EXPECTED_FIRMWARE_SHA256, FIRST_PAYLOAD, FirmwareModel, L6_EXPECTED_FIRMWARE_SHA256,
-    L6_MAIN_BASE, PATCHES, first_payload_for, verify_firmware_for,
+    L6_MAIN_BASE, WASM_PATCHES, first_payload_for, verify_firmware_for,
 };
 use sha2::{Digest, Sha256};
 use std::{
@@ -577,7 +577,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         value_to_address: HashMap<u8, u32>,
     }
     let mut per_patch: HashMap<&'static str, PerPatch> = HashMap::new();
-    for name in PATCHES {
+    for name in WASM_PATCHES {
         let patch_root = patches_dir.join(name);
         let patch_root = if name == "midi-sync" || name == "midi-control" {
             patch_root.join("l6max")
@@ -613,8 +613,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .collect::<HashMap<_, _>>();
 
     let mut units: HashMap<(&'static str, u32), Unit> = HashMap::new();
-    for mask in 1u16..(1u16 << PATCHES.len()) {
-        let subset: Vec<&'static str> = PATCHES
+    for mask in 1u16..(1u16 << WASM_PATCHES.len()) {
+        let subset: Vec<&'static str> = WASM_PATCHES
             .iter()
             .enumerate()
             .filter(|(i, _)| mask & (1u16 << i) != 0)
@@ -683,8 +683,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Additional position-dependent feature templates for loader-enabled
     // images. The native builder places the loader first, then appends static
     // feature payloads; preserve that order in the browser output as well.
-    for mask in 1u16..(1u16 << PATCHES.len()) {
-        let subset: Vec<&'static str> = PATCHES
+    for mask in 1u16..(1u16 << WASM_PATCHES.len()) {
+        let subset: Vec<&'static str> = WASM_PATCHES
             .iter()
             .enumerate()
             .filter(|(index, _)| mask & (1u16 << index) != 0)
@@ -750,7 +750,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     assert!(
-        units.len() >= PATCHES.len(),
+        units.len() >= WASM_PATCHES.len(),
         "expected standard build units"
     );
 
@@ -1015,8 +1015,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut loader_manifest = Vec::new();
     let mut loader_profiles = Vec::new();
-    for mask in 0u8..(1 << PATCHES.len()) {
-        let selected: Vec<&'static str> = PATCHES
+    for mask in 0u8..(1 << WASM_PATCHES.len()) {
+        let selected: Vec<&'static str> = WASM_PATCHES
             .iter()
             .enumerate()
             .filter(|(index, _)| mask & (1 << index) != 0)

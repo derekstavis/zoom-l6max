@@ -6,17 +6,14 @@ in ignored output directories.
 
 ## Catalog
 
-| Patch | Supported models | Purpose | Builder |
-| --- | --- | --- | --- |
-| [knob-dialog](knob-dialog/README.md) | L6max 1.10 | Show channel encoder values in a custom scene using the stock GUI renderer | `l6patch` |
-| [midi-control](midi-control/README.md) | L6max 1.10 | Control recorder transport and blue pages over MIDI, with state feedback | `l6patch` |
-| [midi-sync](midi-sync/README.md) | L6max 1.10; L6 1.10 | Send the channel mixer state as Control Change on request | `l6patch` |
-| [din-mixer-control](din-mixer-control/README.md) | L6max 1.10 | Let the physical MIDI IN/OUT jacks control the mixer when Mixer Control via MIDI is on, as documented but never implemented | `l6patch` |
+Each package's `package.toml` is the catalog record for its name, version,
+user-facing copy, supported models, installation methods, and web/emulator
+visibility. `firmware-patch-core::patch_catalog()` enumerates those records;
+the web catalog is exported from that API when the site builds.
 
-The emulator can run any of these on the stock 1.10 firmware, from **File →
-Firmware Patches…**, `patches` in `config.toml` or `--patch`. It applies the same
-precompiled templates as the browser patcher, so it needs no cross-compiler. See
-[getting started](../docs/getting-started.md).
+The emulator's **File → Firmware Patches…** list and the browser patcher read
+the same package catalog. CLI and test tools also use it to check model support
+and resolve dependencies. See [getting started](../docs/getting-started.md).
 
 ## Directory layout
 
@@ -28,6 +25,7 @@ patches/
     l6/                # L6 1.10 declarations, grouped by subsystem
     l6max/             # L6max 1.10 declarations, grouped by subsystem
   <patch-name>/
+    package.toml        # Identity, version, support and display metadata
     README.md            # Overview when the patch has multiple profiles
     common/              # Optional code shared across model profiles
     l6/                  # Optional L6 profile
@@ -95,8 +93,10 @@ transfers have not been measured.
 
 ## Adding a patch
 
-1. Create `patches/<patch-name>/` and describe its purpose, supported input
-   firmware hash, changed code/data, build command, and validation commands.
+1. Create `patches/<patch-name>/package.toml` with its identity, version,
+   supported models and installation methods, then add the patch README with
+   its purpose, supported firmware hash, changed code/data, build command, and
+   validation commands.
 2. Put payload code in `src/` and placement rules in `linker/`. Document space
    limits and any RAM allocation or persistence behavior. Check heap use as
    described in [heap headroom](#heap-headroom).
@@ -107,7 +107,8 @@ transfers have not been measured.
    that output directory. Record input/output hashes, version markers, placement,
    and hook addresses so the artifact can be traced to its source.
 5. Document emulator checks and hardware findings separately. List known
-   limitations as bullets. Add the patch to the catalog above.
+   limitations as bullets. The web and emulator catalogs update from
+   `package.toml` automatically.
 
 Run host commands from the repository root to use its pinned Rust toolchain.
 Use a root output directory named `firmware-<patch-name>-<revision>/`, already
@@ -115,10 +116,9 @@ covered by `.gitignore`; never place extracted proprietary firmware in `patches/
 Read any displaced instruction bytes from that local input during compilation;
 commit the veneer logic and validation metadata instead of copied firmware bytes.
 
-The builder supports `knob-dialog`, `midi-control`, `midi-sync`, and
-`din-mixer-control` on L6max, and only `midi-sync` on L6. MIDI Control and MIDI
-Sync can be combined; compatible shared entry and call hooks run as an ordered
-chain.
+The builder checks each selected patch against the model and installation
+support in `package.toml`. MIDI Control and MIDI Sync can be combined;
+compatible shared entry and call hooks run as an ordered chain.
 If `--patch` is omitted, firmware detection selects
 `knob-dialog` on L6max and `midi-sync` on L6. Explicit `--patch` values remain
 model-checked, and the builder rejects an unsupported selection. `--patch` may
