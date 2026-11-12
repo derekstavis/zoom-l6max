@@ -23,6 +23,14 @@
       "format_version": 1,
       "loader_abi": 1,
       "sha256": "a48cbdb4296528668886c8549029f68a6c6835ae65e6dae2817a02d67c398725"
+    },
+    {
+      "id": "dual-efx",
+      "model": "L6max",
+      "file": "L6max/dual-efx-1.0.0-knob-dialog-1.0.0.bin",
+      "format_version": 1,
+      "loader_abi": 1,
+      "sha256": "982fd1ab84019536e016d6dea4613e6134281e7dd8e8fe5f0a6e998cf10ce695"
     }
   ]
 }

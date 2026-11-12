@@ -1,5 +1,13 @@
 {
+<<<<<<<< HEAD:tools/firmware-patch-wasm/templates/midi-control-8010d280.json
   "base": "0x8010d280",
+========
+<<<<<<<< HEAD:tools/firmware-patch-wasm/templates/midi-control-8010d070.json
+  "base": "0x8010d070",
+========
+  "base": "0x8010d280",
+>>>>>>>> b6b2643d (Expose Dual EFX for firmware and SD installation):tools/firmware-patch-wasm/templates/midi-control-8010d280.json
+>>>>>>>> afb6999f (Expose Dual EFX for firmware and SD installation):tools/firmware-patch-wasm/templates/midi-control-8010d250.json
   "hooks": [
     {
       "address": "0x8003f7c8",
@@ -7,7 +15,15 @@
       "continuation_slot_offset": 244,
       "length": 4,
       "symbol": "midi_control_in",
+<<<<<<<< HEAD:tools/firmware-patch-wasm/templates/midi-control-8010d280.json
       "target": "0x8010d58c"
+========
+<<<<<<<< HEAD:tools/firmware-patch-wasm/templates/midi-control-8010d070.json
+      "target": "0x8010d28c"
+========
+      "target": "0x8010d58c"
+>>>>>>>> b6b2643d (Expose Dual EFX for firmware and SD installation):tools/firmware-patch-wasm/templates/midi-control-8010d280.json
+>>>>>>>> afb6999f (Expose Dual EFX for firmware and SD installation):tools/firmware-patch-wasm/templates/midi-control-8010d250.json
     },
     {
       "address": "0x80036a40",
@@ -15,7 +31,15 @@
       "continuation_slot_offset": 264,
       "length": 4,
       "symbol": "report_page_button",
+<<<<<<<< HEAD:tools/firmware-patch-wasm/templates/midi-control-8010d280.json
       "target": "0x8010d748"
+========
+<<<<<<<< HEAD:tools/firmware-patch-wasm/templates/midi-control-8010d070.json
+      "target": "0x8010d448"
+========
+      "target": "0x8010d748"
+>>>>>>>> b6b2643d (Expose Dual EFX for firmware and SD installation):tools/firmware-patch-wasm/templates/midi-control-8010d280.json
+>>>>>>>> afb6999f (Expose Dual EFX for firmware and SD installation):tools/firmware-patch-wasm/templates/midi-control-8010d250.json
     },
     {
       "address": "0x80046d80",
@@ -23,7 +47,15 @@
       "continuation_slot_offset": 284,
       "length": 6,
       "symbol": "report_play_start",
+<<<<<<<< HEAD:tools/firmware-patch-wasm/templates/midi-control-8010d280.json
       "target": "0x8010d78c"
+========
+<<<<<<<< HEAD:tools/firmware-patch-wasm/templates/midi-control-8010d070.json
+      "target": "0x8010d484"
+========
+      "target": "0x8010d78c"
+>>>>>>>> b6b2643d (Expose Dual EFX for firmware and SD installation):tools/firmware-patch-wasm/templates/midi-control-8010d280.json
+>>>>>>>> afb6999f (Expose Dual EFX for firmware and SD installation):tools/firmware-patch-wasm/templates/midi-control-8010d250.json
     },
     {
       "address": "0x80046e08",
@@ -31,7 +63,15 @@
       "continuation_slot_offset": 304,
       "length": 4,
       "symbol": "report_play_stop",
+<<<<<<<< HEAD:tools/firmware-patch-wasm/templates/midi-control-8010d280.json
       "target": "0x8010d7b8"
+========
+<<<<<<<< HEAD:tools/firmware-patch-wasm/templates/midi-control-8010d070.json
+      "target": "0x8010d4a8"
+========
+      "target": "0x8010d7b8"
+>>>>>>>> b6b2643d (Expose Dual EFX for firmware and SD installation):tools/firmware-patch-wasm/templates/midi-control-8010d280.json
+>>>>>>>> afb6999f (Expose Dual EFX for firmware and SD installation):tools/firmware-patch-wasm/templates/midi-control-8010d250.json
     },
     {
       "address": "0x80047268",
@@ -39,7 +79,15 @@
       "continuation_slot_offset": 324,
       "length": 6,
       "symbol": "report_record_start",
+<<<<<<<< HEAD:tools/firmware-patch-wasm/templates/midi-control-8010d280.json
       "target": "0x8010d7e4"
+========
+<<<<<<<< HEAD:tools/firmware-patch-wasm/templates/midi-control-8010d070.json
+      "target": "0x8010d4cc"
+========
+      "target": "0x8010d7e4"
+>>>>>>>> b6b2643d (Expose Dual EFX for firmware and SD installation):tools/firmware-patch-wasm/templates/midi-control-8010d280.json
+>>>>>>>> afb6999f (Expose Dual EFX for firmware and SD installation):tools/firmware-patch-wasm/templates/midi-control-8010d250.json
     },
     {
       "address": "0x80047338",
@@ -47,13 +95,31 @@
       "continuation_slot_offset": 344,
       "length": 4,
       "symbol": "report_record_stop",
+<<<<<<<< HEAD:tools/firmware-patch-wasm/templates/midi-control-8010d280.json
       "target": "0x8010d810"
+========
+<<<<<<<< HEAD:tools/firmware-patch-wasm/templates/midi-control-8010d070.json
+      "target": "0x8010d4f0"
+========
+      "target": "0x8010d810"
+>>>>>>>> b6b2643d (Expose Dual EFX for firmware and SD installation):tools/firmware-patch-wasm/templates/midi-control-8010d280.json
+>>>>>>>> afb6999f (Expose Dual EFX for firmware and SD installation):tools/firmware-patch-wasm/templates/midi-control-8010d250.json
     }
   ],
   "model": "L6max",
   "name": "midi-control",
+<<<<<<<< HEAD:tools/firmware-patch-wasm/templates/midi-control-8010d280.json
   "payload_file": "midi-control-8010d280.bin",
   "payload_length": 2619,
+========
+<<<<<<<< HEAD:tools/firmware-patch-wasm/templates/midi-control-8010d070.json
+  "payload_file": "midi-control-8010d070.bin",
+  "payload_length": 2227,
+========
+  "payload_file": "midi-control-8010d280.bin",
+  "payload_length": 2619,
+>>>>>>>> b6b2643d (Expose Dual EFX for firmware and SD installation):tools/firmware-patch-wasm/templates/midi-control-8010d280.json
+>>>>>>>> afb6999f (Expose Dual EFX for firmware and SD installation):tools/firmware-patch-wasm/templates/midi-control-8010d250.json
   "window_byte_total": 24,
   "windows": [
     {

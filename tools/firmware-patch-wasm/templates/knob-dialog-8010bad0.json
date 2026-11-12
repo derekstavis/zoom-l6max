@@ -1,5 +1,13 @@
 {
+<<<<<<<< HEAD:tools/firmware-patch-wasm/templates/knob-dialog-8010bad0.json
   "base": "0x8010bad0",
+========
+<<<<<<<< HEAD:tools/firmware-patch-wasm/templates/knob-dialog-8010b8c0.json
+  "base": "0x8010b8c0",
+========
+  "base": "0x8010bad0",
+>>>>>>>> b6b2643d (Expose Dual EFX for firmware and SD installation):tools/firmware-patch-wasm/templates/knob-dialog-8010bad0.json
+>>>>>>>> afb6999f (Expose Dual EFX for firmware and SD installation):tools/firmware-patch-wasm/templates/knob-dialog-8010baa0.json
   "hooks": [
     {
       "address": "0x80053b28",
@@ -7,12 +15,28 @@
       "continuation_slot_offset": 160,
       "length": 4,
       "symbol": "__l6_call_dispatch_mixer_apply_channel_parameter",
+<<<<<<<< HEAD:tools/firmware-patch-wasm/templates/knob-dialog-8010bad0.json
       "target": "0x8010bb84"
+========
+<<<<<<<< HEAD:tools/firmware-patch-wasm/templates/knob-dialog-8010b8c0.json
+      "target": "0x8010b974"
+========
+      "target": "0x8010bb84"
+>>>>>>>> b6b2643d (Expose Dual EFX for firmware and SD installation):tools/firmware-patch-wasm/templates/knob-dialog-8010bad0.json
+>>>>>>>> afb6999f (Expose Dual EFX for firmware and SD installation):tools/firmware-patch-wasm/templates/knob-dialog-8010baa0.json
     }
   ],
   "model": "L6max",
   "name": "knob-dialog",
+<<<<<<<< HEAD:tools/firmware-patch-wasm/templates/knob-dialog-8010bad0.json
   "payload_file": "knob-dialog-8010bad0.bin",
+========
+<<<<<<<< HEAD:tools/firmware-patch-wasm/templates/knob-dialog-8010b8c0.json
+  "payload_file": "knob-dialog-8010b8c0.bin",
+========
+  "payload_file": "knob-dialog-8010bad0.bin",
+>>>>>>>> b6b2643d (Expose Dual EFX for firmware and SD installation):tools/firmware-patch-wasm/templates/knob-dialog-8010bad0.json
+>>>>>>>> afb6999f (Expose Dual EFX for firmware and SD installation):tools/firmware-patch-wasm/templates/knob-dialog-8010baa0.json
   "payload_length": 6052,
   "window_byte_total": 4,
   "windows": [

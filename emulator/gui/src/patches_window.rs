@@ -63,12 +63,9 @@ impl Selection {
         *self = std::mem::take(self).ordered();
     }
 
-    /// Turn `patch` off, or on from the firmware.
-    pub fn toggle(&mut self, patch: &str) {
-        let next = match self.delivery(patch) {
-            Some(_) => None,
-            None => Some(Delivery::Firmware),
-        };
+    /// Turn `patch` off, or on using its available installation method.
+    pub fn toggle_with_default(&mut self, patch: &str, default: Delivery) {
+        let next = self.delivery(patch).map_or(Some(default), |_| None);
         self.set(patch, next);
     }
 
@@ -222,9 +219,15 @@ impl Render for PatchesWindow {
             let usable = available.contains(&patch);
             let delivery = self.selection.delivery(patch);
             let checked = delivery.is_some();
-            // A saved patch can always be turned off, so that the guest can start again.
-            let togglable = usable || checked;
             let from_card = loadable.contains(&patch);
+            let card_enabled = has_card || delivery == Some(Delivery::SdCard);
+            let default_delivery = if usable {
+                Delivery::Firmware
+            } else {
+                Delivery::SdCard
+            };
+            // A saved patch can always be turned off, so that the guest can start again.
+            let togglable = usable || checked || (from_card && card_enabled);
             div()
                 .flex()
                 .items_center()
@@ -241,7 +244,9 @@ impl Render for PatchesWindow {
                             row.cursor(CursorStyle::PointingHand).on_mouse_down(
                                 MouseButton::Left,
                                 cx.listener(move |window, _, _, cx| {
-                                    window.selection.toggle(patch);
+                                    window
+                                        .selection
+                                        .toggle_with_default(patch, default_delivery);
                                     cx.notify();
                                 }),
                             )
@@ -295,7 +300,6 @@ impl Render for PatchesWindow {
                             cx.notify();
                         })
                     };
-                    let card_enabled = has_card || delivery == Some(Delivery::SdCard);
                     // Dim until the patch is on; either side still turns it on.
                     row.child(
                         div()
@@ -330,6 +334,25 @@ impl Render for PatchesWindow {
                             ),
                     )
                 })
+                .when(from_card && !usable, |row| {
+                    let choose = cx.listener(move |window: &mut Self, _, _, cx| {
+                        window.selection.set(patch, Some(Delivery::SdCard));
+                        cx.notify();
+                    });
+                    row.child(
+                        segment(
+                            format!("{patch}-sd-card"),
+                            "SD card",
+                            delivery == Some(Delivery::SdCard),
+                            checked,
+                        )
+                        .when(card_enabled, |segment| {
+                            segment
+                                .cursor(CursorStyle::PointingHand)
+                                .on_mouse_down(MouseButton::Left, choose)
+                        }),
+                    )
+                })
         });
         let card_note: Option<&str> = if !has_card {
             Some("Insert an SD card (File → Use SD Card Folder…) to load patches from it.")
@@ -350,7 +373,17 @@ impl Render for PatchesWindow {
             .p_4()
             .bg(rgb(0x10131c))
             .text_color(rgb(0xe8eef8))
-            .children(rows)
+            .child(
+                div()
+                    .id("patch-list")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .children(rows),
+            )
             .children(
                 message.map(|message| div().text_sm().text_color(rgb(0xf0a0a0)).child(message)),
             )
@@ -403,6 +436,7 @@ mod tests {
                 package.name
             );
         }
+        assert!(offered().iter().any(|package| package.name == "dual-efx"));
     }
 
     #[test]
@@ -417,10 +451,21 @@ mod tests {
     #[test]
     fn toggling_turns_on_from_firmware_and_off_from_either() {
         let mut selection = Selection::default();
-        selection.toggle("knob-dialog");
+        selection.toggle_with_default("knob-dialog", Delivery::Firmware);
         assert_eq!(selection.delivery("knob-dialog"), Some(Delivery::Firmware));
         selection.set("knob-dialog", Some(Delivery::SdCard));
-        selection.toggle("knob-dialog");
+        selection.toggle_with_default("knob-dialog", Delivery::Firmware);
+        assert_eq!(selection, Selection::default());
+    }
+
+    #[test]
+    fn dual_efx_can_be_assigned_to_either_delivery() {
+        let mut selection = Selection::default();
+        selection.toggle_with_default("dual-efx", Delivery::Firmware);
+        assert_eq!(selection.delivery("dual-efx"), Some(Delivery::Firmware));
+        selection.set("dual-efx", Some(Delivery::SdCard));
+        assert_eq!(selection.delivery("dual-efx"), Some(Delivery::SdCard));
+        selection.toggle_with_default("dual-efx", Delivery::SdCard);
         assert_eq!(selection, Selection::default());
     }
 

@@ -136,10 +136,28 @@ mod tests {
 
     #[test]
     fn offers_the_hosted_modules_per_model() {
-        assert_eq!(available(l6fw::Model::L6max), ["knob-dialog", "midi-sync"]);
+        assert_eq!(
+            available(l6fw::Model::L6max),
+            ["knob-dialog", "midi-sync", "dual-efx"]
+        );
         assert_eq!(available(l6fw::Model::L6), ["midi-sync"]);
         assert!(check(l6fw::Model::L6, &["knob-dialog".into()]).is_err());
         assert!(check(l6fw::Model::L6max, &["din-mixer-control".into()]).is_err());
+    }
+
+    #[test]
+    fn installs_composed_dual_efx_with_its_versioned_filename() {
+        let path = card("dual-efx");
+        assert!(install(&path, l6fw::Model::L6max, &["dual-efx".into()]).unwrap());
+        assert_eq!(files(&path), ["50-DUAL-EFX-1.0.0-KNOB-DIALOG-1.0.0.BIN"]);
+        let mut volume = sd_image::open(&path).unwrap();
+        assert_eq!(
+            volume
+                .read("PATCHES/50-dual-efx-1.0.0-knob-dialog-1.0.0.bin")
+                .unwrap(),
+            module(l6fw::Model::L6max, "dual-efx").unwrap().bytes
+        );
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]

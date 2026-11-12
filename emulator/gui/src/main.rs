@@ -554,7 +554,7 @@ impl NativePanel {
             let window = cx.open_window(
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
-                    is_resizable: false,
+                    is_resizable: true,
                     ..Default::default()
                 },
                 |window, cx| {

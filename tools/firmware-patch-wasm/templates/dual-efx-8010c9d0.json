@@ -1,0 +1,90 @@
+{
+  "base": "0x8010c9d0",
+  "hooks": [
+    {
+      "address": "0x80024678",
+      "continuation_site": "dsp_effect_workspace_clear",
+      "continuation_slot_offset": 11556,
+      "length": 4,
+      "symbol": "dual_efx_effect_workspace_clear",
+      "target": "0x8010cab0"
+    },
+    {
+      "address": "0x80066180",
+      "continuation_site": "dsp_stream_callback",
+      "continuation_slot_offset": 11588,
+      "length": 4,
+      "symbol": "dsp_stream_entry_probe",
+      "target": "0x8010c9d0"
+    },
+    {
+      "address": "0x80053b28",
+      "continuation_site": "mixer_apply_channel_parameter",
+      "continuation_slot_offset": 11620,
+      "length": 4,
+      "symbol": "dual_efx_parameter_edit",
+      "target": "0x8010cb3c"
+    },
+    {
+      "address": "0x80054340",
+      "continuation_site": "mixer_apply_effect_type",
+      "continuation_slot_offset": 11652,
+      "length": 4,
+      "symbol": "dual_efx_select_callback",
+      "target": "0x8010cbe8"
+    },
+    {
+      "address": "0x8000bd78",
+      "continuation_site": "mixer_set_efx_type",
+      "continuation_slot_offset": 11684,
+      "length": 4,
+      "symbol": "dual_efx_set_effect_type",
+      "target": "0x8010cc20"
+    },
+    {
+      "address": "0x8000fe08",
+      "continuation_site": "sys_main_startup_initialize",
+      "continuation_slot_offset": 11716,
+      "length": 4,
+      "symbol": "dual_efx_initialize_static_state",
+      "target": "0x8010cb00"
+    }
+  ],
+  "model": "L6max",
+  "name": "dual-efx",
+  "payload_file": "dual-efx-8010c9d0.bin",
+  "payload_length": 24850,
+  "window_byte_total": 24,
+  "windows": [
+    {
+      "firmware_address": "0x80024678",
+      "length": 4,
+      "payload_offset": 11560
+    },
+    {
+      "firmware_address": "0x80066180",
+      "length": 4,
+      "payload_offset": 11592
+    },
+    {
+      "firmware_address": "0x80053b28",
+      "length": 4,
+      "payload_offset": 11624
+    },
+    {
+      "firmware_address": "0x80054340",
+      "length": 4,
+      "payload_offset": 11656
+    },
+    {
+      "firmware_address": "0x8000bd78",
+      "length": 4,
+      "payload_offset": 11688
+    },
+    {
+      "firmware_address": "0x8000fe08",
+      "length": 4,
+      "payload_offset": 11720
+    }
+  ]
+}
