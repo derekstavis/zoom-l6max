@@ -1,7 +1,7 @@
 //! Embeds every precomputed, Zoom-byte-free template from `templates/`
 //! (produced by `firmware-patch-wasm-prebuild`) directly into the compiled
 //! binary, as (name, payload bytes, metadata JSON text) triples.
-use std::{collections::BTreeMap, env, fs, path::Path};
+use std::{env, fs, path::Path};
 
 fn main() {
     let templates_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("templates");
@@ -35,35 +35,6 @@ fn main() {
     }
     generated.push_str("];\n");
 
-    let mut loader_payloads = BTreeMap::new();
-    for loader in manifest["loaders"].as_array().expect("loaders array") {
-        let metadata_file = loader["metadata_file"].as_str().expect("metadata_file");
-        let metadata_path = templates_dir
-            .join(metadata_file)
-            .canonicalize()
-            .expect("canonicalize loader metadata");
-        let metadata: serde_json::Value =
-            serde_json::from_str(&fs::read_to_string(metadata_path).expect("read loader metadata"))
-                .expect("parse loader metadata");
-        let model = metadata["model"].as_str().expect("loader model");
-        let payload_file = metadata["payload_file"].as_str().expect("payload_file");
-        if let Some(previous) = loader_payloads.insert(model.to_owned(), payload_file.to_owned()) {
-            assert_eq!(
-                previous, payload_file,
-                "loader profiles should share a payload per model"
-            );
-        }
-    }
-    for (model, payload_file) in &loader_payloads {
-        let static_name = model.to_ascii_uppercase();
-        let payload_path = templates_dir
-            .join(payload_file)
-            .canonicalize()
-            .unwrap_or_else(|e| panic!("canonicalize {payload_file}: {e}"));
-        generated.push_str(&format!(
-            "pub(crate) static SD_LOADER_{static_name}: &[u8] = include_bytes!({payload_path:?});\n"
-        ));
-    }
     generated.push_str("pub(crate) static EMBEDDED_LOADERS: &[(&str, &[u8], &str)] = &[\n");
     for loader in manifest["loaders"].as_array().expect("loaders array") {
         let metadata_file = loader["metadata_file"].as_str().expect("metadata_file");
@@ -76,9 +47,13 @@ fn main() {
         )
         .expect("parse loader metadata");
         let model = metadata["model"].as_str().expect("loader model");
+        let payload_file = metadata["payload_file"].as_str().expect("payload_file");
+        let payload_path = templates_dir
+            .join(payload_file)
+            .canonicalize()
+            .unwrap_or_else(|e| panic!("canonicalize {payload_file}: {e}"));
         generated.push_str(&format!(
-            "    ({model:?}, SD_LOADER_{}, include_str!({metadata_path:?})),\n",
-            model.to_ascii_uppercase()
+            "    ({model:?}, include_bytes!({payload_path:?}) as &[u8], include_str!({metadata_path:?})),\n"
         ));
     }
     generated.push_str("];\n");

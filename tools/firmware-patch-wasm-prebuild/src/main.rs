@@ -35,7 +35,7 @@ use firmware_patch_core::{
 };
 use sha2::{Digest, Sha256};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
 };
@@ -535,16 +535,17 @@ struct Unit {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
-    let source = PathBuf::from(args.next().ok_or(
-        "Usage: firmware-patch-wasm-prebuild L6MAX_UNPACKED_FIRMWARE_DIR L6_UNPACKED_FIRMWARE_DIR",
-    )?)
-    .canonicalize()?;
-    let l6_source = PathBuf::from(args.next().ok_or(
-        "Usage: firmware-patch-wasm-prebuild L6MAX_UNPACKED_FIRMWARE_DIR L6_UNPACKED_FIRMWARE_DIR",
-    )?)
-    .canonicalize()?;
+    let usage = "Usage: firmware-patch-wasm-prebuild L6MAX_UNPACKED_FIRMWARE_DIR L6_UNPACKED_FIRMWARE_DIR | L6MAX_UNPACKED_FIRMWARE_DIR --l6max-only";
+    let source = PathBuf::from(args.next().ok_or(usage)?).canonicalize()?;
+    let l6_arg = args.next().ok_or(usage)?;
+    let l6max_only = l6_arg == "--l6max-only";
+    let l6_source = if l6max_only {
+        None
+    } else {
+        Some(PathBuf::from(l6_arg).canonicalize()?)
+    };
     if args.next().is_some() {
-        return Err("expected exactly two unpacked firmware directories".into());
+        return Err(usage.into());
     }
     let firmware = fs::read(source.join("main_firmware.bin"))?;
     let digest = format!("{:x}", Sha256::digest(&firmware));
@@ -555,8 +556,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .into());
     }
     verify_firmware_for(FirmwareModel::L6max, &firmware)?;
-    let l6_firmware = fs::read(l6_source.join("main_firmware.bin"))?;
-    verify_firmware_for(FirmwareModel::L6, &l6_firmware)?;
+    let l6_firmware = if let Some(l6_source) = &l6_source {
+        let firmware = fs::read(l6_source.join("main_firmware.bin"))?;
+        verify_firmware_for(FirmwareModel::L6, &firmware)?;
+        Some(firmware)
+    } else {
+        None
+    };
 
     let patches_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../patches");
     let scratch = std::env::temp_dir().join(format!(
@@ -579,7 +585,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut per_patch: HashMap<&'static str, PerPatch> = HashMap::new();
     for name in WASM_PATCHES {
         let patch_root = patches_dir.join(name);
-        let patch_root = if name == "midi-sync" || name == "midi-control" {
+        let patch_root = if patch_root.join("l6max/src/payload.rs").is_file() {
+            patch_root.join("l6max")
+        } else if name == "midi-sync" || name == "midi-control" {
             patch_root.join("l6max")
         } else {
             patch_root
@@ -757,20 +765,56 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let templates_dir =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../firmware-patch-wasm/templates");
     fs::create_dir_all(&templates_dir)?;
+    let previous_manifest: Option<serde_json::Value> = if l6max_only {
+        Some(serde_json::from_slice(&fs::read(
+            templates_dir.join("manifest.json"),
+        )?)?)
+    } else {
+        None
+    };
+    let mut preserved_l6_files = HashSet::new();
+    if let Some(manifest) = &previous_manifest {
+        for entry in manifest["units"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .chain(manifest["loaders"].as_array().into_iter().flatten())
+            .filter(|entry| entry["model"] == "L6")
+        {
+            if let Some(metadata_file) = entry["metadata_file"].as_str() {
+                preserved_l6_files.insert(metadata_file.to_owned());
+                let metadata: serde_json::Value =
+                    serde_json::from_slice(&fs::read(templates_dir.join(metadata_file))?)?;
+                if let Some(payload_file) = metadata["payload_file"].as_str() {
+                    preserved_l6_files.insert(payload_file.to_owned());
+                }
+            }
+        }
+    }
     for entry in fs::read_dir(&templates_dir)? {
         let entry = entry?;
-        if entry
-            .path()
+        let path = entry.path();
+        if path
             .extension()
             .is_some_and(|ext| ext == "bin" || ext == "json")
         {
-            fs::remove_file(entry.path())?;
+            let filename = entry.file_name().to_string_lossy().into_owned();
+            if !preserved_l6_files.contains(&filename) {
+                fs::remove_file(path)?;
+            }
         }
     }
 
     let mut unit_list = units.into_values().collect::<Vec<_>>();
     unit_list.sort_by_key(|unit| (unit.name, unit.base));
-    let mut manifest_units = Vec::new();
+    let mut manifest_units = previous_manifest
+        .as_ref()
+        .and_then(|manifest| manifest["units"].as_array())
+        .into_iter()
+        .flatten()
+        .filter(|unit| unit["model"] == "L6")
+        .cloned()
+        .collect::<Vec<_>>();
     for unit in &unit_list {
         let stem = format!("{}-{:08x}", unit.name, unit.base);
         fs::write(templates_dir.join(format!("{stem}.bin")), &unit.template)?;
@@ -827,193 +871,203 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Build the supported L6 profiles at the addresses selected by the native
     // CLI, then zero only firmware-derived continuation windows in browser templates.
-    let l6_root = patches_dir.join("midi-sync/l6").canonicalize()?;
-    let l6_rows = compile_hook_rows(
-        &l6_source,
-        &l6_root,
-        &output_scratch,
-        "midi-sync-l6",
-        &l6_firmware,
-        L6_MAIN_BASE,
-    )?;
-    let l6_base = first_payload_for(FirmwareModel::L6, l6_firmware.len());
-    let (l6_sentinel, l6_value_to_address) =
-        build_sentinel_firmware(&l6_firmware, &l6_rows, L6_MAIN_BASE);
-    let l6_sentinel_source = scratch.join("l6-midi-sync-sentinel");
-    fs::create_dir_all(&l6_sentinel_source)?;
-    fs::write(l6_sentinel_source.join("main_firmware.bin"), &l6_sentinel)?;
-    let (l6_payload, l6_symbols) = compile(
-        &l6_source,
-        &l6_root,
-        &output_scratch,
-        "l6-midi-sync",
-        l6_base,
-    )?;
-    let (l6_sentinel_payload, _) = compile_sentinel(
-        &l6_sentinel_source,
-        &l6_root,
-        &output_scratch,
-        "l6-midi-sync",
-        l6_base,
-    )?;
-    let l6_windows = find_windows(&l6_payload, &l6_sentinel_payload, &l6_value_to_address)?;
-    let mut l6_template = l6_payload.clone();
-    for window in &l6_windows {
-        l6_template[window.payload_offset..window.payload_offset + window.length].fill(0);
-    }
-    let mut l6_reconstructed = l6_template.clone();
-    for window in &l6_windows {
-        let start = (window.firmware_address - L6_MAIN_BASE) as usize;
-        l6_reconstructed[window.payload_offset..window.payload_offset + window.length]
-            .copy_from_slice(&l6_firmware[start..start + window.length]);
-    }
-    if l6_reconstructed != l6_payload {
-        return Err(
-            "L6 midi-sync: template + L6 firmware windows do not reconstruct payload".into(),
+    if let (Some(l6_source), Some(l6_firmware)) = (l6_source.as_deref(), l6_firmware.as_deref()) {
+        let l6_root = patches_dir.join("midi-sync/l6").canonicalize()?;
+        let l6_rows = compile_hook_rows(
+            &l6_source,
+            &l6_root,
+            &output_scratch,
+            "midi-sync-l6",
+            &l6_firmware,
+            L6_MAIN_BASE,
+        )?;
+        let l6_base = first_payload_for(FirmwareModel::L6, l6_firmware.len());
+        let (l6_sentinel, l6_value_to_address) =
+            build_sentinel_firmware(&l6_firmware, &l6_rows, L6_MAIN_BASE);
+        let l6_sentinel_source = scratch.join("l6-midi-sync-sentinel");
+        fs::create_dir_all(&l6_sentinel_source)?;
+        fs::write(l6_sentinel_source.join("main_firmware.bin"), &l6_sentinel)?;
+        let (l6_payload, l6_symbols) = compile(
+            &l6_source,
+            &l6_root,
+            &output_scratch,
+            "l6-midi-sync",
+            l6_base,
+        )?;
+        let (l6_sentinel_payload, _) = compile_sentinel(
+            &l6_sentinel_source,
+            &l6_root,
+            &output_scratch,
+            "l6-midi-sync",
+            l6_base,
+        )?;
+        let l6_windows = find_windows(&l6_payload, &l6_sentinel_payload, &l6_value_to_address)?;
+        let mut l6_template = l6_payload.clone();
+        for window in &l6_windows {
+            l6_template[window.payload_offset..window.payload_offset + window.length].fill(0);
+        }
+        let mut l6_reconstructed = l6_template.clone();
+        for window in &l6_windows {
+            let start = (window.firmware_address - L6_MAIN_BASE) as usize;
+            l6_reconstructed[window.payload_offset..window.payload_offset + window.length]
+                .copy_from_slice(&l6_firmware[start..start + window.length]);
+        }
+        if l6_reconstructed != l6_payload {
+            return Err(
+                "L6 midi-sync: template + L6 firmware windows do not reconstruct payload".into(),
+            );
+        }
+        let l6_hooks = l6_rows
+            .iter()
+            .map(|row| Ok((row.address, symbol(&l6_symbols, &row.symbol)?, row.length)))
+            .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()?;
+        let l6_stem = format!("midi-sync-l6-{l6_base:08x}");
+        fs::write(templates_dir.join(format!("{l6_stem}.bin")), &l6_template)?;
+        let l6_windows_json: Vec<_> = l6_windows
+            .iter()
+            .map(|window| {
+                serde_json::json!({
+                    "payload_offset": window.payload_offset,
+                    "firmware_address": format!("{:#x}", window.firmware_address),
+                    "length": window.length,
+                })
+            })
+            .collect();
+        let l6_hooks_json: Vec<_> = l6_hooks
+            .iter()
+            .zip(&l6_rows)
+            .map(|((address, target, length), row)| {
+                serde_json::json!({
+                    "address": format!("{address:#x}"),
+                    "target": format!("{target:#x}"),
+                    "length": length,
+                    "symbol": row.symbol,
+                    "continuation_site": row.continuation_site,
+                    "continuation_slot_offset": row.continuation_slot_offset,
+                    "continuation_site": row.continuation_site,
+                    "continuation_slot_offset": row.continuation_slot_offset,
+                })
+            })
+            .collect();
+        let l6_metadata = serde_json::json!({
+            "name": "midi-sync",
+            "model": "L6",
+            "base": format!("{l6_base:#x}"),
+            "payload_file": format!("{l6_stem}.bin"),
+            "payload_length": l6_template.len(),
+            "windows": l6_windows_json,
+            "hooks": l6_hooks_json,
+            "window_byte_total": l6_windows.iter().map(|w| w.length).sum::<usize>(),
+        });
+        let l6_metadata_file = format!("{l6_stem}.json");
+        fs::write(
+            templates_dir.join(&l6_metadata_file),
+            serde_json::to_string_pretty(&l6_metadata)?,
+        )?;
+        manifest_units.push(serde_json::json!({
+            "name": "midi-sync",
+            "model": "L6",
+            "base": format!("{l6_base:#x}"),
+            "metadata_file": l6_metadata_file,
+        }));
+        println!(
+            "{}: {} bytes, {} window(s), {} window byte(s)",
+            l6_stem,
+            l6_template.len(),
+            l6_windows.len(),
+            l6_windows.iter().map(|w| w.length).sum::<usize>()
         );
-    }
-    let l6_hooks = l6_rows
-        .iter()
-        .map(|row| Ok((row.address, symbol(&l6_symbols, &row.symbol)?, row.length)))
-        .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()?;
-    let l6_stem = format!("midi-sync-l6-{l6_base:08x}");
-    fs::write(templates_dir.join(format!("{l6_stem}.bin")), &l6_template)?;
-    let l6_windows_json: Vec<_> = l6_windows
-        .iter()
-        .map(|window| {
-            serde_json::json!({
-                "payload_offset": window.payload_offset,
-                "firmware_address": format!("{:#x}", window.firmware_address),
-                "length": window.length,
-            })
-        })
-        .collect();
-    let l6_hooks_json: Vec<_> = l6_hooks
-        .iter()
-        .zip(&l6_rows)
-        .map(|((address, target, length), row)| {
-            serde_json::json!({
-                "address": format!("{address:#x}"),
-                "target": format!("{target:#x}"),
-                "length": length,
-                "symbol": row.symbol,
-                "continuation_site": row.continuation_site,
-                "continuation_slot_offset": row.continuation_slot_offset,
-                "continuation_site": row.continuation_site,
-                "continuation_slot_offset": row.continuation_slot_offset,
-            })
-        })
-        .collect();
-    let l6_metadata = serde_json::json!({
-        "name": "midi-sync",
-        "model": "L6",
-        "base": format!("{l6_base:#x}"),
-        "payload_file": format!("{l6_stem}.bin"),
-        "payload_length": l6_template.len(),
-        "windows": l6_windows_json,
-        "hooks": l6_hooks_json,
-        "window_byte_total": l6_windows.iter().map(|w| w.length).sum::<usize>(),
-    });
-    let l6_metadata_file = format!("{l6_stem}.json");
-    fs::write(
-        templates_dir.join(&l6_metadata_file),
-        serde_json::to_string_pretty(&l6_metadata)?,
-    )?;
-    manifest_units.push(serde_json::json!({
-        "name": "midi-sync",
-        "model": "L6",
-        "base": format!("{l6_base:#x}"),
-        "metadata_file": l6_metadata_file,
-    }));
-    println!(
-        "{}: {} bytes, {} window(s), {} window byte(s)",
-        l6_stem,
-        l6_template.len(),
-        l6_windows.len(),
-        l6_windows.iter().map(|w| w.length).sum::<usize>()
-    );
 
-    let (l6_loader_template, _, _) = build_loader_template(
-        FirmwareModel::L6,
-        &l6_source,
-        &l6_firmware,
-        &scratch,
-        l6_base,
-        &["midi-sync"],
-        &patch_rows,
-    )?;
-    let l6_static_base = (l6_base + l6_loader_template.len() as u32 + 15) & !15;
-    let (loader_l6_payload, loader_l6_symbols) = compile(
-        &l6_source,
-        &l6_root,
-        &output_scratch,
-        "midi-sync",
-        l6_static_base,
-    )?;
-    let (loader_l6_sentinel_payload, _) = compile_sentinel(
-        &l6_sentinel_source,
-        &l6_root,
-        &output_scratch,
-        "midi-sync",
-        l6_static_base,
-    )?;
-    let loader_l6_windows = find_windows(
-        &loader_l6_payload,
-        &loader_l6_sentinel_payload,
-        &l6_value_to_address,
-    )?;
-    let mut loader_l6_template = loader_l6_payload.clone();
-    for window in &loader_l6_windows {
-        loader_l6_template[window.payload_offset..window.payload_offset + window.length].fill(0);
+        let (l6_loader_template, _, _) = build_loader_template(
+            FirmwareModel::L6,
+            &l6_source,
+            &l6_firmware,
+            &scratch,
+            l6_base,
+            &["midi-sync"],
+            &patch_rows,
+        )?;
+        let l6_static_base = (l6_base + l6_loader_template.len() as u32 + 15) & !15;
+        let (loader_l6_payload, loader_l6_symbols) = compile(
+            &l6_source,
+            &l6_root,
+            &output_scratch,
+            "midi-sync",
+            l6_static_base,
+        )?;
+        let (loader_l6_sentinel_payload, _) = compile_sentinel(
+            &l6_sentinel_source,
+            &l6_root,
+            &output_scratch,
+            "midi-sync",
+            l6_static_base,
+        )?;
+        let loader_l6_windows = find_windows(
+            &loader_l6_payload,
+            &loader_l6_sentinel_payload,
+            &l6_value_to_address,
+        )?;
+        let mut loader_l6_template = loader_l6_payload.clone();
+        for window in &loader_l6_windows {
+            loader_l6_template[window.payload_offset..window.payload_offset + window.length]
+                .fill(0);
+        }
+        let mut loader_l6_reconstructed = loader_l6_template.clone();
+        for window in &loader_l6_windows {
+            let start = (window.firmware_address - L6_MAIN_BASE) as usize;
+            loader_l6_reconstructed[window.payload_offset..window.payload_offset + window.length]
+                .copy_from_slice(&l6_firmware[start..start + window.length]);
+        }
+        if loader_l6_reconstructed != loader_l6_payload {
+            return Err("loader-enabled L6 midi-sync template does not reconstruct payload".into());
+        }
+        let loader_l6_hooks = l6_rows
+            .iter()
+            .map(|row| {
+                Ok((
+                    row.address,
+                    symbol(&loader_l6_symbols, &row.symbol)?,
+                    row.length,
+                ))
+            })
+            .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()?;
+        let loader_l6_stem = format!("midi-sync-l6-loader-{l6_static_base:08x}");
+        fs::write(
+            templates_dir.join(format!("{loader_l6_stem}.bin")),
+            &loader_l6_template,
+        )?;
+        let loader_l6_metadata = serde_json::json!({
+            "name": "midi-sync", "model": "L6", "base": format!("{l6_static_base:#x}"),
+            "payload_file": format!("{loader_l6_stem}.bin"), "payload_length": loader_l6_template.len(),
+            "windows": loader_l6_windows.iter().map(|window| serde_json::json!({
+                "payload_offset":window.payload_offset,
+                "firmware_address":format!("{:#x}",window.firmware_address),
+                "length":window.length,
+            })).collect::<Vec<_>>(),
+            "hooks": loader_l6_hooks.iter().zip(&l6_rows).map(|((address,target,length),row)| serde_json::json!({
+                "address":format!("{address:#x}"),"target":format!("{target:#x}"),"length":length,"symbol":row.symbol,
+            })).collect::<Vec<_>>(),
+            "window_byte_total": loader_l6_windows.iter().map(|window| window.length).sum::<usize>(),
+        });
+        let loader_l6_metadata_file = format!("{loader_l6_stem}.json");
+        fs::write(
+            templates_dir.join(&loader_l6_metadata_file),
+            serde_json::to_string_pretty(&loader_l6_metadata)?,
+        )?;
+        manifest_units.push(serde_json::json!({
+            "name":"midi-sync", "model":"L6", "base":format!("{l6_static_base:#x}"),
+            "metadata_file":loader_l6_metadata_file,
+        }));
     }
-    let mut loader_l6_reconstructed = loader_l6_template.clone();
-    for window in &loader_l6_windows {
-        let start = (window.firmware_address - L6_MAIN_BASE) as usize;
-        loader_l6_reconstructed[window.payload_offset..window.payload_offset + window.length]
-            .copy_from_slice(&l6_firmware[start..start + window.length]);
-    }
-    if loader_l6_reconstructed != loader_l6_payload {
-        return Err("loader-enabled L6 midi-sync template does not reconstruct payload".into());
-    }
-    let loader_l6_hooks = l6_rows
-        .iter()
-        .map(|row| {
-            Ok((
-                row.address,
-                symbol(&loader_l6_symbols, &row.symbol)?,
-                row.length,
-            ))
-        })
-        .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()?;
-    let loader_l6_stem = format!("midi-sync-l6-loader-{l6_static_base:08x}");
-    fs::write(
-        templates_dir.join(format!("{loader_l6_stem}.bin")),
-        &loader_l6_template,
-    )?;
-    let loader_l6_metadata = serde_json::json!({
-        "name": "midi-sync", "model": "L6", "base": format!("{l6_static_base:#x}"),
-        "payload_file": format!("{loader_l6_stem}.bin"), "payload_length": loader_l6_template.len(),
-        "windows": loader_l6_windows.iter().map(|window| serde_json::json!({
-            "payload_offset":window.payload_offset,
-            "firmware_address":format!("{:#x}",window.firmware_address),
-            "length":window.length,
-        })).collect::<Vec<_>>(),
-        "hooks": loader_l6_hooks.iter().zip(&l6_rows).map(|((address,target,length),row)| serde_json::json!({
-            "address":format!("{address:#x}"),"target":format!("{target:#x}"),"length":length,"symbol":row.symbol,
-        })).collect::<Vec<_>>(),
-        "window_byte_total": loader_l6_windows.iter().map(|window| window.length).sum::<usize>(),
-    });
-    let loader_l6_metadata_file = format!("{loader_l6_stem}.json");
-    fs::write(
-        templates_dir.join(&loader_l6_metadata_file),
-        serde_json::to_string_pretty(&loader_l6_metadata)?,
-    )?;
-    manifest_units.push(serde_json::json!({
-        "name":"midi-sync", "model":"L6", "base":format!("{l6_static_base:#x}"),
-        "metadata_file":loader_l6_metadata_file,
-    }));
 
-    let mut loader_manifest = Vec::new();
+    let mut loader_manifest = previous_manifest
+        .as_ref()
+        .and_then(|manifest| manifest["loaders"].as_array())
+        .into_iter()
+        .flatten()
+        .filter(|loader| loader["model"] == "L6")
+        .cloned()
+        .collect::<Vec<_>>();
     let mut loader_profiles = Vec::new();
     for mask in 0u8..(1 << WASM_PATCHES.len()) {
         let selected: Vec<&'static str> = WASM_PATCHES
@@ -1031,16 +1085,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             FIRST_PAYLOAD,
         ));
     }
-    for mask in 0u8..2 {
-        let selected = if mask == 0 { vec![] } else { vec!["midi-sync"] };
-        loader_profiles.push((
-            FirmwareModel::L6,
-            l6_source.as_path(),
-            l6_firmware.as_slice(),
-            mask,
-            selected,
-            l6_base,
-        ));
+    if let (Some(l6_source), Some(l6_firmware)) = (l6_source.as_deref(), l6_firmware.as_deref()) {
+        let l6_base = first_payload_for(FirmwareModel::L6, l6_firmware.len());
+        for mask in 0u8..2 {
+            let selected = if mask == 0 { vec![] } else { vec!["midi-sync"] };
+            loader_profiles.push((
+                FirmwareModel::L6,
+                l6_source,
+                l6_firmware,
+                mask,
+                selected,
+                l6_base,
+            ));
+        }
     }
     for (model, loader_source, loader_firmware, mask, selected, base) in loader_profiles {
         let (loader_template, loader_windows, mut metadata) = build_loader_template(
@@ -1058,15 +1115,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "L6max"
         };
         let stem = format!("patch-loader-{model_name}-{mask:03}-{base:08x}");
-        let payload_file = format!("patch-loader-{model_name}-{base:08x}.bin");
+        let payload_file = format!("patch-loader-{model_name}-{mask:03}-{base:08x}.bin");
         let payload_path = templates_dir.join(&payload_file);
-        if payload_path.exists() {
-            if fs::read(&payload_path)? != loader_template {
-                return Err(format!("loader payload changed across {model_name} profiles").into());
-            }
-        } else {
-            fs::write(&payload_path, &loader_template)?;
-        }
+        fs::write(&payload_path, &loader_template)?;
         metadata["name"] = serde_json::json!("patch-loader");
         metadata["payload_file"] = serde_json::json!(payload_file);
         fs::write(
@@ -1087,11 +1138,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let loader_template_count = loader_manifest.len();
+    let l6_digest = previous_manifest
+        .as_ref()
+        .and_then(|manifest| manifest["l6_source_firmware_sha256"].as_str())
+        .unwrap_or(L6_EXPECTED_FIRMWARE_SHA256);
     fs::write(
         templates_dir.join("manifest.json"),
         serde_json::to_string_pretty(&serde_json::json!({
             "source_firmware_sha256": digest,
-            "l6_source_firmware_sha256": L6_EXPECTED_FIRMWARE_SHA256,
+            "l6_source_firmware_sha256": l6_digest,
             "units": manifest_units,
             "loaders": loader_manifest,
         }))?,
