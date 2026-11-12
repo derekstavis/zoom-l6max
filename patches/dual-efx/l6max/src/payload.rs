@@ -18,7 +18,7 @@ use firmware as firmware_bindings;
 use crate::firmware_bindings;
 use firmware_bindings::{
     current_window, dsp_effect_workspace, dsp_effect_workspace_clear, dsp_stream_callback,
-    mixer_apply_channel_parameter, mixer_get_efx_type, mixer_select_efx_callback,
+    mixer_apply_channel_parameter, mixer_apply_effect_type, mixer_get_efx_type,
     mixer_set_efx_type, panel_handle_main_button_event, sys_main_startup_initialize,
     xTickCount, DSP_EFFECT_WORKSPACE_BYTES,
 };
@@ -62,7 +62,7 @@ pub static PARAMETER_HANDOFF: parameters::ParameterHandoff = parameters::Paramet
 
 #[cfg(sd_dynamic_module)]
 unsafe fn prepare_parameter_dialog() {
-    let _ = unsafe { crate::knob_dialog::prepare_external_text() };
+    let _ = crate::knob_dialog::prepare_external_text();
 }
 
 #[cfg(sd_dynamic_module)]
@@ -73,7 +73,7 @@ unsafe fn show_parameter_dialog(
     let formatted = parameters::format_parameter(id, processor);
     let title = formatted.title.as_bytes();
     let value = &formatted.value_str[..formatted.value_len];
-    let _ = unsafe { crate::knob_dialog::show_external_text(title, value) };
+    let _ = crate::knob_dialog::show_external_text(title, value);
 }
 
 /// DSP state occupies stock's cleared shared effect workspace, not the heap.
@@ -175,8 +175,8 @@ static DUAL_EFFECT_EFX_BUTTON_DOWN_TICK: AtomicU32 = AtomicU32::new(0);
 unsafe fn show_edit_mode(enabled: bool) {
     let title = b"DUAL EFX EDIT";
     let value = if enabled { b"ON".as_slice() } else { b"OFF".as_slice() };
-    let _ = unsafe { crate::knob_dialog::prepare_external_text() };
-    let _ = unsafe { crate::knob_dialog::show_external_text(title, value) };
+    let _ = crate::knob_dialog::prepare_external_text();
+    let _ = crate::knob_dialog::show_external_text(title, value);
 }
 
 /// Delay EFX selection until the release edge distinguishes a tap from a hold.
@@ -544,13 +544,9 @@ pub unsafe fn dual_efx_set_effect_type(bus: u32, effect_type: u32) {
 /// clear hook closes and drains it after that fade; this hook then initializes
 /// Room or Spring before the audio task uses the newly selected callback. The
 /// following type setter is retained as a fallback for other selection paths.
-#[function_entry_hook(mixer_select_efx_callback)]
-pub unsafe fn dual_efx_select_callback(effect_type: u32, bus: u32) {
-    if bus != 0 {
-        return hook_continue(effect_type, bus);
-    }
-
-    let continuation = hook_continue(effect_type, bus);
+#[function_entry_hook(mixer_apply_effect_type)]
+pub unsafe fn dual_efx_select_callback(effect_type: u32, force_refresh: u32) -> u32 {
+    let continuation = hook_continue(effect_type, force_refresh);
     #[cfg(not(sd_dynamic_module))]
     {
         if effect_type == 1 || effect_type == 2 {

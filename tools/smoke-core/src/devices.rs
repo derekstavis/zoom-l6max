@@ -4130,7 +4130,6 @@ impl State {
                         if first.2 >= second.2 {
                             return Err("module hook order was not preserved in the chain".into());
                         }
-                        }
                     }
                     for (index, (entry, next_slot, _order, module)) in
                         chain_links.iter().enumerate()

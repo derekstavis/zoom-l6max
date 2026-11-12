@@ -101,53 +101,6 @@ static EXTERNAL_TEXT_PENDING: AtomicU8 = AtomicU8::new(0);
 static EXTERNAL_TEXT_ACTIVE: AtomicU8 = AtomicU8::new(0);
 
 #[cfg(sd_dynamic_module)]
-static KNOB_DIALOG_API: patch_api::runtime_api::KnobDialogV1 =
-    patch_api::runtime_api::KnobDialogV1 {
-        size: core::mem::size_of::<patch_api::runtime_api::KnobDialogV1>() as u32,
-        prepare: knob_dialog_api_prepare,
-        show: knob_dialog_api_show,
-    };
-
-/// Register the display service before any module can hook the mixer path.
-/// The module loader passes the shared registry in r0 and checks this result
-/// before publishing hook entries.
-#[cfg(sd_dynamic_module)]
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn patch_module_init(
-    registry: *mut patch_api::runtime_api::Registry,
-) -> u32 {
-    let address = core::ptr::addr_of!(KNOB_DIALOG_API) as u32;
-    if unsafe {
-        patch_api::runtime_api::Registry::register(
-            registry,
-            patch_api::runtime_api::KNOB_DIALOG_ID,
-            patch_api::runtime_api::KNOB_DIALOG_VERSION,
-            core::mem::size_of::<patch_api::runtime_api::KnobDialogV1>() as u16,
-            address,
-        )
-    } {
-        0
-    } else {
-        1
-    }
-}
-
-#[cfg(sd_dynamic_module)]
-unsafe extern "C" fn knob_dialog_api_prepare() -> u32 {
-    u32::from(!unsafe { ensure_state() }.is_null())
-}
-
-#[cfg(sd_dynamic_module)]
-unsafe extern "C" fn knob_dialog_api_show(
-    title: *const u8,
-    title_len: u32,
-    value: *const u8,
-    value_len: u32,
-) -> u32 {
-    u32::from(unsafe { publish_external_text(title, title_len, value, value_len) })
-}
-
-#[cfg(sd_dynamic_module)]
 unsafe fn publish_external_text(
     title: *const u8,
     title_len: u32,
@@ -209,6 +162,25 @@ unsafe fn publish_external_text(
     }
     EXTERNAL_TEXT_WRITER.store(false, Ordering::Release);
     true
+}
+
+/// Prepare the shared dialog before a composed dependent patch publishes text.
+#[cfg(sd_dynamic_module)]
+pub(crate) fn prepare_external_text() -> bool {
+    unsafe { !ensure_state().is_null() }
+}
+
+/// Publish bounded ASCII text from another patch in the same composed module.
+#[cfg(sd_dynamic_module)]
+pub(crate) fn show_external_text(title: &[u8], value: &[u8]) -> bool {
+    unsafe {
+        publish_external_text(
+            title.as_ptr(),
+            title.len() as u32,
+            value.as_ptr(),
+            value.len() as u32,
+        )
+    }
 }
 
 #[cfg(sd_dynamic_module)]
