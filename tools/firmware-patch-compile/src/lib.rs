@@ -469,8 +469,11 @@ fn compile_inner_with_payload(
         payload,
     )?;
 
-    let first_symbols =
-        run(Command::new(llvm_tool("L6_LLVM_NM", HOMEBREW_NM, "llvm-nm")?).arg(&elf))?;
+    let first_symbols = run(
+        Command::new(llvm_tool("L6_LLVM_NM", HOMEBREW_NM, "llvm-nm")?)
+            .arg("-S")
+            .arg(&elf),
+    )?;
     let sites = function_hook_sites(&elf)?;
     let registrations = hook_registrations(&first_symbols)?;
     let continuation_rs = generate_continuations_from_metadata(
@@ -575,7 +578,11 @@ fn compile_payload_pass(
         command.args(["--cfg", "sd_l6"]);
     }
     run(&mut command)?;
-    let symbols = run(Command::new(llvm_tool("L6_LLVM_NM", HOMEBREW_NM, "llvm-nm")?).arg(&elf))?;
+    let symbols = run(
+        Command::new(llvm_tool("L6_LLVM_NM", HOMEBREW_NM, "llvm-nm")?)
+            .arg("-S")
+            .arg(&elf),
+    )?;
     run(Command::new(llvm_tool(
         "L6_LLVM_OBJCOPY",
         HOMEBREW_OBJCOPY,

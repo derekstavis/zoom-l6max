@@ -548,6 +548,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "payload_length": module.len(),
             "memory_length": memory_len,
             "relocation_count": relocations.len(),
+            "exports": exported_symbol_offsets(&symbols),
+            "writable_data": {
+                "offset": symbol(&symbols, "__module_data_start")?,
+                "length": symbol(&symbols, "__module_data_end")?
+                    .checked_sub(symbol(&symbols, "__module_data_start")?)
+                    .ok_or("writable data range underflow")?,
+            },
             "pass_through_entry_offsets": pass_through,
             "hooks": handlers.iter().map(|(address, offset, next_offset)| serde_json::json!({"address":format!("{address:#x}"),"entry_offset":offset,"next_slot_offset":next_offset})).collect::<Vec<_>>(),
             "file_length": file.len(),
@@ -929,6 +936,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn exported_symbol_offsets(symbols: &str) -> serde_json::Value {
+    let mut exports = serde_json::Map::new();
+    for line in symbols.lines() {
+        let fields = line.split_whitespace().collect::<Vec<_>>();
+        if fields.len() < 4 || fields[2].len() != 1 {
+            continue;
+        }
+        let Ok(address) = u32::from_str_radix(fields[0], 16) else {
+            continue;
+        };
+        let Some(kind) = fields[2].chars().next() else {
+            continue;
+        };
+        if kind.is_ascii_uppercase() {
+            exports.insert(fields[3..].join(" "), serde_json::json!(address & !1));
+        }
+    }
+    serde_json::Value::Object(exports)
+}
+
 // Thumb-branch encoding is tested in `firmware-patch-core`, which owns `branch()`.
 
 #[cfg(test)]
@@ -983,6 +1010,17 @@ mod manifest_tests {
         assert!(!valid_patch_name("2patch"));
         assert!(!valid_patch_name("patch_name"));
         assert!(!valid_patch_name("../patch"));
+    }
+
+    #[test]
+    fn exported_symbol_offsets_keep_global_data_and_clear_thumb_bits() {
+        let exports = exported_symbol_offsets(
+            "00000011 00000008 T hook_entry\n00000020 00000004 B state_word\n00000030 00000004 b local_state\n",
+        );
+
+        assert_eq!(exports["hook_entry"], 0x10);
+        assert_eq!(exports["state_word"], 0x20);
+        assert!(!exports.as_object().unwrap().contains_key("local_state"));
     }
 }
 
