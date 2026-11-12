@@ -192,31 +192,29 @@ pub fn build_dynamic(
 pub fn build_dynamic_v1(
     payload: &[u8],
     memory_len: usize,
-    init_offset: u32,
     hooks: &[(u32, u32, u32)],
     relocations: &[Relocation],
 ) -> Result<Vec<u8>, String> {
     if payload.is_empty()
         || memory_len < payload.len()
         || memory_len > u32::MAX as usize
-        || init_offset & 1 != 0
-        || (init_offset != 0 && init_offset as usize >= payload.len())
         || hooks.len() > u16::MAX as usize
         || relocations.len() > u16::MAX as usize
     {
         return Err("invalid dynamic module header values".into());
     }
     let mut ordered_hooks = hooks.to_vec();
-    ordered_hooks.sort_unstable_by_key(|entry| entry.0);
+    // Stable order is significant when one composed module has several
+    // handlers for the same function. Their records form one hook chain.
+    ordered_hooks.sort_by_key(|entry| entry.0);
     if ordered_hooks.iter().any(|(address, offset, next_offset)| {
         address & 1 != 0
             || offset & 1 != 0
             || *offset as usize >= payload.len()
             || (*next_offset != u32::MAX
                 && (next_offset & 3 != 0 || *next_offset as usize + 4 > payload.len()))
-    }) || ordered_hooks.windows(2).any(|pair| pair[0].0 == pair[1].0)
-    {
-        return Err("invalid or duplicate function-entry hook".into());
+    }) {
+        return Err("invalid function-entry hook".into());
     }
 
     let mut relocation_table = Vec::with_capacity(relocations.len() * 12);
@@ -263,7 +261,7 @@ pub fn build_dynamic_v1(
     output.extend_from_slice(&(memory_len as u32).to_le_bytes());
     output.extend_from_slice(&(hooks.len() as u16).to_le_bytes());
     output.extend_from_slice(&(relocations.len() as u16).to_le_bytes());
-    output.extend_from_slice(&init_offset.to_le_bytes());
+    output.extend_from_slice(&0u32.to_le_bytes()); // reserved
     output.extend_from_slice(&[0; 4]);
     output.extend_from_slice(payload);
     for (address, entry_offset, next_offset) in ordered_hooks {
@@ -317,7 +315,7 @@ mod tests {
     #[test]
     fn emits_v1_module_with_address_hooks() {
         let payload = [0x00, 0xbf, 0x70, 0x47, 0, 0, 0, 0];
-        let file = build_dynamic_v1(&payload, 0x48000, 0, &[(0x8000_1000, 0, 4)], &[]).unwrap();
+        let file = build_dynamic_v1(&payload, 0x48000, &[(0x8000_1000, 0, 4)], &[]).unwrap();
         assert_eq!(file.len(), 28 + payload.len() + 12);
         assert_eq!(&file[..4], b"L6SB");
         assert_eq!(u16::from_le_bytes(file[4..6].try_into().unwrap()), 1);
@@ -352,7 +350,7 @@ mod tests {
             0x00, 0xbf, 0x70, 0x47, 0, 0, 0, 0, 0, 0xbf, 0x70, 0x47, 0, 0, 0, 0,
         ];
         let hooks = [(0x8000_1000, 0, 4), (0x8000_2000, 8, 12)];
-        let file = build_dynamic_v1(&payload, 0x48000, 0, &hooks, &[]).unwrap();
+        let file = build_dynamic_v1(&payload, 0x48000, &hooks, &[]).unwrap();
         assert_eq!(u16::from_le_bytes(file[16..18].try_into().unwrap()), 2);
         assert_eq!(file.len(), 28 + payload.len() + hooks.len() * 12);
         assert_eq!(
@@ -374,11 +372,36 @@ mod tests {
     }
 
     #[test]
+    fn preserves_composed_handler_order_for_same_function() {
+        let payload = [0u8; 16];
+        let hooks = [(0x8000_1000, 8, 12), (0x8000_1000, 0, 4)];
+        let file = build_dynamic_v1(&payload, payload.len(), &hooks, &[]).unwrap();
+        let first = patch_loader_core::dynamic::HEADER_LEN_V1 + payload.len();
+        let second = first + patch_loader_core::dynamic::HOOK_RECORD_LEN;
+
+        assert_eq!(
+            u32::from_le_bytes(file[first..first + 4].try_into().unwrap()),
+            0x8000_1000
+        );
+        assert_eq!(
+            u32::from_le_bytes(file[first + 4..first + 8].try_into().unwrap()),
+            8
+        );
+        assert_eq!(
+            u32::from_le_bytes(file[second + 4..second + 8].try_into().unwrap()),
+            0
+        );
+    }
+
+    #[test]
     fn emits_v1_state_length_without_storing_zero_fill() {
         let payload = [0x00, 0xbf, 0x70, 0x47];
-        let file = build_dynamic_v1(&payload, 0x48000, 0, &[(0x8000_1000, 0, 0)], &[]).unwrap();
+        let file = build_dynamic_v1(&payload, 0x48000, &[(0x8000_1000, 0, 0)], &[]).unwrap();
         assert_eq!(file.len(), 28 + payload.len() + 12);
-        assert_eq!(u16::from_le_bytes(file[4..6].try_into().unwrap()), 1);
+        assert_eq!(
+            u16::from_le_bytes(file[4..6].try_into().unwrap()),
+            patch_loader_core::dynamic::FORMAT_VERSION
+        );
         assert_eq!(u32::from_le_bytes(file[8..12].try_into().unwrap()), 4);
         assert_eq!(
             u32::from_le_bytes(file[12..16].try_into().unwrap()),

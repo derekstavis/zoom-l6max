@@ -215,6 +215,21 @@ wrapper chain unwinds, so their callback order is the reverse of the filename
 order. This filename ordering describes SD modules; static patch composition
 is determined by the selected payloads and the static builder, not SD filenames.
 
+### Build-time patch dependencies
+
+Patches can list other patch names in `requires` in
+`patches/<patch>/module.json`. The SD builder resolves the dependency closure,
+checks for missing patches and cycles, then compiles the selected patches and
+their dependencies into one loadable module. The source modules share one
+patch runtime, firmware catalog, and allocation. Hook handlers for the same
+function keep separate continuation slots and follow dependency order, then
+the user's requested patch order.
+
+Composition is a build-time operation. It creates one `COMPOSED-PATCHES.BIN`
+for the selected patches, so removing that file removes all included features
+together. No runtime patch registry, initializer, or patch-to-patch function
+table is required.
+
 ## Calling an original continuation
 
 Within an entry hook, use `hook_continue(...)` for that hook's own chain. Use

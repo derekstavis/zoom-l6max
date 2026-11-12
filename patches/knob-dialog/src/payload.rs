@@ -1,18 +1,32 @@
-#![no_std]
-#![no_main]
+#![cfg_attr(not(sd_composed), no_std)]
+#![cfg_attr(not(sd_composed), no_main)]
+#[cfg(not(sd_composed))]
 #[path = "../../api/patchrt.rs"]
 #[macro_use]
+#[cfg(not(sd_composed))]
 pub mod patch_api;
+#[cfg(sd_composed)]
+use crate::patch_api;
 use core::ptr::{read_volatile as read, write_volatile as write};
 use core::sync::atomic::{AtomicU8, Ordering};
 use patch_api::function_call_post_hook;
 
+#[cfg(not(sd_composed))]
 mod firmware;
+#[cfg(not(sd_composed))]
 use firmware as firmware_bindings;
 #[path = "../../api/l6max/hooks.rs"]
+#[cfg(not(sd_composed))]
 mod hook_catalog;
 mod values;
+#[cfg(not(sd_composed))]
 use firmware::*;
+#[cfg(sd_composed)]
+use crate::firmware_bindings::*;
+
+// Original firmware EQ coefficient tables, not reconstructed curves.
+const EQ_GAIN_DB_TABLE: u32 = 0x800a_5138;
+const EQ_MID_FREQUENCY_HZ_TABLE: u32 = 0x800a_5738;
 
 #[used]
 #[unsafe(link_section = ".rodata.scene_prototype")]
@@ -458,7 +472,7 @@ unsafe fn ensure_state() -> *mut State {
         // another component may have installed since boot.
         let callback_slot = gui_display_callback_table.address() as *const u32;
         let callback_slot = callback_slot.add(DISPLAY_CALLBACK_SLOT);
-        let callback = crate::knob_dialog_display_tick as usize as u32 | 1;
+        let callback = knob_dialog_display_tick as usize as u32 | 1;
         let registered = read(callback_slot);
         if gui_bitmap_table_entry_0.read() != 0
             || (registered != 0 && registered != callback)

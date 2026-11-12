@@ -277,6 +277,83 @@ pub fn compile_sd_relocatable(
     Ok((image, memory_len, symbols, relocations))
 }
 
+/// Compile several patch payload roots into one relocatable SD module. Each
+/// source remains namespaced as a Rust module, while the shared patch runtime
+/// and any dependency modules are linked exactly once.
+pub fn compile_sd_relocatable_composed(
+    source: &Path,
+    roots: &[(&str, &Path)],
+    output: &Path,
+    name: &str,
+    base: u32,
+) -> Result<(Vec<u8>, usize, String, Vec<Relocation>), Box<dyn std::error::Error>> {
+    if roots.is_empty() {
+        return Err("composed module has no patch roots".into());
+    }
+    let mut source_text = String::from("#![no_std]\n#![no_main]\n#[path = \"");
+    let firmware = fs::read(source.join("main_firmware.bin"))?;
+    let model_dir = if firmware.get(4..8) == Some(&0x8000_1415u32.to_le_bytes()) {
+        "l6"
+    } else {
+        "l6max"
+    };
+    let patchrt = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../patches/api/patchrt.rs")
+        .canonicalize()?;
+    source_text.push_str(&patchrt.display().to_string());
+    source_text.push_str("\"]\n#[macro_use]\npub mod patch_api;\n");
+    let api_root =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../patches/api/{model_dir}"));
+    source_text.push_str(&format!(
+        "#[path = {:?}]\nmod firmware_bindings;\n#[path = {:?}]\nmod hook_catalog;\n",
+        api_root
+            .join("mod.rs")
+            .canonicalize()?
+            .display()
+            .to_string(),
+        api_root
+            .join("hooks.rs")
+            .canonicalize()?
+            .display()
+            .to_string(),
+    ));
+    for (patch_name, root) in roots {
+        let module_name = patch_name.replace('-', "_");
+        let payload = root.join("src/payload.rs").canonicalize()?;
+        source_text.push_str(&format!(
+            "#[path = {:?}]\nmod {module_name};\n",
+            payload.display().to_string()
+        ));
+    }
+    let composed_root = output.join(format!("{}_composed.rs", name.replace('-', "_")));
+    fs::write(&composed_root, source_text)?;
+    let link_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../patches/api/composed");
+    let (image, symbols) = compile_inner_with_payload(
+        source,
+        &link_root,
+        output,
+        name,
+        base,
+        Some("sd_dynamic"),
+        true,
+        false,
+        true,
+        &["sd_composed"],
+        &composed_root,
+    )?;
+    let elf = output.join(format!("{name}.payload.elf"));
+    let memory_len = symbols
+        .lines()
+        .find(|line| line.split_whitespace().last() == Some("__module_memory_end"))
+        .and_then(|line| u32::from_str_radix(line.split_whitespace().next()?, 16).ok())
+        .and_then(|end| end.checked_sub(base))
+        .map(|length| length as usize)
+        .unwrap_or(image.len())
+        .max(image.len());
+    let relocations = parse_relocations(&elf, base, image.len(), memory_len)?;
+    Ok((image, memory_len, symbols, relocations))
+}
+
 /// Compile the Patch loader against the separate L6 firmware bindings.
 pub fn compile_l6_patch_loader(
     source: &Path,
@@ -338,6 +415,34 @@ fn compile_inner(
     validate_guards: bool,
     extra_cfgs: &[&str],
 ) -> Result<(Vec<u8>, String), Box<dyn std::error::Error>> {
+    compile_inner_with_payload(
+        source,
+        root,
+        output,
+        name,
+        base,
+        cfg,
+        emit_relocations,
+        generate_dynamic_sites,
+        validate_guards,
+        extra_cfgs,
+        &root.join("src/payload.rs"),
+    )
+}
+
+fn compile_inner_with_payload(
+    source: &Path,
+    root: &Path,
+    output: &Path,
+    name: &str,
+    base: u32,
+    cfg: Option<&str>,
+    emit_relocations: bool,
+    generate_dynamic_sites: bool,
+    validate_guards: bool,
+    extra_cfgs: &[&str],
+    payload: &Path,
+) -> Result<(Vec<u8>, String), Box<dyn std::error::Error>> {
     let generated = output.join(format!("{name}.generated"));
     fs::create_dir_all(&generated)?;
     let generated = generated.canonicalize()?;
@@ -347,7 +452,7 @@ fn compile_inner(
     let hook_macro = patch_hook_macro_library()?;
     fs::write(
         generated.join("continuations.rs"),
-        "pub fn address(_: &str) -> usize { 0 }\n",
+        "pub fn address(_: &str) -> usize { 0 }\npub fn handler_address(_: &str, _: &str) -> usize { 0 }\n",
     )?;
     let _ = compile_payload_pass(
         source,
@@ -361,6 +466,7 @@ fn compile_inner(
         &elf,
         &blob,
         &hook_macro,
+        payload,
     )?;
 
     let first_symbols =
@@ -388,6 +494,7 @@ fn compile_inner(
         &elf,
         &blob,
         &hook_macro,
+        payload,
     )
 }
 
@@ -404,10 +511,15 @@ fn compile_payload_pass(
     elf: &Path,
     blob: &Path,
     hook_macro: &Path,
+    payload: &Path,
 ) -> Result<(Vec<u8>, String), Box<dyn std::error::Error>> {
     let firmware = fs::read(source.join("main_firmware.bin"))?;
+    let dynamic_linker = root.join("linker/link-dynamic.ld");
     let static_state_linker = root.join("linker/link-static.ld");
-    let linker_script = if cfg.is_none() && !emit_relocations && static_state_linker.is_file() {
+    let linker_script = if cfg == Some("sd_dynamic") && emit_relocations && dynamic_linker.is_file()
+    {
+        dynamic_linker
+    } else if cfg.is_none() && !emit_relocations && static_state_linker.is_file() {
         static_state_linker
     } else {
         root.join("linker/link.ld")
@@ -417,7 +529,7 @@ fn compile_payload_pass(
     command
         .current_dir(source)
         .env("OUT_DIR", &generated)
-        .arg(root.join("src/payload.rs"))
+        .arg(payload)
         .arg("--extern")
         .arg(format!("patch_hook_macros={}", hook_macro.display()))
         // Use a checkout-independent source path in compiler-generated data.
@@ -535,6 +647,7 @@ fn generate_continuations_from_metadata(
 
     let mut assembly = String::from(".thumb\n");
     let mut address_arms = Vec::new();
+    let mut handler_address_arms = Vec::new();
     let mut externs = Vec::new();
     let mut wrappers = Vec::new();
     for name in needed {
@@ -628,6 +741,51 @@ fn generate_continuations_from_metadata(
         address_arms.push(format!(
             "{} => {original} as *const () as usize,",
             format!("\"{name}\"")
+        ));
+    }
+
+    for registration in registrations {
+        let (site_name, handler_name) = match registration {
+            HookRegistration::Entry { site, handler } => (site, handler),
+            HookRegistration::CallPre {
+                function, handler, ..
+            }
+            | HookRegistration::CallPost {
+                function, handler, ..
+            } => (function, handler),
+            HookRegistration::Offset { .. } => continue,
+        };
+        let site = sites
+            .iter()
+            .find(|site| site.name == *site_name)
+            .ok_or_else(|| {
+                format!("hook site {site_name} is missing from define_function_hooks!")
+            })?;
+        let original = format!("original_{site_name}_{handler_name}");
+        validate_asm_symbol(&original)?;
+        externs.push(format!("unsafe extern \"C\" {{ fn {original}(); }}"));
+
+        if dynamic && site.dynamic_dispatch {
+            let slot = format!("dynamic_next_{site_name}_{handler_name}_slot");
+            validate_asm_symbol(&slot)?;
+            assembly.push_str(&format!(
+                ".section .text.continuation_{site_name}_{handler_name}, \"ax\"\n.global {original}\n.thumb_func\n{original}:\n    ldr r12, ={slot}\n    ldr r12, [r12]\n    bx r12\n.align 2\n.global {slot}\n{slot}:\n    .word 0\n"
+            ));
+        } else {
+            let slot = format!("static_next_{site_name}_{handler_name}_slot");
+            let target = if generate_dynamic_sites {
+                format!("original_{site_name}")
+            } else {
+                format!("static_stock_{site_name}")
+            };
+            validate_asm_symbol(&slot)?;
+            validate_asm_symbol(&target)?;
+            assembly.push_str(&format!(
+                ".section .text.continuation_{site_name}_{handler_name}, \"ax\"\n.global {original}\n.thumb_func\n{original}:\n    ldr r12, ={slot}\n    ldr r12, [r12]\n    bx r12\n.align 2\n.global {slot}\n{slot}:\n    .word {target}\n"
+            ));
+        }
+        handler_address_arms.push(format!(
+            "({site_name:?}, {handler_name:?}) => {original} as *const () as usize,"
         ));
     }
 
@@ -808,14 +966,15 @@ fn generate_continuations_from_metadata(
 
     if !assembly.trim().eq(".thumb") {
         Ok(format!(
-            "use core::arch::global_asm;\nglobal_asm!(r####\"{assembly}\"####, options(raw));\n{}\npub fn address(name: &str) -> usize {{ match name {{ {} _ => 0 }} }}\n{}\n{}\n",
+            "use core::arch::global_asm;\nglobal_asm!(r####\"{assembly}\"####, options(raw));\n{}\npub fn address(name: &str) -> usize {{ match name {{ {} _ => 0 }} }}\npub fn handler_address(site: &str, handler: &str) -> usize {{ match (site, handler) {{ {} _ => 0 }} }}\n{}\n{}\n",
             externs.join("\n"),
             address_arms.join(" "),
+            handler_address_arms.join(" "),
             offset_wrappers.join("\n"),
             wrappers.join("\n"),
         ))
     } else {
-        Ok("pub fn address(_: &str) -> usize { 0 }\n".to_owned())
+        Ok("pub fn address(_: &str) -> usize { 0 }\npub fn handler_address(_: &str, _: &str) -> usize { 0 }\n".to_owned())
     }
 }
 

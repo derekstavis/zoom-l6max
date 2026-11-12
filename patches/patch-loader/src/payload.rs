@@ -459,11 +459,6 @@ unsafe fn load_dynamic<R: core_loader::bundle::Reader>(reader: &mut R, order: u3
             return false;
         }
     };
-    // This first format revision supports stateless handlers. A later loader
-    // ABI can add an initializer protocol without changing function hooks.
-    if pending.header.init_offset != 0 {
-        return false;
-    }
     let module = unsafe { alloc(pending.header.memory_len) };
     if module.is_null() || module as usize > u32::MAX as usize {
         if !module.is_null() {
@@ -506,6 +501,7 @@ unsafe fn load_dynamic<R: core_loader::bundle::Reader>(reader: &mut R, order: u3
         address: u32,
         entry: u32,
         next_slot: u32,
+        order: u32,
         chain: *mut core_loader::dynamic::FunctionHookChain,
         expected_count: u32,
         dispatch_index: usize,
@@ -515,13 +511,14 @@ unsafe fn load_dynamic<R: core_loader::bundle::Reader>(reader: &mut R, order: u3
         address: 0,
         entry: 0,
         next_slot: 0,
+        order: 0,
         chain: ptr::null_mut(),
         expected_count: 0,
         dispatch_index: 0,
     }; MAX_HOOKS];
     let mut reserved_chains = [ptr::null_mut(); MAX_HOOKS];
     let mut planned = 0usize;
-    for hook in hooks.iter().take(header.hook_count).copied() {
+    for (hook_index, hook) in hooks.iter().take(header.hook_count).copied().enumerate() {
         if hook.next_slot_offset == u32::MAX {
             unsafe {
                 clear_payload(loaded_base, header.memory_len);
@@ -540,8 +537,9 @@ unsafe fn load_dynamic<R: core_loader::bundle::Reader>(reader: &mut R, order: u3
             }
             return false;
         };
-        // Several handlers in one module may target the same function. Reuse
-        // their reserved chain row instead of reserving an empty row per hook.
+        // Several handlers in one composed module may target the same
+        // function. Reuse their reserved chain row instead of reserving one
+        // empty row per hook record.
         let chain = plans[..planned]
             .iter()
             .find(|plan| plan.address == hook.address)
@@ -558,8 +556,10 @@ unsafe fn load_dynamic<R: core_loader::bundle::Reader>(reader: &mut R, order: u3
         let expected_count = chain_value.count;
         let entry = loaded_base as u32 + hook.entry_offset | 1;
         let next_slot = loaded_base as u32 + hook.next_slot_offset;
+        let hook_order = order * core_loader::dynamic::MAX_HOOKS_PER_MODULE as u32
+            + hook_index as u32;
         let previous_slot =
-            chain_value.append(hook.address, entry, next_slot, order, loaded_base as u32);
+            chain_value.append(hook.address, entry, next_slot, hook_order, loaded_base as u32);
         if previous_slot.is_err() {
             unsafe {
                 clear_payload(loaded_base, header.memory_len);
@@ -571,6 +571,7 @@ unsafe fn load_dynamic<R: core_loader::bundle::Reader>(reader: &mut R, order: u3
             address: hook.address,
             entry,
             next_slot,
+            order: hook_order,
             chain,
             expected_count,
             dispatch_index,
@@ -629,7 +630,7 @@ unsafe fn load_dynamic<R: core_loader::bundle::Reader>(reader: &mut R, order: u3
                     plan.address,
                     plan.entry,
                     plan.next_slot,
-                    order,
+                    plan.order,
                     loaded_base as u32,
                 )
                 .unwrap();

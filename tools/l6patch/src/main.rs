@@ -2,7 +2,7 @@
 mod sd_bundle;
 use firmware_patch_compile::{
     FunctionHookSiteMetadata, HookRegistration, compile, compile_l6_patch_loader, compile_sd,
-    compile_sd_relocatable, compile_with_continuations, compile_with_continuations_cfg,
+    compile_sd_relocatable_composed, compile_with_continuations, compile_with_continuations_cfg,
     decode_thumb_bl_target, function_hook_sites, hook_registrations, symbol,
 };
 use firmware_patch_core::{
@@ -11,11 +11,12 @@ use firmware_patch_core::{
 };
 use sha2::{Digest, Sha256};
 use std::{
+    collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
 };
 const USAGE: &str = "Usage: l6patch INPUT_UNPACKED_DIR OUTPUT_DIR [--patch NAME]... [--update-version FOUR_DIGITS] [--experimental-patch-bundle | --experimental-patch-loader] [--experimental-qemu-module-arena]\n\
-Patches: knob-dialog, midi-control, midi-sync, din-mixer-control. Repeat --patch to combine them. MIDI Control and MIDI Sync can be combined. The Patch loader is experimental and unqualified.";
+Patch names come from patches/<name>/module.json. Repeat --patch to select multiple patches; dependencies are included automatically. The Patch loader is experimental and unqualified.";
 
 const SD_MODULE_BASE: u32 = 0x8011_0000;
 const SD_MODULE_END: u32 = 0x8011_8000;
@@ -25,7 +26,7 @@ const L6_SD_MODULE_END: u32 = 0x800c_8000;
 struct Options {
     source: PathBuf,
     output: PathBuf,
-    patches: Option<Vec<&'static str>>,
+    patches: Option<Vec<String>>,
     version: Option<String>,
     experimental_sd_bundle: bool,
     experimental_patch_loader: bool,
@@ -56,12 +57,9 @@ fn parse_args() -> Result<Options, Box<dyn std::error::Error>> {
         }
         let value = args.next().ok_or(USAGE)?;
         match flag.as_str() {
-            "--patch" => requested.push(
-                *PATCHES
-                    .iter()
-                    .find(|name| **name == value)
-                    .ok_or_else(|| format!("unknown patch {value}\n{USAGE}"))?,
-            ),
+            "--patch" => {
+                requested.push(value);
+            }
             "--update-version" => version = Some(value),
             _ => return Err(USAGE.into()),
         }
@@ -69,12 +67,7 @@ fn parse_args() -> Result<Options, Box<dyn std::error::Error>> {
     let patches = if requested.is_empty() {
         None
     } else {
-        Some(
-            PATCHES
-                .into_iter()
-                .filter(|n| requested.contains(n))
-                .collect(),
-        )
+        Some(resolve_patch_dependencies(&requested)?)
     };
     if version
         .as_ref()
@@ -98,6 +91,108 @@ fn parse_args() -> Result<Options, Box<dyn std::error::Error>> {
         experimental_qemu_module_arena,
     })
 }
+
+#[derive(Default)]
+struct PatchManifest {
+    requires: Vec<String>,
+}
+
+/// Resolve dependencies at build time. SD builds link the closure into one
+/// module; firmware builds apply each member to the firmware image.
+fn resolve_patch_dependencies(
+    requested: &[String],
+) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    let patch_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../patches");
+    let mut manifests = BTreeMap::<String, PatchManifest>::new();
+    for entry in fs::read_dir(&patch_root)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let path = entry.path().join("module.json");
+        if !path.exists() {
+            continue;
+        }
+        let value: serde_json::Value = serde_json::from_slice(&fs::read(path)?)?;
+        let name = value["name"]
+            .as_str()
+            .ok_or("module.json requires a string `name`")?
+            .to_owned();
+        if !valid_patch_name(&name) {
+            return Err(format!("invalid patch name `{name}`").into());
+        }
+        if entry.file_name().to_string_lossy() != name {
+            return Err(format!(
+                "patch directory `{}` does not match manifest name `{name}`",
+                entry.file_name().to_string_lossy()
+            )
+            .into());
+        }
+        let manifest = PatchManifest {
+            requires: value["requires"]
+                .as_array()
+                .ok_or_else(|| format!("patch `{name}` requires `requires` to be an array"))?
+                .iter()
+                .map(|dependency| {
+                    dependency
+                        .as_str()
+                        .map(str::to_owned)
+                        .ok_or_else(|| format!("patch `{name}` dependencies must be patch names"))
+                })
+                .collect::<Result<_, _>>()?,
+        };
+        if manifests.insert(name.clone(), manifest).is_some() {
+            return Err(format!("duplicate patch manifest name `{name}`").into());
+        }
+    }
+
+    Ok(resolve_dependency_order(requested, &manifests)?)
+}
+
+fn valid_patch_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.as_bytes()[0].is_ascii_lowercase()
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+}
+
+fn resolve_dependency_order(
+    requested: &[String],
+    manifests: &BTreeMap<String, PatchManifest>,
+) -> Result<Vec<String>, String> {
+    fn visit(
+        name: &str,
+        manifests: &BTreeMap<String, PatchManifest>,
+        active: &mut BTreeSet<String>,
+        complete: &mut BTreeSet<String>,
+        ordered: &mut Vec<String>,
+    ) -> Result<(), String> {
+        if complete.contains(name) {
+            return Ok(());
+        }
+        if !active.insert(name.to_owned()) {
+            return Err(format!("patch dependency cycle at `{name}`"));
+        }
+        let manifest = manifests
+            .get(name)
+            .ok_or_else(|| format!("patch `{name}` has no patches/{name}/module.json"))?;
+        for dependency in &manifest.requires {
+            visit(dependency, manifests, active, complete, ordered)?;
+        }
+        active.remove(name);
+        complete.insert(name.to_owned());
+        ordered.push(name.to_owned());
+        Ok(())
+    }
+    let mut active = BTreeSet::new();
+    let mut complete = BTreeSet::new();
+    let mut ordered = Vec::new();
+    for name in requested {
+        visit(name, &manifests, &mut active, &mut complete, &mut ordered)?;
+    }
+    Ok(ordered)
+}
 #[derive(Debug)]
 struct ResolvedHook {
     address: u32,
@@ -106,10 +201,11 @@ struct ResolvedHook {
     length: usize,
     guard_sha256: String,
     continuation_site: Option<String>,
+    continuation_handler: Option<String>,
 }
 
 struct CompiledPatch {
-    name: &'static str,
+    name: String,
     base: u32,
     payload: Vec<u8>,
     symbols: String,
@@ -159,6 +255,7 @@ fn resolve_compiled_hooks(
                 length,
                 guard_sha256,
                 continuation_site: Some(function.clone()),
+                continuation_handler: None,
             });
             continue;
         }
@@ -245,6 +342,13 @@ fn resolve_compiled_hooks(
                     unreachable!()
                 }
             },
+            continuation_handler: match registration {
+                HookRegistration::Entry { handler, .. } => Some(handler.clone()),
+                HookRegistration::Offset { .. } => None,
+                HookRegistration::CallPre { .. } | HookRegistration::CallPost { .. } => {
+                    unreachable!()
+                }
+            },
         });
     }
     Ok(hooks)
@@ -274,10 +378,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let patches = options.patches.unwrap_or_else(|| match model {
         _ if options.experimental_patch_loader || options.experimental_sd_bundle => vec![],
-        l6fw::Model::L6 => vec!["midi-sync"],
-        l6fw::Model::L6max => vec!["knob-dialog"],
+        l6fw::Model::L6 => vec!["midi-sync".to_owned()],
+        l6fw::Model::L6max => vec!["knob-dialog".to_owned()],
     });
-    if model == l6fw::Model::L6 && patches.iter().any(|name| *name != "midi-sync") {
+    if !options.experimental_patch_loader
+        && !options.experimental_sd_bundle
+        && patches.iter().any(|name| !PATCHES.contains(&name.as_str()))
+    {
+        return Err(
+            "the selected patch is not supported for built-in firmware installation".into(),
+        );
+    }
+    if model == l6fw::Model::L6 && patches.iter().any(|name| name != "midi-sync") {
         return Err("L6 firmware detected; only the midi-sync patch is supported".into());
     }
     // The original knob-only build keeps its published marker; anything else is newer.
@@ -303,15 +415,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let patch_root = Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("../../patches")
                 .join(name);
-            let patch_root = if *name == "midi-sync" || *name == "midi-control" {
-                patch_root.join(if patch_model == FirmwareModel::L6 {
-                    "l6"
-                } else {
-                    "l6max"
-                })
+            let model_root = patch_root.join(if patch_model == FirmwareModel::L6 {
+                "l6"
+            } else {
+                "l6max"
+            });
+            let patch_root = if model_root.join("src/payload.rs").is_file() {
+                model_root
             } else {
                 patch_root
             };
+            if !patch_root.join("src/payload.rs").is_file() {
+                let model_name = if patch_model == FirmwareModel::L6 {
+                    "L6"
+                } else {
+                    "L6max"
+                };
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("patch `{name}` has no {model_name} implementation"),
+                ));
+            }
             patch_root.canonicalize()
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -323,114 +447,123 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let output = options.output.canonicalize()?;
         let patch_dir = output.join("PATCHES");
         fs::create_dir_all(&patch_dir)?;
-        let mut reports = Vec::new();
-        for (name, root) in patches.iter().zip(&roots) {
-            let (module, memory_len, symbols, relocations) =
-                compile_sd_relocatable(&source, root, &output, name, 0)?;
-            let sites = function_hook_sites(&output.join(format!("{name}.payload.elf")))?;
-            let registrations = hook_registrations(&symbols)?;
-            if registrations.is_empty() {
-                return Err(format!(
-                    "dynamic bundles require at least one hook registration; {name} has none"
-                )
-                .into());
-            }
-            let firmware_base = match model {
-                l6fw::Model::L6 => 0x8000_1000,
-                l6fw::Model::L6max => 0x8000_0000,
-            };
-            let image = fs::read(source.join("main_firmware.bin"))?;
-            let mut handlers = Vec::with_capacity(registrations.len());
-            let mut pass_through = Vec::with_capacity(registrations.len());
-            let mut registered_addresses = std::collections::BTreeSet::new();
-            for registration in &registrations {
-                let (site_name, handler_symbol) = match registration {
-                    HookRegistration::Entry { site, handler } => (site.as_str(), handler.clone()),
-                    HookRegistration::CallPre {
-                        function,
-                        address,
-                        handler,
-                        ..
-                    }
-                    | HookRegistration::CallPost {
-                        function,
-                        address,
-                        handler,
-                        ..
-                    } => {
-                        let target = decode_thumb_bl_target(&image, firmware_base, *address)?;
-                        let function_site = sites.iter().find(|site| site.name == *function)
-                            .ok_or_else(|| format!("call hook function {function} is missing from define_function_hooks!"))?;
-                        if target != function_site.address {
-                            return Err(format!(
-                                "dynamic call hook at {address:#x} targets {target:#x}, expected {} at {:#x}",
-                                function, function_site.address
-                            ).into());
-                        }
-                        let phase = match registration {
-                            HookRegistration::CallPre { .. } => "pre",
-                            HookRegistration::CallPost { .. } => "post",
-                            _ => unreachable!(),
-                        };
-                        (
-                            function.as_str(),
-                            format!("__l6_dynamic_call_{phase}_{handler}"),
-                        )
-                    }
-                    HookRegistration::Offset { .. } => {
-                        return Err("function-offset hooks are static-only".into());
-                    }
-                };
-                let site = sites
-                    .iter()
-                    .find(|site| site.name == site_name && site.dynamic_dispatch)
-                    .ok_or_else(|| {
-                        format!("dynamic hook {site_name} is not a dynamic catalog site")
-                    })?;
-                if !registered_addresses.insert(site.address) {
-                    return Err(format!(
-                        "dynamic module {name} registers more than one handler for {site_name}; combine same-site behavior in one handler"
-                    ).into());
-                }
-                let next_slot = symbol(&symbols, &format!("dynamic_next_{}_slot", site.name))?;
-                handlers.push((site.address, symbol(&symbols, &handler_symbol)?, next_slot));
-                pass_through.push(symbol(&symbols, &format!("original_{}", site.name))?);
-            }
-            if handlers.len() > patch_loader_core::dynamic::MAX_HOOKS_PER_MODULE {
-                return Err(format!(
-                    "dynamic module {name} has {} hooks; loader limit is {}",
-                    handlers.len(),
-                    patch_loader_core::dynamic::MAX_HOOKS_PER_MODULE
-                )
-                .into());
-            }
-            let file =
-                sd_bundle::build_dynamic_v1(&module, memory_len, 0, &handlers, &relocations)?;
-            let filename = format!("{}.BIN", name.to_ascii_uppercase());
-            fs::write(patch_dir.join(&filename), &file)?;
-            reports.push(serde_json::json!({
-                "name": name,
-                "file": format!("PATCHES/{filename}"),
-                "payload_length": module.len(),
-                "memory_length": memory_len,
-                "relocation_count": relocations.len(),
-                "pass_through_entry_offsets": pass_through,
-                "hooks": handlers.iter().map(|(address, offset, next_offset)| serde_json::json!({"address":format!("{address:#x}"),"entry_offset":offset,"next_slot_offset":next_offset})).collect::<Vec<_>>(),
-                "file_length": file.len(),
-            }));
+
+        // Dependencies run before their dependents, followed by the user's
+        // requested patch order. That order defines same-site hook chains.
+        let module_roots = patches.iter().zip(&roots).collect::<Vec<_>>();
+        let root_refs = module_roots
+            .iter()
+            .map(|(name, root)| (name.as_str(), root.as_path()))
+            .collect::<Vec<_>>();
+        let bundle_name = "composed-patches";
+        let (module, memory_len, symbols, relocations) =
+            compile_sd_relocatable_composed(&source, &root_refs, &output, bundle_name, 0)?;
+        let sites = function_hook_sites(&output.join(format!("{bundle_name}.payload.elf")))?;
+        let registrations = hook_registrations(&symbols)?;
+        if registrations.is_empty() {
+            return Err("dynamic bundle has no hook registrations".into());
         }
+        let firmware_base = match model {
+            l6fw::Model::L6 => 0x8000_1000,
+            l6fw::Model::L6max => 0x8000_0000,
+        };
+        let image = fs::read(source.join("main_firmware.bin"))?;
+        let mut handlers = Vec::with_capacity(registrations.len());
+        let mut pass_through = Vec::with_capacity(registrations.len());
+        for registration in &registrations {
+            let (site_name, handler_symbol, continuation_handler) = match registration {
+                HookRegistration::Entry { site, handler } => {
+                    (site.as_str(), handler.clone(), handler.clone())
+                }
+                HookRegistration::CallPre {
+                    function,
+                    address,
+                    handler,
+                    ..
+                }
+                | HookRegistration::CallPost {
+                    function,
+                    address,
+                    handler,
+                    ..
+                } => {
+                    let target = decode_thumb_bl_target(&image, firmware_base, *address)?;
+                    let function_site = sites
+                        .iter()
+                        .find(|site| site.name == *function)
+                        .ok_or_else(|| {
+                            format!("call hook function {function} is missing from define_function_hooks!")
+                        })?;
+                    if target != function_site.address {
+                        return Err(format!(
+                            "dynamic call hook at {address:#x} targets {target:#x}, expected {} at {:#x}",
+                            function, function_site.address
+                        )
+                        .into());
+                    }
+                    let phase = match registration {
+                        HookRegistration::CallPre { .. } => "pre",
+                        HookRegistration::CallPost { .. } => "post",
+                        _ => unreachable!(),
+                    };
+                    (
+                        function.as_str(),
+                        format!("__l6_dynamic_call_{phase}_{handler}"),
+                        handler.clone(),
+                    )
+                }
+                HookRegistration::Offset { .. } => {
+                    return Err("function-offset hooks are static-only".into());
+                }
+            };
+            let site = sites
+                .iter()
+                .find(|site| site.name == site_name && site.dynamic_dispatch)
+                .ok_or_else(|| format!("dynamic hook {site_name} is not a dynamic catalog site"))?;
+            let next_slot = symbol(
+                &symbols,
+                &format!("dynamic_next_{}_{}_slot", site.name, continuation_handler),
+            )?;
+            handlers.push((site.address, symbol(&symbols, &handler_symbol)?, next_slot));
+            pass_through.push(symbol(
+                &symbols,
+                &format!("original_{}_{}", site.name, continuation_handler),
+            )?);
+        }
+        if handlers.len() > patch_loader_core::dynamic::MAX_HOOKS_PER_MODULE {
+            return Err(format!(
+                "composed module has {} hooks; loader limit is {}",
+                handlers.len(),
+                patch_loader_core::dynamic::MAX_HOOKS_PER_MODULE
+            )
+            .into());
+        }
+        let file = sd_bundle::build_dynamic_v1(&module, memory_len, &handlers, &relocations)?;
+        let filename = format!("{}.BIN", bundle_name.to_ascii_uppercase());
+        fs::write(patch_dir.join(&filename), &file)?;
+        let report_patch = serde_json::json!({
+            "name": bundle_name,
+            "members": patches,
+            "file": format!("PATCHES/{filename}"),
+            "payload_length": module.len(),
+            "memory_length": memory_len,
+            "relocation_count": relocations.len(),
+            "pass_through_entry_offsets": pass_through,
+            "hooks": handlers.iter().map(|(address, offset, next_offset)| serde_json::json!({"address":format!("{address:#x}"),"entry_offset":offset,"next_slot_offset":next_offset})).collect::<Vec<_>>(),
+            "file_length": file.len(),
+        });
         let report = serde_json::json!({
-            "version": 9,
+            "version": patch_loader_core::dynamic::FORMAT_VERSION,
             "loader_abi": patch_loader_core::dynamic::LOADER_ABI,
             "model": if model == l6fw::Model::L6 { "L6" } else { "L6max" },
             "source_sha256": digest,
-            "patches": reports,
+            "patches": [report_patch],
         });
         fs::write(
             output.join("patch.json"),
             serde_json::to_vec_pretty(&report)?,
         )?;
-        println!("Wrote per-patch files under {}", patch_dir.display());
+        println!("Wrote one composed module under {}", patch_dir.display());
         return Ok(());
     }
     let mut claimed: Vec<(u32, usize)> = Vec::new();
@@ -450,47 +583,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../patches/patch-loader")
             .canonicalize()?;
-        let patches_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../patches");
-        let midi_profile = if model == l6fw::Model::L6 {
-            "l6"
-        } else {
-            "l6max"
-        };
-        let midi_root = patches_root.join("midi-sync").join(midi_profile);
-        let mut continuation_roots = vec![midi_root.as_path()];
-        let knob_root = patches_root.join("knob-dialog");
-        if model == l6fw::Model::L6max {
-            continuation_roots.push(knob_root.as_path());
-        }
         let (payload, symbols) = if model == l6fw::Model::L6 {
-            compile_l6_patch_loader(
-                &source,
-                &root,
-                &output,
-                "patch-loader",
-                end,
-                &continuation_roots,
-            )?
+            compile_l6_patch_loader(&source, &root, &output, "patch-loader", end, &[])?
         } else {
             if options.experimental_qemu_module_arena {
                 compile_with_continuations_cfg(
                     &source,
                     &root,
-                    &continuation_roots,
+                    &[],
                     &output,
                     "patch-loader",
                     end,
                     &["sd_qemu_module_arena"],
                 )?
             } else {
-                compile_with_continuations(
-                    &source,
-                    &root,
-                    &continuation_roots,
-                    &output,
-                    "patch-loader",
-                    end,
-                )?
+                compile_with_continuations(&source, &root, &[], &output, "patch-loader", end)?
             }
         };
         let catalog = function_hook_sites(&output.join("patch-loader.payload.elf"))?;
@@ -593,7 +700,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         )?;
         compile_base = (compile_base + payload.len() as u32 + 15) & !15;
         compiled_patches.push(CompiledPatch {
-            name,
+            name: name.clone(),
             base: compile_base - ((payload.len() as u32 + 15) & !15),
             payload,
             symbols,
@@ -630,7 +737,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     )
                     .into());
                 }
-                let slot_name = format!("static_next_{}_slot", site.as_ref().unwrap());
+                let slot_name = first
+                    .continuation_handler
+                    .as_ref()
+                    .map(|handler| {
+                        format!("static_next_{}_{}_slot", site.as_ref().unwrap(), handler)
+                    })
+                    .unwrap_or_else(|| format!("static_next_{}_slot", site.as_ref().unwrap()));
                 let slot = symbol(&compiled_patches[first_patch].symbols, &slot_name)?;
                 let slot_offset = usize::try_from(
                     slot.checked_sub(compiled_patches[first_patch].base)
@@ -645,16 +758,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 hook_owners.insert(address, (patch_index, hook_index, continuation_site));
             }
-            if let (Some(site), Some(dispatch)) = (
-                compiled_patches[patch_index].hooks[hook_index]
-                    .continuation_site
-                    .clone(),
-                loader_dispatch_targets.get(&address).copied(),
-            ) {
-                let slot = symbol(
-                    &compiled_patches[patch_index].symbols,
-                    &format!("static_next_{site}_slot"),
-                )?;
+            let is_last_in_chain =
+                hook_owners
+                    .get(&address)
+                    .is_some_and(|(owner_patch, owner_hook, _)| {
+                        *owner_patch == patch_index && *owner_hook == hook_index
+                    });
+            if is_last_in_chain
+                && let (Some(site), Some(dispatch)) = (
+                    compiled_patches[patch_index].hooks[hook_index]
+                        .continuation_site
+                        .clone(),
+                    loader_dispatch_targets.get(&address).copied(),
+                )
+            {
+                let handler = compiled_patches[patch_index].hooks[hook_index]
+                    .continuation_handler
+                    .as_ref();
+                let slot_name = handler.map_or_else(
+                    || format!("static_next_{site}_slot"),
+                    |handler| format!("static_next_{site}_{handler}_slot"),
+                );
+                let slot = symbol(&compiled_patches[patch_index].symbols, &slot_name)?;
                 let slot_offset = usize::try_from(
                     slot.checked_sub(compiled_patches[patch_index].base)
                         .ok_or("chain slot precedes payload")?,
@@ -674,13 +799,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let hooks = patch.hooks;
         let mut unique = std::collections::BTreeSet::new();
         let mut edits_vec = Vec::new();
+        let mut installed_hooks = Vec::new();
         for hook in &hooks {
             if !unique.insert(hook.address) {
-                return Err(format!(
-                    "module {name} registers multiple hooks at {:#x}",
-                    hook.address
-                )
-                .into());
+                continue;
             }
             if installed_hook_sites.contains(&hook.address) {
                 continue;
@@ -699,6 +821,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 target: hook.target,
                 length: hook.length,
             });
+            installed_hooks.push(hook);
         }
         let edits = PatchEdits::new(edits_vec);
         let applied_patch = apply_patch_with_map(
@@ -716,7 +839,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             return Err("installed patch payloads overlap the SD module region".into());
         }
         let mut applied_hooks = Vec::new();
-        for (hook_edit, hook) in edits.hooks.iter().zip(&hooks) {
+        for (hook_edit, hook) in edits.hooks.iter().zip(installed_hooks) {
             applied_hooks.push(serde_json::json!({"address":hook.address,"symbol":hook.symbol,"target":hook_edit.target,"displaced_length":hook.length,"displaced_sha256":hook.guard_sha256}));
         }
         let call_site_hooks = registrations
@@ -807,6 +930,61 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 // Thumb-branch encoding is tested in `firmware-patch-core`, which owns `branch()`.
+
+#[cfg(test)]
+mod manifest_tests {
+    use super::*;
+
+    fn manifest(requires: &[&str]) -> PatchManifest {
+        PatchManifest {
+            requires: requires.iter().map(|name| (*name).to_owned()).collect(),
+        }
+    }
+
+    #[test]
+    fn resolves_dependencies_before_requested_patches_and_deduplicates() {
+        let manifests = BTreeMap::from([
+            ("dialog".to_owned(), manifest(&[])),
+            ("effect".to_owned(), manifest(&["dialog"])),
+            ("midi".to_owned(), manifest(&[])),
+        ]);
+        let requested = ["midi".to_owned(), "effect".to_owned(), "dialog".to_owned()];
+
+        assert_eq!(
+            resolve_dependency_order(&requested, &manifests).unwrap(),
+            ["midi", "dialog", "effect"]
+        );
+    }
+
+    #[test]
+    fn rejects_dependency_cycles_and_missing_modules() {
+        let cycle = BTreeMap::from([
+            ("one".to_owned(), manifest(&["two"])),
+            ("two".to_owned(), manifest(&["one"])),
+        ]);
+        assert!(
+            resolve_dependency_order(&["one".to_owned()], &cycle)
+                .unwrap_err()
+                .contains("cycle")
+        );
+
+        let missing = BTreeMap::from([("one".to_owned(), manifest(&["absent"]))]);
+        assert!(
+            resolve_dependency_order(&["one".to_owned()], &missing)
+                .unwrap_err()
+                .contains("no patches/absent/module.json")
+        );
+    }
+
+    #[test]
+    fn patch_names_are_safe_rust_module_names_after_dash_normalization() {
+        assert!(valid_patch_name("midi-control"));
+        assert!(valid_patch_name("patch2"));
+        assert!(!valid_patch_name("2patch"));
+        assert!(!valid_patch_name("patch_name"));
+        assert!(!valid_patch_name("../patch"));
+    }
+}
 
 #[cfg(test)]
 #[path = "../../../patches/knob-dialog/src/values.rs"]

@@ -61,17 +61,18 @@ corrupt or unsupported candidates.
 Hooks are stored in a fixed-capacity firmware table: up to eight function chains,
 with up to eight hooks per function. The loader has dynamic dispatch stubs for
 catalog sites marked dynamic in the model-specific function catalog. Each module carries a
-`next` function-pointer slot. The loader connects hooks in filename order and
-points the tail at the displaced stock handler. A hook keeps the target
-function's calling convention; it calls `next` to continue, or returns without
-calling it to override the remaining chain. The builder emits one hook per
-module file. DIN still requires a static firmware edit. Both commands also generate
-an ordinary update package in their output directory; only the loader update is
-installed persistently.
+`next` function-pointer slot. The loader connects modules in filename order and
+preserves hook-record order within each module before pointing the tail at the
+displaced stock handler. A hook keeps the target function's calling convention;
+it calls `next` to continue, or returns without calling it to override the
+remaining chain. A composed module can contain multiple handlers for one
+function. DIN still requires a static firmware edit. Both commands also
+generate an ordinary update package in their output directory; only the loader
+update is installed persistently.
 
 The file uses format version 1 with a 28-byte header: magic, format version,
 loader ABI, code length, allocated memory length, hook count, relocation
-count, initializer offset, and CRC-32. The current loader requires ABI 1. Its
+count, a reserved word, and CRC-32. The current loader requires ABI 1. Its
 body is code followed by 12-byte hook records (function address, entry offset,
 and optional `next` slot offset), then fixed-size relocation records. The
 loader reads the header, allocates the declared memory length, streams code
