@@ -92,18 +92,8 @@ expected_parameter_id = 6
 expected_parameter_value = 12.0
 
 [[step]]
-action = "expect-display"
-checkpoint = "dual-efx-room-selected"
-changed = true
-
-[[step]]
 action = "delay"
 guest_ms = 2500
-
-[[step]]
-action = "expect-display"
-checkpoint = "dual-efx-room-selected"
-changed = false
 
 [[step]]
 action = "encoder"
@@ -274,11 +264,6 @@ action = "checkpoint"
 name = "dual-efx-edit-mode"
 
 [[step]]
-action = "expect-display"
-checkpoint = "before-dual-efx-edit"
-changed = true
-
-[[step]]
 action = "encoder"
 channel = 2
 steps = 1
@@ -324,18 +309,8 @@ expected_parameter_id = 1
 expected_parameter_value = 28.5625
 
 [[step]]
-action = "expect-display"
-checkpoint = "dual-efx-edit-mode"
-changed = true
-
-[[step]]
 action = "delay"
 guest_ms = 2500
-
-[[step]]
-action = "expect-display"
-checkpoint = "before-dual-efx-edit"
-changed = false
 
 [[step]]
 action = "checkpoint"

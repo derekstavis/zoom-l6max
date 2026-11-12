@@ -5872,6 +5872,18 @@ fn dual_efx_state(
             .try_into()
             .unwrap(),
     );
+    let dialog_active_offset = report["patches"]
+        .as_array()
+        .and_then(|patches| patches.iter().find(|patch| patch["name"] == "dual-efx"))
+        .and_then(|patch| patch["knob_dialog_symbols"]["external_text_active"].as_u64())
+        .and_then(|offset| u32::try_from(offset).ok())
+        .ok_or("Knob Dialog active-state symbol is missing from the composed module report")?;
+    let dialog_active = qmp
+        .read_memory(0, module_base + dialog_active_offset, 1)
+        .map_err(|error| error.to_string())?
+        .first()
+        .copied()
+        .ok_or("Knob Dialog active-state byte is missing")?;
     let parameter = if let Some(parameter_id) = expected_parameter_id {
         if parameter_id >= 16 {
             return Err(format!(
@@ -5903,6 +5915,11 @@ fn dual_efx_state(
             "Dual EFX applied {applied} parameter edits, expected at least {minimum_parameter_edits:?}"
         ));
     }
+    if expected_edit_mode == Some(true) && minimum_parameter_edits.is_some() && dialog_active != 1 {
+        return Err(format!(
+            "Dual EFX has applied {applied} parameter edits but Knob Dialog is not active ({dialog_active})"
+        ));
+    }
     if expected_parameter_value.is_some() && parameter.is_none() {
         return Err("Dual EFX parameter value requires expected_parameter_id".into());
     }
@@ -5915,7 +5932,7 @@ fn dual_efx_state(
         }
     }
     Ok(
-        json!({"effect_type":effect_type,"edit_mode":edit_mode,"parameter_edits_applied":applied,"parameter_id":expected_parameter_id,"parameter_value":parameter}),
+        json!({"effect_type":effect_type,"edit_mode":edit_mode,"parameter_edits_applied":applied,"parameter_id":expected_parameter_id,"parameter_value":parameter,"knob_dialog_active":dialog_active}),
     )
 }
 
