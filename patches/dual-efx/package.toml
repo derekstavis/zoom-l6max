@@ -1,3 +1,20 @@
 [package]
 name = "dual-efx"
+version = "1.0.0"
+kind = "patch"
+order = 50
+title = "Dual EFX"
+summary = "Run two effects at once."
+description = "Replaces the Room and Spring effects with two simultaneous, configurable effects."
+models = ["L6max"]
+firmware_models = ["L6max"]
+sd_card_models = ["L6max"]
+wasm_models = []
+website = false
+website_order = 50
+website_sd_models = []
+emulator_gui = false
+emulator_order = 50
+emulator_sd_models = []
+readme = "README.md"
 requires = ["knob-dialog"]
