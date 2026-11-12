@@ -98,7 +98,8 @@ static EXTERNAL_TEXT_WRITER: AtomicBool = AtomicBool::new(false);
 #[cfg(sd_dynamic_module)]
 static EXTERNAL_TEXT_PENDING: AtomicU8 = AtomicU8::new(0);
 #[cfg(sd_dynamic_module)]
-static EXTERNAL_TEXT_ACTIVE: AtomicU8 = AtomicU8::new(0);
+#[unsafe(no_mangle)]
+pub(crate) static KNOB_DIALOG_EXTERNAL_TEXT_ACTIVE: AtomicU8 = AtomicU8::new(0);
 
 #[cfg(sd_dynamic_module)]
 unsafe fn publish_external_text(
@@ -153,7 +154,7 @@ unsafe fn publish_external_text(
         .sequence
         .store(previous.wrapping_add(2), Ordering::Release);
     EXTERNAL_TEXT_PENDING.store(1, Ordering::Release);
-    EXTERNAL_TEXT_ACTIVE.store(1, Ordering::Release);
+    KNOB_DIALOG_EXTERNAL_TEXT_ACTIVE.store(1, Ordering::Release);
     // A caller-provided value supersedes any generic knob label queued by
     // the post-call hook for the same physical turn.
     let state = unsafe { state() };
@@ -467,7 +468,7 @@ unsafe fn restore_scene(discard_pending: bool) {
         }
         write(core::ptr::addr_of_mut!((*pointer).ticks), 0);
         #[cfg(sd_dynamic_module)]
-        EXTERNAL_TEXT_ACTIVE.store(0, Ordering::Release);
+        KNOB_DIALOG_EXTERNAL_TEXT_ACTIVE.store(0, Ordering::Release);
         if discard_pending {
             (*pointer)
                 .pending
@@ -569,7 +570,7 @@ pub unsafe extern "C" fn knob_dialog_display_tick() {
             #[cfg(sd_dynamic_module)]
             {
                 EXTERNAL_TEXT_PENDING.store(0, Ordering::Release);
-                EXTERNAL_TEXT_ACTIVE.store(0, Ordering::Release);
+                KNOB_DIALOG_EXTERNAL_TEXT_ACTIVE.store(0, Ordering::Release);
             }
             return;
         }
@@ -605,7 +606,7 @@ pub unsafe fn knob_changed(
             return;
         }
         #[cfg(sd_dynamic_module)]
-        if EXTERNAL_TEXT_ACTIVE.load(Ordering::Acquire) != 0 {
+        if KNOB_DIALOG_EXTERNAL_TEXT_ACTIVE.load(Ordering::Acquire) != 0 {
             return;
         }
         let active = state();

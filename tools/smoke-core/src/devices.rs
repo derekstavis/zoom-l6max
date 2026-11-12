@@ -3877,16 +3877,8 @@ impl State {
                     let report: Value = serde_json::from_slice(&fs::read(
                         root.join("sd-patches-build/patch.json"),
                     )?)?;
-                    let gate_offset = report["patches"]
-                        .as_array()
-                        .and_then(|patches| {
-                            patches.iter().find(|patch| patch["name"] == "dual-efx")
-                        })
-                        .and_then(|patch| {
-                            patch["effect_dispatch_symbols"]["dual_effect_callback_gate"].as_u64()
-                        })
-                        .ok_or("Dual EFX callback-gate symbol is missing")?
-                        as u32;
+                    let gate_offset = composed_export_offset(&report, "DUAL_EFFECT_CALLBACK_GATE")
+                        .ok_or("Dual EFX callback-gate symbol is missing")?;
                     let gate = u32::from_le_bytes(
                         qmp.read_memory(0, dual_base + gate_offset, 4)?
                             .try_into()
@@ -4046,30 +4038,25 @@ impl State {
                     let patch_report: Value = serde_json::from_slice(&fs::read(
                         root.join("sd-patches-build/patch.json"),
                     )?)?;
-                    let symbols_for_size = |size: usize| {
+                    let patch_for_size = |size: usize| {
                         patch_report["patches"]
                             .as_array()
                             .into_iter()
                             .flatten()
                             .find(|patch| patch["memory_length"].as_u64() == Some(size as u64))
-                            .and_then(|patch| patch["effect_dispatch_symbols"].as_object())
                     };
                     let mutable_ranges_for_size = |size: usize| {
-                        let patch = patch_report["patches"]
-                            .as_array()
-                            .into_iter()
-                            .flatten()
-                            .find(|patch| patch["memory_length"].as_u64() == Some(size as u64));
+                        let patch = patch_for_size(size);
                         let mut ranges = patch
-                            .and_then(|patch| patch["effect_dispatch_symbols"].as_object())
-                            .into_iter()
-                            .flat_map(|symbols| symbols.iter())
-                            .filter_map(|(name, value)| {
+                            .and_then(|patch| patch["writable_data"].as_object())
+                            .and_then(|data| {
                                 Some((
-                                    usize::try_from(value.as_u64()?).ok()?,
-                                    if name == "parameter_handoff" { 64 } else { 4 },
+                                    usize::try_from(data["offset"].as_u64()?).ok()?,
+                                    usize::try_from(data["length"].as_u64()?).ok()?,
                                 ))
                             })
+                            .filter(|(_, length)| *length > 0)
+                            .into_iter()
                             .collect::<Vec<_>>();
                         if let Some(code_len) = patch
                             .and_then(|patch| patch["payload_length"].as_u64())
@@ -4085,7 +4072,6 @@ impl State {
                         }
                         ranges
                     };
-                    let callback_symbols = symbols_for_size(loaded_len as usize);
                     let pass_through_entry_offset = if ordered_chain {
                         Some(
                             patch_report["patches"][0]["pass_through_entry_offsets"][0]
@@ -4190,15 +4176,6 @@ impl State {
                             let slot_offset = payload_hook.next_slot_offset as usize;
                             expected[slot_offset..slot_offset + 4].copy_from_slice(&target);
                         }
-                        if let Some(symbols) = callback_symbols {
-                            for offset in symbols.values().filter_map(Value::as_u64) {
-                                let offset = usize::try_from(offset)?;
-                                if offset + 4 <= expected.len() {
-                                    let target = qmp.read_memory(0, *module + offset as u32, 4)?;
-                                    expected[offset..offset + 4].copy_from_slice(&target);
-                                }
-                            }
-                        }
                         for (chunk_index, chunk) in expected.chunks(4096).enumerate() {
                             let address = *module + (chunk_index * 4096) as u32;
                             let actual = qmp.read_memory(0, address, chunk.len())?;
@@ -4247,16 +4224,6 @@ impl State {
                             let target = qmp.read_memory(0, slot, 4)?;
                             let offset = latest_hook.next_slot_offset as usize;
                             expected[offset..offset + 4].copy_from_slice(&target);
-                        }
-                        if let Some(symbols) = callback_symbols {
-                            for offset in symbols.values().filter_map(Value::as_u64) {
-                                let offset = usize::try_from(offset)?;
-                                if offset + 4 <= expected.len() {
-                                    let target =
-                                        qmp.read_memory(0, loaded_base + offset as u32, 4)?;
-                                    expected[offset..offset + 4].copy_from_slice(&target);
-                                }
-                            }
                         }
                         for (chunk_index, chunk) in expected.chunks(4096).enumerate() {
                             let address = loaded_base + (chunk_index * 4096) as u32;
@@ -4323,10 +4290,8 @@ impl State {
                     )?)?;
                     let symbols = report["patches"]
                         .as_array()
-                        .and_then(|patches| {
-                            patches.iter().find(|patch| patch["name"] == "dual-efx")
-                        })
-                        .and_then(|patch| patch["effect_dispatch_symbols"].as_object())
+                        .and_then(|patches| patches.first())
+                        .and_then(|patch| patch["exports"].as_object())
                         .ok_or("Dual EFX build report has no DSP stream symbols")?;
                     let read_symbol = |name: &str| -> Result<u32, Box<dyn std::error::Error>> {
                         u32::try_from(
@@ -4336,42 +4301,34 @@ impl State {
                         )
                         .map_err(Into::into)
                     };
-                    let dispatch_hits_offset = read_symbol("dsp_stream_entry_hits")?;
-                    let clear_hits_offset = read_symbol("effect_workspace_clear_hits")?;
-                    let type_set_hits_offset = read_symbol("dual_effect_type_set_hits")?;
-                    let type_set_seen_offset = read_symbol("dual_effect_type_set_seen")?;
-                    let callback_offset = u32::try_from(
-                        report["patches"]
-                            .as_array()
-                            .and_then(|patches| {
-                                patches.iter().find(|patch| patch["name"] == "dual-efx")
-                            })
-                            .and_then(|patch| patch["dual_effect_callback_offset"].as_u64())
-                            .ok_or("Dual EFX callback entry is missing")?,
-                    )?;
-                    let callback_hits_offset = read_symbol("dual_effect_callback_hits")?;
-                    let room_hits_offset = read_symbol("room_callback_hits")?;
-                    let room_admitted_offset = read_symbol("room_callback_admitted")?;
-                    let spring_hits_offset = read_symbol("spring_callback_hits")?;
-                    let spring_admitted_offset = read_symbol("spring_callback_admitted")?;
-                    let callback_original_offset = read_symbol("dual_effect_callback_original")?;
-                    let callback_context_offset = read_symbol("dual_effect_callback_context")?;
+                    let dispatch_hits_offset = read_symbol("DSP_STREAM_ENTRY_HITS")?;
+                    let clear_hits_offset = read_symbol("EFFECT_WORKSPACE_CLEAR_HITS")?;
+                    let type_set_hits_offset = read_symbol("DUAL_EFFECT_TYPE_SET_HITS")?;
+                    let type_set_seen_offset = read_symbol("DUAL_EFFECT_TYPE_SET_SEEN")?;
+                    let callback_offset = read_symbol("dual_effect_callback")?;
+                    let callback_hits_offset = read_symbol("DUAL_EFFECT_CALLBACK_HITS")?;
+                    let room_hits_offset = read_symbol("ROOM_CALLBACK_HITS")?;
+                    let room_admitted_offset = read_symbol("ROOM_CALLBACK_ADMITTED")?;
+                    let spring_hits_offset = read_symbol("SPRING_CALLBACK_HITS")?;
+                    let spring_admitted_offset = read_symbol("SPRING_CALLBACK_ADMITTED")?;
+                    let callback_original_offset = read_symbol("DUAL_EFFECT_CALLBACK_ORIGINAL")?;
+                    let callback_context_offset = read_symbol("DUAL_EFFECT_CALLBACK_CONTEXT")?;
                     let callback_descriptor_offset =
-                        read_symbol("dual_effect_callback_descriptor")?;
-                    let callback_gate_offset = read_symbol("dual_effect_callback_gate")?;
-                    let selection_pending_offset = read_symbol("dual_effect_selection_pending")?;
-                    let output_nonzero_offset = read_symbol("dual_effect_output_nonzero")?;
-                    let output_invalid_offset = read_symbol("dual_effect_output_invalid")?;
+                        read_symbol("DUAL_EFFECT_CALLBACK_DESCRIPTOR")?;
+                    let callback_gate_offset = read_symbol("DUAL_EFFECT_CALLBACK_GATE")?;
+                    let selection_pending_offset = read_symbol("DUAL_EFFECT_SELECTION_PENDING")?;
+                    let output_nonzero_offset = read_symbol("DUAL_EFFECT_OUTPUT_NONZERO")?;
+                    let output_invalid_offset = read_symbol("DUAL_EFFECT_OUTPUT_INVALID")?;
                     let room_output_nonzero_offset =
-                        read_symbol("dual_effect_room_output_nonzero")?;
+                        read_symbol("DUAL_EFFECT_ROOM_OUTPUT_NONZERO")?;
                     let spring_output_nonzero_offset =
-                        read_symbol("dual_effect_spring_output_nonzero")?;
-                    let routed_callback_offset = read_symbol("dual_effect_routed_callback")?;
-                    let input_nonzero_offset = read_symbol("dual_effect_input_nonzero")?;
-                    let send_nonzero_offset = read_symbol("dual_effect_send_nonzero")?;
-                    let edit_event_offset = read_symbol("dual_effect_edit_event")?;
-                    let edit_applied_offset = read_symbol("dual_effect_edit_applied")?;
-                    let edit_dropped_offset = read_symbol("dual_effect_edit_dropped")?;
+                        read_symbol("DUAL_EFFECT_SPRING_OUTPUT_NONZERO")?;
+                    let routed_callback_offset = read_symbol("DUAL_EFFECT_ROUTED_CALLBACK")?;
+                    let input_nonzero_offset = read_symbol("DUAL_EFFECT_INPUT_NONZERO")?;
+                    let send_nonzero_offset = read_symbol("DUAL_EFFECT_SEND_NONZERO")?;
+                    let edit_event_offset = read_symbol("DUAL_EFFECT_EDIT_EVENT")?;
+                    let edit_applied_offset = read_symbol("DUAL_EFFECT_EDIT_APPLIED")?;
+                    let edit_dropped_offset = read_symbol("DUAL_EFFECT_EDIT_DROPPED")?;
                     let dispatch_hits = u32::from_le_bytes(
                         qmp.read_memory(0, dual_base + dispatch_hits_offset, 4)?
                             .try_into()
@@ -5619,6 +5576,15 @@ fn sd_fixture_root(options: &Options) -> Result<&std::path::Path, String> {
         .find(|dir| dir.join("sd-stock-firmware/main_firmware.bin").is_file())
         .ok_or_else(|| "missing generated SD fixture".into())
 }
+
+fn composed_module_report(report: &Value) -> Option<&Value> {
+    report["patches"].as_array()?.first()
+}
+
+fn composed_export_offset(report: &Value, name: &str) -> Option<u32> {
+    u32::try_from(composed_module_report(report)?["exports"][name].as_u64()?).ok()
+}
+
 fn dual_efx_parameter_edit(
     options: &Options,
     session: &Session,
@@ -5637,23 +5603,11 @@ fn dual_efx_parameter_edit(
         &fs::read(root.join("sd-patches-build/patch.json")).map_err(|error| error.to_string())?,
     )
     .map_err(|error| error.to_string())?;
-    let symbol_offset = report["patches"]
-        .as_array()
-        .and_then(|patches| patches.iter().find(|patch| patch["name"] == "dual-efx"))
-        .and_then(|patch| patch["effect_dispatch_symbols"]["dual_effect_edit_applied"].as_u64())
-        .and_then(|offset| u32::try_from(offset).ok())
+    let symbol_offset = composed_export_offset(&report, "DUAL_EFFECT_EDIT_APPLIED")
         .ok_or("Dual EFX edit counter is missing from its module report")?;
-    let event_offset = report["patches"]
-        .as_array()
-        .and_then(|patches| patches.iter().find(|patch| patch["name"] == "dual-efx"))
-        .and_then(|patch| patch["effect_dispatch_symbols"]["dual_effect_edit_event"].as_u64())
-        .and_then(|offset| u32::try_from(offset).ok())
+    let event_offset = composed_export_offset(&report, "DUAL_EFFECT_EDIT_EVENT")
         .ok_or("Dual EFX edit event is missing from its module report")?;
-    let callback_hits_offset = report["patches"]
-        .as_array()
-        .and_then(|patches| patches.iter().find(|patch| patch["name"] == "dual-efx"))
-        .and_then(|patch| patch["effect_dispatch_symbols"]["dual_effect_callback_hits"].as_u64())
-        .and_then(|offset| u32::try_from(offset).ok())
+    let callback_hits_offset = composed_export_offset(&report, "DUAL_EFFECT_CALLBACK_HITS")
         .ok_or("Dual EFX callback counter is missing from its module report")?;
     let qmp = &session.engine.management[0];
     const CURRENT_WINDOW: u32 = 0x8020_2610;
@@ -5819,10 +5773,8 @@ fn dual_efx_state(
         &fs::read(root.join("sd-patches-build/patch.json")).map_err(|error| error.to_string())?,
     )
     .map_err(|error| error.to_string())?;
-    let symbols = report["patches"]
-        .as_array()
-        .and_then(|patches| patches.iter().find(|patch| patch["name"] == "dual-efx"))
-        .and_then(|patch| patch["effect_dispatch_symbols"].as_object())
+    let symbols = composed_module_report(&report)
+        .and_then(|patch| patch["exports"].as_object())
         .ok_or("Dual EFX debug symbols are missing from its module report")?;
     let offset = |name: &str| -> Result<u32, String> {
         symbols[name]
@@ -5858,7 +5810,7 @@ fn dual_efx_state(
     let edit_mode = u32::from_le_bytes(
         qmp.read_memory(
             0,
-            module_base + offset("dual_effect_parameter_edit_mode")?,
+            module_base + offset("DUAL_EFFECT_PARAMETER_EDIT_MODE")?,
             4,
         )
         .map_err(|error| error.to_string())?
@@ -5866,16 +5818,12 @@ fn dual_efx_state(
         .unwrap(),
     );
     let applied = u32::from_le_bytes(
-        qmp.read_memory(0, module_base + offset("dual_effect_edit_applied")?, 4)
+        qmp.read_memory(0, module_base + offset("DUAL_EFFECT_EDIT_APPLIED")?, 4)
             .map_err(|error| error.to_string())?
             .try_into()
             .unwrap(),
     );
-    let dialog_active_offset = report["patches"]
-        .as_array()
-        .and_then(|patches| patches.iter().find(|patch| patch["name"] == "dual-efx"))
-        .and_then(|patch| patch["knob_dialog_symbols"]["external_text_active"].as_u64())
-        .and_then(|offset| u32::try_from(offset).ok())
+    let dialog_active_offset = composed_export_offset(&report, "KNOB_DIALOG_EXTERNAL_TEXT_ACTIVE")
         .ok_or("Knob Dialog active-state symbol is missing from the composed module report")?;
     let dialog_active = qmp
         .read_memory(0, module_base + dialog_active_offset, 1)
@@ -5889,7 +5837,7 @@ fn dual_efx_state(
                 "Dual EFX parameter id {parameter_id} is out of range"
             ));
         }
-        let handoff_offset = offset("parameter_handoff")? + u32::from(parameter_id) * 4;
+        let handoff_offset = offset("PARAMETER_HANDOFF")? + u32::from(parameter_id) * 4;
         Some(f32::from_bits(u32::from_le_bytes(
             qmp.read_memory(0, module_base + handoff_offset, 4)
                 .map_err(|error| error.to_string())?
