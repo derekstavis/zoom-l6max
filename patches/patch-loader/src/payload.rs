@@ -540,7 +540,13 @@ unsafe fn load_dynamic<R: core_loader::bundle::Reader>(reader: &mut R, order: u3
             }
             return false;
         };
-        let chain = unsafe { find_hook_chain(hook.address, &reserved_chains[..planned]) };
+        // Several handlers in one module may target the same function. Reuse
+        // their reserved chain row instead of reserving an empty row per hook.
+        let chain = plans[..planned]
+            .iter()
+            .find(|plan| plan.address == hook.address)
+            .map(|plan| plan.chain)
+            .or_else(|| unsafe { find_hook_chain(hook.address, &reserved_chains[..planned]) });
         let Some(chain) = chain else {
             unsafe {
                 clear_payload(loaded_base, header.memory_len);

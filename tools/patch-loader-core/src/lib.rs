@@ -882,9 +882,6 @@ pub mod dynamic {
                 || (hook.next_slot_offset != u32::MAX
                     && (hook.next_slot_offset & 3 != 0
                         || hook.next_slot_offset as usize + 4 > header.code_len))
-                || hooks[..index]
-                    .iter()
-                    .any(|prior| prior.address == hook.address)
             {
                 return Err(Error::Invalid);
             }
@@ -1005,6 +1002,33 @@ mod dynamic_stream_tests {
             }
         );
         assert_eq!(u32::from_le_bytes(code[..4].try_into().unwrap()), 0x2004);
+    }
+
+    #[test]
+    fn accepts_multiple_handlers_for_the_same_function_entry() {
+        let mut bytes = fixture();
+        bytes[16..18].copy_from_slice(&2u16.to_le_bytes());
+        let mut second_hook = bytes[40..52].to_vec();
+        second_hook[4..8].copy_from_slice(&0u32.to_le_bytes());
+        second_hook[8..12].copy_from_slice(&0u32.to_le_bytes());
+        bytes.splice(52..52, second_hook);
+        let checksum = dynamic::checksum(&bytes).unwrap();
+        bytes[24..28].copy_from_slice(&checksum.to_le_bytes());
+
+        let mut reader = Chunks {
+            bytes: &bytes,
+            chunk: 5,
+        };
+        let pending = dynamic::read_header(&mut reader, 32, 4, 8).unwrap();
+        let mut code = [0; 12];
+        let mut hooks = [Hook::default(); 4];
+        let header =
+            dynamic::read_body(&mut reader, pending, &mut code, &mut hooks, 0, 0x2000).unwrap();
+
+        assert_eq!(header.hook_count, 2);
+        assert_eq!(hooks[0].address, hooks[1].address);
+        assert_ne!(hooks[0].entry_offset, hooks[1].entry_offset);
+        assert_ne!(hooks[0].next_slot_offset, hooks[1].next_slot_offset);
     }
 
     #[test]
