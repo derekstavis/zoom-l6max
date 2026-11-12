@@ -16,7 +16,7 @@ use std::{
     path::{Path, PathBuf},
 };
 const USAGE: &str = "Usage: l6patch INPUT_UNPACKED_DIR OUTPUT_DIR [--patch NAME]... [--update-version FOUR_DIGITS] [--experimental-patch-bundle | --experimental-patch-loader] [--experimental-qemu-module-arena]\n\
-Patch names come from patches/<name>/module.json. Repeat --patch to select multiple patches; dependencies are included automatically. The Patch loader is experimental and unqualified.";
+Patch names come from patches/<name>/package.toml. Repeat --patch to select multiple patches; dependencies are included automatically. The Patch loader is experimental and unqualified.";
 
 const SD_MODULE_BASE: u32 = 0x8011_0000;
 const SD_MODULE_END: u32 = 0x8011_8000;
@@ -27,6 +27,7 @@ struct Options {
     source: PathBuf,
     output: PathBuf,
     patches: Option<Vec<String>>,
+    requested_patches: Vec<String>,
     version: Option<String>,
     experimental_sd_bundle: bool,
     experimental_patch_loader: bool,
@@ -85,6 +86,7 @@ fn parse_args() -> Result<Options, Box<dyn std::error::Error>> {
         source: PathBuf::from(source),
         output: PathBuf::from(output),
         patches,
+        requested_patches: requested,
         version,
         experimental_sd_bundle,
         experimental_patch_loader,
@@ -109,14 +111,14 @@ fn resolve_patch_dependencies(
         if !entry.file_type()?.is_dir() {
             continue;
         }
-        let path = entry.path().join("module.json");
+        let path = entry.path().join("package.toml");
         if !path.exists() {
             continue;
         }
-        let value: serde_json::Value = serde_json::from_slice(&fs::read(path)?)?;
-        let name = value["name"]
+        let value: toml::Value = toml::from_str(&fs::read_to_string(path)?)?;
+        let name = value["package"]["name"]
             .as_str()
-            .ok_or("module.json requires a string `name`")?
+            .ok_or("package.toml requires `[package].name` to be a string")?
             .to_owned();
         if !valid_patch_name(&name) {
             return Err(format!("invalid patch name `{name}`").into());
@@ -129,9 +131,11 @@ fn resolve_patch_dependencies(
             .into());
         }
         let manifest = PatchManifest {
-            requires: value["requires"]
+            requires: value["package"]["requires"]
                 .as_array()
-                .ok_or_else(|| format!("patch `{name}` requires `requires` to be an array"))?
+                .ok_or_else(|| {
+                    format!("patch `{name}` requires `[package].requires` to be an array")
+                })?
                 .iter()
                 .map(|dependency| {
                     dependency
@@ -147,6 +151,22 @@ fn resolve_patch_dependencies(
     }
 
     Ok(resolve_dependency_order(requested, &manifests)?)
+}
+
+fn composed_bundle_name(
+    requested: &[String],
+    ordered_members: &[String],
+) -> Result<String, String> {
+    let mut members = Vec::new();
+    for name in requested.iter().chain(ordered_members) {
+        if !members.contains(&name.as_str()) {
+            members.push(name.as_str());
+        }
+    }
+    if members.is_empty() {
+        return Err("composed bundle needs at least one patch name".into());
+    }
+    Ok(members.join("-"))
 }
 
 fn valid_patch_name(name: &str) -> bool {
@@ -176,7 +196,7 @@ fn resolve_dependency_order(
         }
         let manifest = manifests
             .get(name)
-            .ok_or_else(|| format!("patch `{name}` has no patches/{name}/module.json"))?;
+            .ok_or_else(|| format!("patch `{name}` has no patches/{name}/package.toml"))?;
         for dependency in &manifest.requires {
             visit(dependency, manifests, active, complete, ordered)?;
         }
@@ -455,10 +475,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .iter()
             .map(|(name, root)| (name.as_str(), root.as_path()))
             .collect::<Vec<_>>();
-        let bundle_name = "composed-patches";
+        let bundle_name = composed_bundle_name(&options.requested_patches, &patches)?;
+        let link_name = "composed-patches";
         let (module, memory_len, symbols, relocations) =
-            compile_sd_relocatable_composed(&source, &root_refs, &output, bundle_name, 0)?;
-        let sites = function_hook_sites(&output.join(format!("{bundle_name}.payload.elf")))?;
+            compile_sd_relocatable_composed(&source, &root_refs, &output, link_name, 0)?;
+        let sites = function_hook_sites(&output.join(format!("{link_name}.payload.elf")))?;
         let registrations = hook_registrations(&symbols)?;
         if registrations.is_empty() {
             return Err("dynamic bundle has no hook registrations".into());
@@ -539,7 +560,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .into());
         }
         let file = sd_bundle::build_dynamic_v1(&module, memory_len, &handlers, &relocations)?;
-        let filename = format!("{}.BIN", bundle_name.to_ascii_uppercase());
+        let filename = format!("{bundle_name}.bin");
         fs::write(patch_dir.join(&filename), &file)?;
         let report_patch = serde_json::json!({
             "name": bundle_name,
@@ -999,7 +1020,7 @@ mod manifest_tests {
         assert!(
             resolve_dependency_order(&["one".to_owned()], &missing)
                 .unwrap_err()
-                .contains("no patches/absent/module.json")
+                .contains("no patches/absent/package.toml")
         );
     }
 
@@ -1010,6 +1031,28 @@ mod manifest_tests {
         assert!(!valid_patch_name("2patch"));
         assert!(!valid_patch_name("patch_name"));
         assert!(!valid_patch_name("../patch"));
+    }
+
+    #[test]
+    fn composed_bundle_name_lists_requested_patches_then_unique_dependencies() {
+        let requested = ["effect-a".to_owned(), "effect-b".to_owned()];
+        let closure = [
+            "knob-dialog".to_owned(),
+            "effect-a".to_owned(),
+            "effect-b".to_owned(),
+        ];
+        assert_eq!(
+            composed_bundle_name(&requested, &closure).unwrap(),
+            "effect-a-effect-b-knob-dialog"
+        );
+        assert_eq!(
+            composed_bundle_name(
+                &["dual-efx".to_owned()],
+                &["knob-dialog".to_owned(), "dual-efx".to_owned(),]
+            )
+            .unwrap(),
+            "dual-efx-knob-dialog"
+        );
     }
 
     #[test]

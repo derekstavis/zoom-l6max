@@ -218,17 +218,30 @@ is determined by the selected payloads and the static builder, not SD filenames.
 ### Build-time patch dependencies
 
 Patches can list other patch names in `requires` in
-`patches/<patch>/module.json`. The SD builder resolves the dependency closure,
+`patches/<patch>/package.toml`. The SD builder resolves the dependency closure,
 checks for missing patches and cycles, then compiles the selected patches and
 their dependencies into one loadable module. The source modules share one
 patch runtime, firmware catalog, and allocation. Hook handlers for the same
 function keep separate continuation slots and follow dependency order, then
 the user's requested patch order.
 
-Composition is a build-time operation. It creates one `COMPOSED-PATCHES.BIN`
-for the selected patches, so removing that file removes all included features
-together. No runtime patch registry, initializer, or patch-to-patch function
-table is required.
+This file is limited to package identity and composition dependencies:
+
+```toml
+[package]
+name = "dual-efx"
+requires = ["knob-dialog"]
+```
+
+Patch descriptions and other presentation metadata belong outside
+`package.toml`.
+
+Composition is a build-time operation. It creates one BIN file named from the
+requested patch names followed by dependency-only patch names, such as
+`dual-efx-knob-dialog.bin`. A dependency shared by multiple requested patches
+is included once in that combined file. Removing the file removes all included
+features together. No runtime patch registry, initializer, or patch-to-patch
+function table is required.
 
 ## Calling an original continuation
 
