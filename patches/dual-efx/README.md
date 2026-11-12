@@ -62,10 +62,10 @@ bytes, before the compiled module code:
 
 The composed Dual EFX module currently requests about 31.8 KiB for code and
 module state, including the knob-dialog feature required to display parameter
-values. Its `module.json` declares that build-time dependency. The builder
-links both features into one `DUAL-EFX.BIN` allocation; no runtime patch API or
-separate knob-dialog file is needed. DSP state is initialized in place in the stock shared effect
-workspace at `0x80d00000`, whose observed
+values. Its `package.toml` declares that build-time dependency. The builder
+links both features into one `dual-efx-knob-dialog.bin` allocation; no runtime
+patch API or separate knob-dialog file is needed. DSP state is initialized in
+place in the stock shared effect workspace at `0x80d00000`, whose observed
 span is 768,000 bytes. This avoids allocating the 283 KiB processor from the
 FreeRTOS heap. The SD smoke fixture reports a 167,528-byte heap low-water mark
 while requiring at least 131,072 bytes free. The stock firmware also clears and
