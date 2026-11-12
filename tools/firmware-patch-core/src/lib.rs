@@ -392,23 +392,26 @@ mod tests {
     #[test]
     fn package_catalog_is_generated_from_package_files() {
         let catalog = patch_catalog();
-        assert_eq!(
-            PATCHES,
-            [
-                "knob-dialog",
-                "midi-control",
-                "midi-sync",
-                "din-mixer-control"
-            ]
-        );
-        assert_eq!(WASM_PATCHES, PATCHES);
+        let firmware_patches = catalog
+            .iter()
+            .filter(|package| package.kind == "patch" && !package.firmware_models.is_empty())
+            .map(|package| package.name.as_str())
+            .collect::<Vec<_>>();
+        let wasm_patches = catalog
+            .iter()
+            .filter(|package| package.kind == "patch" && !package.wasm_models.is_empty())
+            .map(|package| package.name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(PATCHES.as_slice(), firmware_patches);
+        assert_eq!(WASM_PATCHES.as_slice(), wasm_patches);
         let knob = patch_package("knob-dialog").unwrap();
         assert_eq!(knob.version, "1.0.0");
         assert_eq!(knob.title, "Show knob values on display");
         assert!(supports_firmware_patch("knob-dialog", FirmwareModel::L6max));
         assert!(!supports_firmware_patch("knob-dialog", FirmwareModel::L6));
         assert!(supports_sd_patch("midi-sync", FirmwareModel::L6));
-        assert_eq!(catalog.len(), 5);
+        assert!(patch_package("patch-loader").is_some_and(|package| package.kind == "loader"));
+        assert!(supports_sd_patch("dual-efx", FirmwareModel::L6max));
     }
 
     #[test]
