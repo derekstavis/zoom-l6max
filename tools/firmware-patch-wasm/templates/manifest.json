@@ -143,50 +143,50 @@
       "name": "din-mixer-control"
     },
     {
-      "base": "0x8010b5e0",
-      "metadata_file": "din-mixer-control-8010b5e0.json",
+      "base": "0x8010b8c0",
+      "metadata_file": "din-mixer-control-8010b8c0.json",
       "model": "L6max",
       "name": "din-mixer-control"
     },
     {
-      "base": "0x8010ba90",
-      "metadata_file": "din-mixer-control-8010ba90.json",
+      "base": "0x8010bd70",
+      "metadata_file": "din-mixer-control-8010bd70.json",
       "model": "L6max",
       "name": "din-mixer-control"
     },
     {
-      "base": "0x8010bea0",
-      "metadata_file": "din-mixer-control-8010bea0.json",
+      "base": "0x8010c180",
+      "metadata_file": "din-mixer-control-8010c180.json",
       "model": "L6max",
       "name": "din-mixer-control"
     },
     {
-      "base": "0x8010c350",
-      "metadata_file": "din-mixer-control-8010c350.json",
+      "base": "0x8010c630",
+      "metadata_file": "din-mixer-control-8010c630.json",
       "model": "L6max",
       "name": "din-mixer-control"
     },
     {
-      "base": "0x8010cd90",
-      "metadata_file": "din-mixer-control-8010cd90.json",
+      "base": "0x8010d070",
+      "metadata_file": "din-mixer-control-8010d070.json",
       "model": "L6max",
       "name": "din-mixer-control"
     },
     {
-      "base": "0x8010d240",
-      "metadata_file": "din-mixer-control-8010d240.json",
+      "base": "0x8010d520",
+      "metadata_file": "din-mixer-control-8010d520.json",
       "model": "L6max",
       "name": "din-mixer-control"
     },
     {
-      "base": "0x8010d650",
-      "metadata_file": "din-mixer-control-8010d650.json",
+      "base": "0x8010d930",
+      "metadata_file": "din-mixer-control-8010d930.json",
       "model": "L6max",
       "name": "din-mixer-control"
     },
     {
-      "base": "0x8010db00",
-      "metadata_file": "din-mixer-control-8010db00.json",
+      "base": "0x8010dde0",
+      "metadata_file": "din-mixer-control-8010dde0.json",
       "model": "L6max",
       "name": "din-mixer-control"
     },
@@ -197,8 +197,8 @@
       "name": "knob-dialog"
     },
     {
-      "base": "0x8010b5e0",
-      "metadata_file": "knob-dialog-8010b5e0.json",
+      "base": "0x8010b8c0",
+      "metadata_file": "knob-dialog-8010b8c0.json",
       "model": "L6max",
       "name": "knob-dialog"
     },
@@ -215,14 +215,14 @@
       "name": "midi-control"
     },
     {
-      "base": "0x8010b5e0",
-      "metadata_file": "midi-control-8010b5e0.json",
+      "base": "0x8010b8c0",
+      "metadata_file": "midi-control-8010b8c0.json",
       "model": "L6max",
       "name": "midi-control"
     },
     {
-      "base": "0x8010cd90",
-      "metadata_file": "midi-control-8010cd90.json",
+      "base": "0x8010d070",
+      "metadata_file": "midi-control-8010d070.json",
       "model": "L6max",
       "name": "midi-control"
     },
@@ -251,26 +251,26 @@
       "name": "midi-sync"
     },
     {
-      "base": "0x8010b5e0",
-      "metadata_file": "midi-sync-8010b5e0.json",
+      "base": "0x8010b8c0",
+      "metadata_file": "midi-sync-8010b8c0.json",
       "model": "L6max",
       "name": "midi-sync"
     },
     {
-      "base": "0x8010bea0",
-      "metadata_file": "midi-sync-8010bea0.json",
+      "base": "0x8010c180",
+      "metadata_file": "midi-sync-8010c180.json",
       "model": "L6max",
       "name": "midi-sync"
     },
     {
-      "base": "0x8010cd90",
-      "metadata_file": "midi-sync-8010cd90.json",
+      "base": "0x8010d070",
+      "metadata_file": "midi-sync-8010d070.json",
       "model": "L6max",
       "name": "midi-sync"
     },
     {
-      "base": "0x8010d650",
-      "metadata_file": "midi-sync-8010d650.json",
+      "base": "0x8010d930",
+      "metadata_file": "midi-sync-8010d930.json",
       "model": "L6max",
       "name": "midi-sync"
     },
@@ -281,8 +281,8 @@
       "name": "midi-sync"
     },
     {
-      "base": "0x800b9840",
-      "metadata_file": "midi-sync-l6-loader-800b9840.json",
+      "base": "0x800b9a50",
+      "metadata_file": "midi-sync-l6-loader-800b9a50.json",
       "model": "L6",
       "name": "midi-sync"
     }

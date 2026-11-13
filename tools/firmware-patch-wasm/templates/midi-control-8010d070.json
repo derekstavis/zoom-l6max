@@ -1,0 +1,90 @@
+{
+  "base": "0x8010d070",
+  "hooks": [
+    {
+      "address": "0x8003f7c8",
+      "continuation_site": "midi_in",
+      "continuation_slot_offset": 40,
+      "length": 4,
+      "symbol": "midi_control_in",
+      "target": "0x8010d28c"
+    },
+    {
+      "address": "0x80036a40",
+      "continuation_site": "panel_handle_main_button_event",
+      "continuation_slot_offset": 72,
+      "length": 4,
+      "symbol": "report_page_button",
+      "target": "0x8010d448"
+    },
+    {
+      "address": "0x80046d80",
+      "continuation_site": "rec_play_start_callback",
+      "continuation_slot_offset": 104,
+      "length": 6,
+      "symbol": "report_play_start",
+      "target": "0x8010d484"
+    },
+    {
+      "address": "0x80046e08",
+      "continuation_site": "rec_play_stop_callback",
+      "continuation_slot_offset": 140,
+      "length": 4,
+      "symbol": "report_play_stop",
+      "target": "0x8010d4a8"
+    },
+    {
+      "address": "0x80047268",
+      "continuation_site": "rec_start_callback",
+      "continuation_slot_offset": 172,
+      "length": 6,
+      "symbol": "report_record_start",
+      "target": "0x8010d4cc"
+    },
+    {
+      "address": "0x80047338",
+      "continuation_site": "rec_stop_callback",
+      "continuation_slot_offset": 212,
+      "length": 4,
+      "symbol": "report_record_stop",
+      "target": "0x8010d4f0"
+    }
+  ],
+  "model": "L6max",
+  "name": "midi-control",
+  "payload_file": "midi-control-8010d070.bin",
+  "payload_length": 2227,
+  "window_byte_total": 24,
+  "windows": [
+    {
+      "firmware_address": "0x8003f7c8",
+      "length": 4,
+      "payload_offset": 44
+    },
+    {
+      "firmware_address": "0x80036a40",
+      "length": 4,
+      "payload_offset": 76
+    },
+    {
+      "firmware_address": "0x80046d80",
+      "length": 6,
+      "payload_offset": 108
+    },
+    {
+      "firmware_address": "0x80046e08",
+      "length": 4,
+      "payload_offset": 144
+    },
+    {
+      "firmware_address": "0x80047268",
+      "length": 2,
+      "payload_offset": 176
+    },
+    {
+      "firmware_address": "0x80047338",
+      "length": 4,
+      "payload_offset": 216
+    }
+  ]
+}
