@@ -428,10 +428,7 @@ mod tests {
         let requested = ["midi-sync".to_owned(), "midi-control".to_owned()];
         assert_eq!(
             resolve_patch_dependencies(&requested).unwrap(),
-            [
-                "midi-control".to_owned(),
-                "midi-sync".to_owned(),
-            ]
+            ["midi-control".to_owned(), "midi-sync".to_owned(),]
         );
     }
 
