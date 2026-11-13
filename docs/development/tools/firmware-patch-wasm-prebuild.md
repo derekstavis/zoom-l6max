@@ -10,7 +10,12 @@ cargo run --offline --locked -p firmware-patch-wasm-prebuild -- \
   /path/to/unpacked-l6max /path/to/unpacked-l6
 ```
 
-Run it only when intentionally refreshing the browser patch templates. It
-validates the input firmware revisions and emits a manifest and per-patch
-template metadata. Keep source firmware local and review generated output
-before including any build artifact in a change.
+Run it whenever a patch payload, hook registration, dependency, composition
+rule or loader template input changes. The browser build consumes the checked-in
+templates; compiling the Rust/WASM code does not regenerate them automatically.
+The tool validates the input firmware revisions and emits a manifest and
+per-patch template metadata. Keep source firmware local and review the generated
+output before including it with the source change. Then run the `wasm-patch`
+smoke case for both models to check the browser output against the native
+builder; use the `sd-matrix` suite to validate SD loading and composed profiles.
+See the [testing workflow](../testing.md#firmware-patch) for the commands.

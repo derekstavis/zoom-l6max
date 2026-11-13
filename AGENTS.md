@@ -10,6 +10,16 @@ For focused runtime observations outside qualification, use
 Local firmware package and audio paths belong in ignored `config.toml`; never commit
 firmware, SD cards, saved flash, generated analysis artifacts or runtime logs.
 
+When changing patch payloads, hook metadata, dependencies, composition logic or
+the browser patch builder, regenerate the committed browser templates with
+`firmware-patch-wasm-prebuild` using supported unpacked L6max and L6 firmware.
+Do not hand-edit generated templates. Run `wasm-patch` for both models and the
+`sd-matrix` suite to check browser/native parity and SD loading. Run `full` for
+the stack tip; pass `--app` to include packaged GUI cases. Review `report.json`:
+BLOCKED cases did not run, and a retry passing after a failure should be reported
+as a timing flake rather than silently counted as a clean suite pass. See
+`docs/development/testing.md#firmware-patch` for commands and interpretation.
+
 Before suites, use execution permissions that allow POSIX shared memory and
 inherited sockets. Shared Git worktrees need access to their parent Git metadata.
 These requirements cannot be granted by this file; request the tool's required
