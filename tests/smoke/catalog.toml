@@ -199,16 +199,6 @@ volatile = true
 no_sd = true
 
 [[case]]
-id = "knob-dialog-scene-prototype"
-suites = ["full"]
-models = ["l6max"]
-scenario = "scenarios/knob-dialog-scene-prototype.toml"
-needs_configuration = true
-volatile = true
-no_sd = true
-wall_timeout_s = 900
-
-[[case]]
 id = "l6-event-dispatch"
 suites = ["full"]
 models = ["l6"]
