@@ -4523,8 +4523,10 @@ impl State {
                         if session.engine.management[0].query_status()?.status != "shutdown" {
                             return Err("power-off did not shut down QEMU".into());
                         }
+                        // The input and panel guest clocks can differ by one
+                        // update interval while the main core shuts down.
                         if session.engine.model() == l6fw::Model::L6
-                            && !(400..=800).contains(&elapsed)
+                            && !(300..=800).contains(&elapsed)
                         {
                             return Err(format!("L6 cutoff took {elapsed} guest ms").into());
                         }
