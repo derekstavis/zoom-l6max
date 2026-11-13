@@ -433,6 +433,19 @@ mod tests {
     }
 
     #[test]
+    fn dependency_resolution_uses_package_order_and_includes_shared_dependency_once() {
+        let requested = ["dual-efx".to_owned(), "midi-control".to_owned()];
+        assert_eq!(
+            resolve_patch_dependencies(&requested).unwrap(),
+            [
+                "knob-dialog".to_owned(),
+                "midi-control".to_owned(),
+                "dual-efx".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
     fn generic_firmware_verification_detects_both_models_from_reset_vector() {
         for (reset_vector, expected) in [
             (0x80001415u32, FirmwareModel::L6),
