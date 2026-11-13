@@ -21,16 +21,14 @@ guest_ms = 3000
 action = "checkpoint"
 name = "home"
 
+[[step]]
+action = "expect-display-image"
+image = "images/l6max-storage-removed.png"
+
 # Live settings struct: setup_required loaded from the synthesized bank.
 [[step]]
 action = "expect-memory"
 address = 0x804601e0
-bytes = [0]
-
-# Startup UI state: 5 is the Date/Time and Battery Type setup flow.
-[[step]]
-action = "expect-memory"
-address = 0x805dc360
 bytes = [0]
 
 # The firmware read the spec's bank (first commit lands in slot 0x1f9000) and
