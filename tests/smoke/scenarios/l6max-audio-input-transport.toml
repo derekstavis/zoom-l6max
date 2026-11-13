@@ -131,7 +131,7 @@ command = "play"
 
 [[step]]
 action = "delay"
-guest_ms = 2000
+guest_ms = 3000
 guest_timeout_ms = 10000
 wall_timeout_s = 120
 

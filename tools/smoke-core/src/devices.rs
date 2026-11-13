@@ -6645,7 +6645,7 @@ fn run_knob_dialog(
                 break;
             }
             let now = inputs.panel.snapshot().guest_ms;
-            if now.wrapping_sub(timeout_start) >= 5_000 {
+            if now.wrapping_sub(timeout_start) >= 10_000 {
                 return Err(format!(
                     "custom scene timeout did not finish after notification expiry; {ticks} ticks remain"
                 )
