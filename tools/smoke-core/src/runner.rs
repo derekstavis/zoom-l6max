@@ -313,8 +313,22 @@ impl Runner {
                             )
                         })?
                         .to_luma8();
-                    expected.dimensions() == (128, 64)
-                        && display_matches_reference(&obs.data.display, &expected)
+                    if expected.dimensions() != (128, 64) {
+                        return Err(format!(
+                            "display reference {} has dimensions {:?}, expected 128×64",
+                            path.display(),
+                            expected.dimensions()
+                        ));
+                    }
+                    let differences =
+                        devices::display_difference_count(&obs.data.display, &expected);
+                    if differences != 0 {
+                        return Err(format!(
+                            "display differs from {} in {differences} of 8192 pixels",
+                            path.display()
+                        ));
+                    }
+                    true
                 }
                 Action::ExpectTrace { contains, absent } => {
                     if absent
@@ -1186,18 +1200,6 @@ fn save_display(data: &PanelData, logs: &Path, name: &str) -> Result<(), String>
     })
     .save(logs.join(format!("{name}.png")))
     .map_err(|e| e.to_string())
-}
-
-fn display_matches_reference(display: &[u8; 1024], reference: &image::GrayImage) -> bool {
-    (0..64).all(|y| {
-        (0..128).all(|x| {
-            let index = ((63 - y) / 8) * 128 + x;
-            let mask = 1 << ((63 - y) % 8);
-            let actual = display[index] & mask != 0;
-            let expected = reference.get_pixel(x as u32, y as u32).0[0] >= 128;
-            actual == expected
-        })
-    })
 }
 
 /// L6max non-ring lamp index of TAP in `indicators::LED_PINS`.

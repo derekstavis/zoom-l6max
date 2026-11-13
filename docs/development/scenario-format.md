@@ -158,7 +158,7 @@ Scenarios default to `backends = ["headless", "gui"]`. Typed device steps requir
 | `l6max-din-mixer-control` | `expect_din_ring_change` | After editor SysEx setup, verify USB mixer control, stock/patched DIN response, and DIN mute-echo suppression |
 | `usb-storage` | — | Enumerate storage, compare sector zero to the copied card, round-trip its last sector, then create/read/compare/delete a 1,537-byte FAT file through the USB disk |
 | `audio-callbacks` | — | First step only; arm revision-guarded breakpoints before boot and require every model callback |
-| `knob-dialog` | — | Patched L6max only; verify all ten popup modes, firmware-formatted values, heap lifetime, busy-aware expiry, display cleanup, widget restoration and exact encoder reports; frequency text allows one display unit of firmware rounding |
+| `knob-dialog` | — | Patched L6max only; compare all ten parameter scenes with reviewed display images, then verify heap lifetime, busy-aware expiry, display cleanup, widget restoration and exact encoder reports |
 | `firmware-update` | — | L6 and L6max disposable-state update lifecycle, corrupt-checksum rejection, NOR segment install, L6max panel programming, protected-region preservation and clean restart; an `update_patches` package additionally checks model-specific post-install behavior |
 | `power-press` | `hold_ms`, `powered` | Check expected power result, model cutoff timing and stopped clock |
 | `restart` | — | Retire the session before reopening its isolated persistent state; reset readiness, trace counters and action baselines |
