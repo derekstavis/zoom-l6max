@@ -82,6 +82,7 @@ card-reader mode), stays unmarked.
 | `switch` | `control`, `enabled` | Set a latching switch using its real GUI toggle or one headless electrical edge |
 | `checkpoint` | `name` | Save display/rings and PNG/ASCII evidence under a unique simple name |
 | `expect-display` | `checkpoint`, `changed` | Compare retained pixels with the checkpoint; scoped to L6max |
+| `expect-display-image` | `image` | Compare all 128×64 L6max display pixels exactly with a PNG under `tests/smoke/` |
 | `expect-trace` | `contains`, optional `absent` | Require every listed pattern and reject forbidden patterns in the active trace |
 | `expect-trace-count` | `pattern`, `count`, optional `at_least`, `checkpoint` | Assert exact or minimum active-trace match count, optionally relative to a checkpoint |
 | `expect-button-report` | `control` | Exact L6max press/release UART edges relative to the preceding press/switch, including no spurious switch release |
@@ -114,6 +115,13 @@ execution applies the equivalent logical knob movement. GPUI dispatches the
 specified gesture into its actual hit region and handlers. Thus event geometry,
 scroll accumulation and redraw bugs remain GUI-adapter coverage. Fractional
 motion is additionally covered by production gesture unit tests.
+
+For UI behavior, use `expect-display-image` to compare the rendered 128×64
+L6max pixels with a reviewed PNG stored under `tests/smoke/` (normally in
+`tests/smoke/images/`). Comparison is exact after converting the reference to
+black-and-white pixels. Review the screenshot before updating a reference;
+memory and firmware-state assertions may supplement image comparisons but do
+not establish that the UI rendered correctly.
 
 Supported semantic controls include each physical channel mute, modes
 `eq-high`, `freq`, `mid`, `low`, `aux1`, `aux2`, `efx`, `pan`, `level` and L6max
