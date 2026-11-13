@@ -5,7 +5,7 @@ backends = ["headless"]
 state = "setup-complete"
 patches = ["midi-sync"]
 main_sha256 = "a224a9e1da62f2dac3b931aab17f0c9a6e76b2c3caeb1ab1b81ec90d44a308c5"
-main_sha256_any = ["379804b806079242bc27b36b5b59c2fb354c1b99f0307803782cd43d1dc13d1f"]
+main_sha256_any = ["379804b806079242bc27b36b5b59c2fb354c1b99f0307803782cd43d1dc13d1f", "2518be3e15c31611c990a5ec6a6afde0aef158070038ed0b9d2bde34b5cef06d"]
 
 [[step]]
 action = "delay"

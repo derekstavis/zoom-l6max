@@ -152,6 +152,9 @@ pub enum Action {
         checkpoint: String,
         changed: bool,
     },
+    ExpectDisplayImage {
+        image: PathBuf,
+    },
     ExpectTrace {
         contains: Vec<String>,
         #[serde(default)]
@@ -870,6 +873,19 @@ impl Scenario {
                 }
             }
             match &step.action {
+                Action::ExpectDisplayImage { image } => {
+                    if image.is_absolute()
+                        || image
+                            .components()
+                            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+                        || image.extension().is_none_or(|extension| extension != "png")
+                    {
+                        return Err(
+                            "expect-display-image needs a relative PNG path under tests/smoke"
+                                .into(),
+                        );
+                    }
+                }
                 Action::Checkpoint { name } => {
                     if name.is_empty()
                         || name.len() > 64

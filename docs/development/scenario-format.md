@@ -82,6 +82,7 @@ card-reader mode), stays unmarked.
 | `switch` | `control`, `enabled` | Set a latching switch using its real GUI toggle or one headless electrical edge |
 | `checkpoint` | `name` | Save display/rings and PNG/ASCII evidence under a unique simple name |
 | `expect-display` | `checkpoint`, `changed` | Compare retained pixels with the checkpoint; scoped to L6max |
+| `expect-display-image` | `image` | Compare all 128×64 L6max display pixels exactly with a PNG under `tests/smoke/` |
 | `expect-trace` | `contains`, optional `absent` | Require every listed pattern and reject forbidden patterns in the active trace |
 | `expect-trace-count` | `pattern`, `count`, optional `at_least`, `checkpoint` | Assert exact or minimum active-trace match count, optionally relative to a checkpoint |
 | `expect-button-report` | `control` | Exact L6max press/release UART edges relative to the preceding press/switch, including no spurious switch release |
@@ -114,6 +115,13 @@ execution applies the equivalent logical knob movement. GPUI dispatches the
 specified gesture into its actual hit region and handlers. Thus event geometry,
 scroll accumulation and redraw bugs remain GUI-adapter coverage. Fractional
 motion is additionally covered by production gesture unit tests.
+
+For UI behavior, use `expect-display-image` to compare the rendered 128×64
+L6max pixels with a reviewed PNG stored under `tests/smoke/` (normally in
+`tests/smoke/images/`). Comparison is exact after converting the reference to
+black-and-white pixels. Review the screenshot before updating a reference;
+memory and firmware-state assertions may supplement image comparisons but do
+not establish that the UI rendered correctly.
 
 Supported semantic controls include each physical channel mute, modes
 `eq-high`, `freq`, `mid`, `low`, `aux1`, `aux2`, `efx`, `pan`, `level` and L6max
@@ -150,7 +158,7 @@ Scenarios default to `backends = ["headless", "gui"]`. Typed device steps requir
 | `l6max-din-mixer-control` | `expect_din_ring_change` | After editor SysEx setup, verify USB mixer control, stock/patched DIN response, and DIN mute-echo suppression |
 | `usb-storage` | — | Enumerate storage, compare sector zero to the copied card, round-trip its last sector, then create/read/compare/delete a 1,537-byte FAT file through the USB disk |
 | `audio-callbacks` | — | First step only; arm revision-guarded breakpoints before boot and require every model callback |
-| `knob-dialog` | — | Patched L6max only; verify all ten popup modes, firmware-formatted values, heap lifetime, busy-aware expiry, display cleanup, widget restoration and exact encoder reports; frequency text allows one display unit of firmware rounding |
+| `knob-dialog` | — | Patched L6max only; compare all ten parameter scenes with reviewed display images, then verify heap lifetime, busy-aware expiry, display cleanup, widget restoration and exact encoder reports |
 | `firmware-update` | — | L6 and L6max disposable-state update lifecycle, corrupt-checksum rejection, NOR segment install, L6max panel programming, protected-region preservation and clean restart; an `update_patches` package additionally checks model-specific post-install behavior |
 | `power-press` | `hold_ms`, `powered` | Check expected power result, model cutoff timing and stopped clock |
 | `restart` | — | Retire the session before reopening its isolated persistent state; reset readiness, trace counters and action baselines |

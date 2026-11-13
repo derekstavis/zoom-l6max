@@ -298,6 +298,38 @@ impl Runner {
                         .ok_or("checkpoint not executed for this model")?;
                     (base.data.display != obs.data.display) == changed
                 }
+                Action::ExpectDisplayImage { image } => {
+                    if self.model == Model::L6 {
+                        return Err("L6 has no display".into());
+                    }
+                    let path = l6max_host::paths::repository_root()
+                        .join("tests/smoke")
+                        .join(&image);
+                    let expected = image::open(&path)
+                        .map_err(|error| {
+                            format!(
+                                "could not load display reference {}: {error}",
+                                path.display()
+                            )
+                        })?
+                        .to_luma8();
+                    if expected.dimensions() != (128, 64) {
+                        return Err(format!(
+                            "display reference {} has dimensions {:?}, expected 128×64",
+                            path.display(),
+                            expected.dimensions()
+                        ));
+                    }
+                    let differences =
+                        devices::display_difference_count(&obs.data.display, &expected);
+                    if differences != 0 {
+                        return Err(format!(
+                            "display differs from {} in {differences} of 8192 pixels",
+                            path.display()
+                        ));
+                    }
+                    true
+                }
                 Action::ExpectTrace { contains, absent } => {
                     if absent
                         .iter()

@@ -2,7 +2,7 @@
 
 This maintainer tool builds the static templates consumed by the browser-based
 patcher. It needs local unpacked L6max and L6 firmware directories and writes
-generated output under the repository's `web` workspace. Generated templates
+generated output to `tools/firmware-patch-wasm/templates`. Generated templates
 are build artifacts and should not be edited by hand.
 
 ```sh

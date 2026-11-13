@@ -21,6 +21,10 @@ Both GUI and headless scenarios use `smoke-core`, `PanelFeed` and `PanelData`.
 Keep assertions out of GUI adapters. Prefer guest-time readiness/output checks
 with bounded wall deadlines. A static OLED is valid. L6 has six rings and no screen;
 L6max has eight rings. Do not substitute one model's persistent state for the other.
+For UI behavior, compare rendered pixels with reviewed reference images using
+`expect-display-image`; memory and state assertions can supplement these checks,
+but do not prove that the UI rendered correctly. Store the 128×64 PNG references
+under `tests/smoke/images/` and update them only after reviewing the rendered UI.
 
 Use the reference manual for peripheral behavior. Preserve compatibility
 exceptions with explicit model scope and evidence. Scope firmware-specific

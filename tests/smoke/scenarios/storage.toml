@@ -14,6 +14,11 @@ action = "checkpoint"
 name = "home"
 
 [[step]]
+models = ["l6max"]
+action = "expect-display-image"
+image = "images/l6max-recorder-home.png"
+
+[[step]]
 action = "sd-card"
 inserted = false
 
@@ -23,9 +28,13 @@ guest_ms = 3000
 
 [[step]]
 models = ["l6max"]
-action = "expect-display"
-checkpoint = "home"
-changed = true
+action = "checkpoint"
+name = "storage-removed"
+
+[[step]]
+models = ["l6max"]
+action = "expect-display-image"
+image = "images/l6max-storage-removed.png"
 
 [[step]]
 action = "sd-card"
@@ -37,9 +46,8 @@ guest_ms = 5000
 
 [[step]]
 models = ["l6max"]
-action = "expect-display"
-checkpoint = "home"
-changed = false
+action = "expect-display-image"
+image = "images/l6max-recorder-home.png"
 
 [[step]]
 action = "expect-trace"

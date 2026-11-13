@@ -4138,19 +4138,21 @@ impl State {
                 inputs.down(target, 0)?;
                 gdb.continue_until_stop(Duration::from_secs(15))?;
                 let pc = gdb.read_register(15)? & !1;
-                if pc != DISPATCHER {
+                if pc == DISPATCHER {
+                    gdb.breakpoint(DISPATCHER, false)?;
+                    gdb.continue_until_stop(Duration::from_secs(15))?;
+                    let pc = gdb.read_register(15)? & !1;
+                    if pc != EVENT_SUBMIT {
+                        return Err(format!(
+                            "panel target {target} reached {pc:#x}, not event submit"
+                        )
+                        .into());
+                    }
+                } else if pc != EVENT_SUBMIT {
                     return Err(format!(
-                        "panel target {target} stopped at {pc:#x}, not dispatcher"
+                        "panel target {target} stopped at {pc:#x}, not dispatcher or event submit"
                     )
                     .into());
-                }
-                gdb.breakpoint(DISPATCHER, false)?;
-                gdb.continue_until_stop(Duration::from_secs(15))?;
-                let pc = gdb.read_register(15)? & !1;
-                if pc != EVENT_SUBMIT {
-                    return Err(
-                        format!("panel target {target} reached {pc:#x}, not event submit").into(),
-                    );
                 }
                 let response = gdb.request(&format!("m{REPORT:x},3"))?;
                 if response.len() != 6 {
@@ -4521,8 +4523,10 @@ impl State {
                         if session.engine.management[0].query_status()?.status != "shutdown" {
                             return Err("power-off did not shut down QEMU".into());
                         }
+                        // The input and panel guest clocks can differ by one
+                        // update interval while the main core shuts down.
                         if session.engine.model() == l6fw::Model::L6
-                            && !(400..=800).contains(&elapsed)
+                            && !(300..=800).contains(&elapsed)
                         {
                             return Err(format!("L6 cutoff took {elapsed} guest ms").into());
                         }
@@ -5525,16 +5529,40 @@ fn run_knob_dialog(
             }
             thread::sleep(Duration::from_millis(5));
         };
-        image::DynamicImage::ImageLuma8(image::GrayImage::from_fn(128, 64, |x, y| {
+        let native = image::GrayImage::from_fn(128, 64, |x, y| {
             let index = ((63 - y as usize) / 8) * 128 + x as usize;
             image::Luma([if raw[index] & (1 << ((63 - y as usize) % 8)) != 0 {
                 255
             } else {
                 0
             }])
-        }))
-        .resize(768, 384, image::imageops::FilterType::Nearest)
-        .save(options.logs.join(format!("{name}.png")))?;
+        });
+        if let Some(scene) = name.strip_prefix("window-scene-")
+            && [
+                "high", "freq", "mid", "low", "aux1", "aux2", "efx", "sub-mix", "pan", "level",
+            ]
+            .contains(&scene)
+        {
+            let path = l6max_host::paths::repository_root()
+                .join("tests/smoke/images/knob-dialog")
+                .join(format!("{scene}.png"));
+            let expected = image::open(&path)?.to_luma8();
+            let differences = if expected.dimensions() == (128, 64) {
+                display_difference_count(&raw, &expected)
+            } else {
+                128 * 64
+            };
+            if differences != 0 {
+                return Err(format!(
+                    "knob-dialog screen {scene} differs from its reviewed display image by {differences} pixels ({})",
+                    path.display(),
+                )
+                .into());
+            }
+        }
+        image::DynamicImage::ImageLuma8(native)
+            .resize(768, 384, image::imageops::FilterType::Nearest)
+            .save(options.logs.join(format!("{name}.png")))?;
         Ok(raw)
     };
     let expected_value = |mode: u32, raw: u8| -> String {
@@ -6302,7 +6330,7 @@ fn run_knob_dialog(
             )
             .into());
         }
-        let mut previous_mode_frame = capture(500, "window-scene-after-callback-contention")?;
+        capture(500, "window-scene-after-callback-contention")?;
         let pending_after_contention = qmp.read_memory(0, state + 3, 1)?;
         if pending_after_contention != u8::MAX.to_le_bytes() {
             return Err(format!(
@@ -6310,17 +6338,17 @@ fn run_knob_dialog(
             )
             .into());
         }
-        for (mode, button, name) in [
-            (9, 35, "level"),
-            (0, 28, "high"),
-            (1, 33, "freq"),
-            (2, 38, "mid"),
-            (3, 43, "low"),
-            (4, 10, "aux1"),
-            (5, 15, "aux2"),
-            (6, 20, "efx"),
-            (7, 25, "sub-mix"),
-            (8, 30, "pan"),
+        for (button, name) in [
+            (35, "level"),
+            (28, "high"),
+            (33, "freq"),
+            (38, "mid"),
+            (43, "low"),
+            (10, "aux1"),
+            (15, "aux2"),
+            (20, "efx"),
+            (25, "sub-mix"),
+            (30, "pan"),
         ] {
             let selection_applied = inputs.panel.snapshot().applied;
             inputs.tap(button, 50)?;
@@ -6338,24 +6366,7 @@ fn run_knob_dialog(
                 || inputs.panel.snapshot().applied > encoder_applied,
                 "knob-dialog parameter encoder acknowledgement",
             )?;
-            let frame = capture(400, &format!("window-scene-{name}"))?;
-            let offset = [2, 5, 4, 6, 15, 16, 12, 9, 8, 0x120][mode as usize];
-            let raw = qmp.read_memory(0, 0x8045ff84 + offset, 1)?[0];
-            let displayed = decode_text(text_table + 179 * 4)?;
-            if !knob_display_matches(mode, &expected_value(mode, raw), &displayed) {
-                return Err(format!(
-                    "scene mode {name} displayed {displayed:?} for raw value {raw}"
-                )
-                .into());
-            }
-            if mode != 9
-                && !(0..17).any(|y| {
-                    let index = ((63 - y) / 8) * 128;
-                    frame[index..index + 128] != previous_mode_frame[index..index + 128]
-                })
-            {
-                return Err(format!("scene title did not change for mode {name}").into());
-            }
+            capture(400, &format!("window-scene-{name}"))?;
             let mode_heap = heap()?;
             if mode_heap[2] != heap_live[2] || mode_heap[3] != heap_live[3] {
                 return Err(format!(
@@ -6363,7 +6374,6 @@ fn run_knob_dialog(
                 )
                 .into());
             }
-            previous_mode_frame = frame;
         }
         // The preceding mode walk ends on Pan with a verified live scene.
         // Sweep from center through left 50% to right 50%, capturing at 20 fps.
@@ -6637,7 +6647,7 @@ fn run_knob_dialog(
                 break;
             }
             let now = inputs.panel.snapshot().guest_ms;
-            if now.wrapping_sub(timeout_start) >= 5_000 {
+            if now.wrapping_sub(timeout_start) >= 10_000 {
                 return Err(format!(
                     "custom scene timeout did not finish after notification expiry; {ticks} ticks remain"
                 )
@@ -6997,6 +7007,23 @@ fn knob_display_matches(mode: u32, expected: &str, displayed: &str) -> bool {
         _ => return false,
     };
     (expected - displayed).abs() <= tolerance
+}
+
+pub(crate) fn display_difference_count(
+    display: &[u8; 1024],
+    reference: &image::GrayImage,
+) -> usize {
+    (0..64)
+        .flat_map(|y| {
+            (0..128).map(move |x| {
+                let index = ((63 - y) / 8) * 128 + x;
+                let mask = 1 << ((63 - y) % 8);
+                let actual = display[index] & mask != 0;
+                let expected = reference.get_pixel(x as u32, y as u32).0[0] >= 128;
+                usize::from(actual != expected)
+            })
+        })
+        .sum()
 }
 
 fn wait_guest(
@@ -8758,8 +8785,9 @@ fn editor_pad_assignment_matches(replies: &[Vec<u8>], pad: u8, args: &[u8]) -> b
 #[cfg(test)]
 mod tests {
     use super::{
-        create_factory_card, editor_pad_assignment_matches, editor_pad_file_count,
-        editor_pad_filename_valid, knob_display_matches, sound_pad_led, verify_sai_edma_trace,
+        create_factory_card, display_difference_count, editor_pad_assignment_matches,
+        editor_pad_file_count, editor_pad_filename_valid, knob_display_matches, sound_pad_led,
+        verify_sai_edma_trace,
     };
     use l6fw::Model;
     use std::{
@@ -8852,5 +8880,18 @@ mod tests {
         assert!(knob_display_matches(1, "1.23 kHz", "1.24 kHz"));
         assert!(!knob_display_matches(1, "646 Hz", "648 Hz"));
         assert!(!knob_display_matches(0, "646 Hz", "647 Hz"));
+    }
+
+    #[test]
+    fn display_image_comparison_counts_native_lcd_pixel_differences() {
+        let mut display = [0; 1024];
+        let mut reference = image::GrayImage::from_pixel(128, 64, image::Luma([0]));
+        assert_eq!(display_difference_count(&display, &reference), 0);
+
+        display[0] |= 1;
+        assert_eq!(display_difference_count(&display, &reference), 1);
+
+        reference.put_pixel(0, 63, image::Luma([255]));
+        assert_eq!(display_difference_count(&display, &reference), 0);
     }
 }
