@@ -4138,19 +4138,21 @@ impl State {
                 inputs.down(target, 0)?;
                 gdb.continue_until_stop(Duration::from_secs(15))?;
                 let pc = gdb.read_register(15)? & !1;
-                if pc != DISPATCHER {
+                if pc == DISPATCHER {
+                    gdb.breakpoint(DISPATCHER, false)?;
+                    gdb.continue_until_stop(Duration::from_secs(15))?;
+                    let pc = gdb.read_register(15)? & !1;
+                    if pc != EVENT_SUBMIT {
+                        return Err(format!(
+                            "panel target {target} reached {pc:#x}, not event submit"
+                        )
+                        .into());
+                    }
+                } else if pc != EVENT_SUBMIT {
                     return Err(format!(
-                        "panel target {target} stopped at {pc:#x}, not dispatcher"
+                        "panel target {target} stopped at {pc:#x}, not dispatcher or event submit"
                     )
                     .into());
-                }
-                gdb.breakpoint(DISPATCHER, false)?;
-                gdb.continue_until_stop(Duration::from_secs(15))?;
-                let pc = gdb.read_register(15)? & !1;
-                if pc != EVENT_SUBMIT {
-                    return Err(
-                        format!("panel target {target} reached {pc:#x}, not event submit").into(),
-                    );
                 }
                 let response = gdb.request(&format!("m{REPORT:x},3"))?;
                 if response.len() != 6 {
