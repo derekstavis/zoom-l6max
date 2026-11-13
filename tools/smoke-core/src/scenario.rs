@@ -258,6 +258,8 @@ pub enum Action {
         expected_parameter_id: Option<u8>,
         #[serde(default)]
         expected_parameter_value: Option<f32>,
+        #[serde(default)]
+        expected_dialog_active: Option<bool>,
     },
     ExpectHeap {
         minimum_free: u32,

@@ -528,6 +528,7 @@ impl Runner {
                     minimum_parameter_edits,
                     expected_parameter_id,
                     expected_parameter_value,
+                    expected_dialog_active,
                 } => {
                     return Ok(Progress::Device(devices::Operation::DualEfxState {
                         expected_effect_type,
@@ -535,6 +536,7 @@ impl Runner {
                         minimum_parameter_edits,
                         expected_parameter_id,
                         expected_parameter_value,
+                        expected_dialog_active,
                     }));
                 }
                 Action::ExpectHeap { minimum_free } => {

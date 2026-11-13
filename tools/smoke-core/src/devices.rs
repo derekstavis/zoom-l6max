@@ -81,6 +81,7 @@ pub enum Operation {
         minimum_parameter_edits: Option<u32>,
         expected_parameter_id: Option<u8>,
         expected_parameter_value: Option<f32>,
+        expected_dialog_active: Option<bool>,
     },
     ExpectHeap {
         minimum_free: u32,
@@ -3655,6 +3656,7 @@ impl State {
                 minimum_parameter_edits,
                 expected_parameter_id,
                 expected_parameter_value,
+                expected_dialog_active,
             } => Ok(dual_efx_state(
                 options,
                 session,
@@ -3663,6 +3665,7 @@ impl State {
                 minimum_parameter_edits,
                 expected_parameter_id,
                 expected_parameter_value,
+                expected_dialog_active,
             )
             .map_err(std::io::Error::other)?),
             Operation::ExpectSdPatch {
@@ -5764,6 +5767,7 @@ fn dual_efx_state(
     minimum_parameter_edits: Option<u32>,
     expected_parameter_id: Option<u8>,
     expected_parameter_value: Option<f32>,
+    expected_dialog_active: Option<bool>,
 ) -> Result<Value, String> {
     if session.engine.model() != l6fw::Model::L6max {
         return Err("Dual EFX state checks require L6max".into());
@@ -5855,6 +5859,11 @@ fn dual_efx_state(
     if expected_edit_mode.is_some_and(|expected| edit_mode != u32::from(expected)) {
         return Err(format!(
             "Dual EFX parameter edit mode is {edit_mode}, expected {expected_edit_mode:?}"
+        ));
+    }
+    if expected_dialog_active.is_some_and(|expected| dialog_active != u8::from(expected)) {
+        return Err(format!(
+            "Knob Dialog active state is {dialog_active}, expected {expected_dialog_active:?}"
         ));
     }
     if minimum_parameter_edits.is_some_and(|minimum| applied < minimum) {

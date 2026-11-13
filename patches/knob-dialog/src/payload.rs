@@ -175,6 +175,9 @@ pub(crate) fn prepare_external_text() -> bool {
 #[cfg(sd_dynamic_module)]
 pub(crate) fn show_external_text(title: &[u8], value: &[u8]) -> bool {
     unsafe {
+        if state().is_null() {
+            return false;
+        }
         publish_external_text(
             title.as_ptr(),
             title.len() as u32,
@@ -575,6 +578,18 @@ pub unsafe extern "C" fn knob_dialog_display_tick() {
             return;
         }
         if notification_active.read() == 0 && notification_busy.read() == 0 {
+            #[cfg(sd_dynamic_module)]
+            if let Some((title, value)) = take_external_text() {
+                if (*pointer).ticks == 0 && !scene_is_available_for_first_draw() {
+                    KNOB_DIALOG_EXTERNAL_TEXT_ACTIVE.store(0, Ordering::Release);
+                } else {
+                    write(
+                        core::ptr::addr_of_mut!((*pointer).ticks),
+                        SCENE_TIMEOUT_TICKS,
+                    );
+                    render_scene(&title, &value);
+                }
+            }
             if let Some((channel, mode)) = take_pending() {
                 present(channel, mode);
             }
