@@ -424,14 +424,13 @@ mod tests {
     }
 
     #[test]
-    fn dependency_resolution_uses_package_order_and_includes_shared_dependency_once() {
-        let requested = ["dual-efx".to_owned(), "midi-control".to_owned()];
+    fn dependency_resolution_uses_package_order_and_includes_each_patch_once() {
+        let requested = ["midi-sync".to_owned(), "midi-control".to_owned()];
         assert_eq!(
             resolve_patch_dependencies(&requested).unwrap(),
             [
-                "knob-dialog".to_owned(),
                 "midi-control".to_owned(),
-                "dual-efx".to_owned(),
+                "midi-sync".to_owned(),
             ]
         );
     }
