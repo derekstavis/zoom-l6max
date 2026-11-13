@@ -512,6 +512,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let mut claimed: Vec<(u32, usize)> = Vec::new();
     let mut loader_dispatch_targets = std::collections::BTreeMap::<u32, u32>::new();
+    let mut loader_hook_targets = std::collections::BTreeMap::<u32, u32>::new();
     fs::create_dir_all(&options.output)?;
     let output = options.output.canonicalize()?;
     let padding = fs::read(source.join("padding_before_secondary.bin"))?;
@@ -554,10 +555,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             &registrations,
         )?;
         for hook in &hooks {
-            if claimed.iter().any(|&(address, length)| {
+            loader_hook_targets.insert(hook.address, hook.target | 1);
+            let overlap = claimed.iter().find(|&&(address, length)| {
                 hook.address < address + length as u32
                     && address < hook.address + hook.length as u32
-            }) {
+            });
+            if let Some(&(address, length)) = overlap
+                && !(address == hook.address
+                    && length == hook.length
+                    && loader_hook_targets.contains_key(&hook.address))
+            {
                 return Err(format!("loader hook overlaps another patch: {}", hook.symbol).into());
             }
             claimed.push((hook.address, hook.length));
@@ -708,12 +715,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .is_some_and(|(owner_patch, owner_hook, _)| {
                         *owner_patch == patch_index && *owner_hook == hook_index
                     });
+            let continuation_target = loader_dispatch_targets
+                .get(&address)
+                .or_else(|| loader_hook_targets.get(&address))
+                .copied();
             if is_last_in_chain
                 && let (Some(site), Some(dispatch)) = (
                     compiled_patches[patch_index].hooks[hook_index]
                         .continuation_site
                         .clone(),
-                    loader_dispatch_targets.get(&address).copied(),
+                    continuation_target,
                 )
             {
                 let handler = compiled_patches[patch_index].hooks[hook_index]
@@ -751,14 +762,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if installed_hook_sites.contains(&hook.address) {
                 continue;
             }
-            let prior = claimed.iter().any(|&(address, length)| {
+            let prior = claimed.iter().find(|&&(address, length)| {
                 hook.address < address + length as u32
                     && address < hook.address + hook.length as u32
             });
-            if prior {
+            let loader_chain = prior.is_some_and(|&(address, length)| {
+                address == hook.address
+                    && length == hook.length
+                    && loader_hook_targets.contains_key(&hook.address)
+            });
+            if prior.is_some() && !loader_chain {
                 return Err(format!("hook overlaps another patch: {}", hook.symbol).into());
             }
-            claimed.push((hook.address, hook.length));
+            if prior.is_none() {
+                claimed.push((hook.address, hook.length));
+            }
             installed_hook_sites.insert(hook.address);
             edits_vec.push(HookEdit {
                 address: hook.address,

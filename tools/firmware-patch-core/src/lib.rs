@@ -92,8 +92,8 @@ pub fn supports_wasm_patch(name: &str, model: FirmwareModel) -> bool {
     })
 }
 
-/// Resolve selected patch dependencies once, preserving requested order while
-/// placing each dependency before its consumer and including shared dependencies once.
+/// Resolve selected patch dependencies once, ordering all ready patches by
+/// their package order while placing dependencies before their consumers.
 pub fn resolve_patch_dependencies(requested: &[String]) -> Result<Vec<String>, String> {
     fn visit(
         name: &str,
@@ -125,7 +125,33 @@ pub fn resolve_patch_dependencies(requested: &[String]) -> Result<Vec<String>, S
     for name in requested {
         visit(name, &mut active, &mut complete, &mut ordered)?;
     }
-    Ok(ordered)
+
+    let mut remaining = ordered
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut result = Vec::with_capacity(remaining.len());
+    while !remaining.is_empty() {
+        let next = remaining
+            .iter()
+            .filter(|name| {
+                patch_package(name).is_some_and(|package| {
+                    package
+                        .requires
+                        .iter()
+                        .all(|dependency| !remaining.contains(dependency))
+                })
+            })
+            .min_by_key(|name| {
+                patch_package(name)
+                    .map(|package| (package.order, package.name.clone()))
+                    .unwrap_or((u32::MAX, (*name).clone()))
+            })
+            .cloned()
+            .ok_or("patch dependency cycle")?;
+        remaining.remove(&next);
+        result.push(next);
+    }
+    Ok(result)
 }
 
 /// Return a versioned filename for a composed module. Requested packages are
@@ -394,6 +420,19 @@ mod tests {
         assert_eq!(
             patch_package("midi-sync").unwrap().file_name,
             "midi-sync-1.0.0.bin"
+        );
+    }
+
+    #[test]
+    fn dependency_resolution_uses_package_order_and_includes_shared_dependency_once() {
+        let requested = ["dual-efx".to_owned(), "midi-control".to_owned()];
+        assert_eq!(
+            resolve_patch_dependencies(&requested).unwrap(),
+            [
+                "knob-dialog".to_owned(),
+                "midi-control".to_owned(),
+                "dual-efx".to_owned(),
+            ]
         );
     }
 

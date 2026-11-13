@@ -47,6 +47,7 @@ struct HookRow {
     length: usize,
     continuation_kind: String,
     continuation_site: Option<String>,
+    continuation_handler: Option<String>,
     continuation_slot_offset: Option<usize>,
     preserved_instructions: Vec<(usize, usize)>,
 }
@@ -80,26 +81,32 @@ fn compile_hook_rows(
                             .ok_or("hook window length overflow")?,
                 )
                 .ok_or_else(|| format!("hook window outside firmware at {:#x}", window.address))?;
-            let chain = registrations
+            let (chain_site, continuation_handler) = registrations
                 .iter()
                 .find_map(|registration| match registration {
                     firmware_patch_compile::HookRegistration::Entry { site, handler }
                         if handler == &window.name =>
                     {
-                        Some((site.clone(), format!("static_next_{site}_{handler}_slot")))
+                        Some((Some(site.clone()), Some(handler.clone())))
                     }
                     firmware_patch_compile::HookRegistration::CallPre { function, .. }
                     | firmware_patch_compile::HookRegistration::CallPost { function, .. }
                         if window.name == format!("call_dispatch:{function}") =>
                     {
-                        Some((function.clone(), format!("static_next_{function}_slot")))
+                        Some((Some(function.clone()), None))
                     }
                     _ => None,
-                });
-            let chain_site = chain.as_ref().map(|(site, _)| site.clone());
-            let continuation_slot_offset = chain
+                })
+                .unwrap_or((None, None));
+            let continuation_slot_offset = chain_site
                 .as_ref()
-                .map(|(_, slot)| symbol(&symbols, slot))
+                .map(|site| {
+                    let slot = continuation_handler.as_ref().map_or_else(
+                        || format!("static_next_{site}_slot"),
+                        |handler| format!("static_next_{site}_{handler}_slot"),
+                    );
+                    symbol(&symbols, &slot)
+                })
                 .transpose()?
                 .map(|address| usize::try_from(address).unwrap());
             let continuation_kind = match window.continuation {
@@ -135,6 +142,7 @@ fn compile_hook_rows(
                 length: window.length,
                 continuation_kind,
                 continuation_site: chain_site,
+                continuation_handler,
                 continuation_slot_offset,
                 preserved_instructions,
             })
@@ -391,6 +399,7 @@ fn build_loader_template(
             }
             .to_owned(),
             continuation_site: None,
+            continuation_handler: None,
             continuation_slot_offset: None,
             preserved_instructions: preserved_instructions(
                 firmware,
@@ -416,6 +425,7 @@ fn build_loader_template(
                     "linear".to_owned()
                 },
                 continuation_site: None,
+                continuation_handler: None,
                 continuation_slot_offset: None,
                 preserved_instructions: Vec::new(),
             });
@@ -840,8 +850,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "length": length,
                     "symbol": row.symbol,
                     "continuation_site": row.continuation_site,
-                    "continuation_slot_offset": row.continuation_slot_offset,
-                    "continuation_site": row.continuation_site,
+                    "continuation_handler": row.continuation_handler,
                     "continuation_slot_offset": row.continuation_slot_offset,
                 })
             })
@@ -943,8 +952,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "length": length,
                     "symbol": row.symbol,
                     "continuation_site": row.continuation_site,
-                    "continuation_slot_offset": row.continuation_slot_offset,
-                    "continuation_site": row.continuation_site,
+                    "continuation_handler": row.continuation_handler,
                     "continuation_slot_offset": row.continuation_slot_offset,
                 })
             })
