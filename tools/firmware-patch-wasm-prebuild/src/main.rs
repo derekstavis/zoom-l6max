@@ -80,25 +80,32 @@ fn compile_hook_rows(
                             .ok_or("hook window length overflow")?,
                 )
                 .ok_or_else(|| format!("hook window outside firmware at {:#x}", window.address))?;
-            let chain_site = registrations
+            let chain = registrations
                 .iter()
                 .find_map(|registration| match registration {
                     firmware_patch_compile::HookRegistration::Entry { site, handler }
                         if handler == &window.name =>
                     {
-                        Some(site.clone())
+                        Some((
+                            site.clone(),
+                            format!("static_next_{site}_{handler}_slot"),
+                        ))
                     }
                     firmware_patch_compile::HookRegistration::CallPre { function, .. }
                     | firmware_patch_compile::HookRegistration::CallPost { function, .. }
                         if window.name == format!("call_dispatch:{function}") =>
                     {
-                        Some(function.clone())
+                        Some((
+                            function.clone(),
+                            format!("static_next_{function}_slot"),
+                        ))
                     }
                     _ => None,
                 });
-            let continuation_slot_offset = chain_site
+            let chain_site = chain.as_ref().map(|(site, _)| site.clone());
+            let continuation_slot_offset = chain
                 .as_ref()
-                .map(|site| symbol(&symbols, &format!("static_next_{site}_slot")))
+                .map(|(_, slot)| symbol(&symbols, slot))
                 .transpose()?
                 .map(|address| usize::try_from(address).unwrap());
             let continuation_kind = match window.continuation {
