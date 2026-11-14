@@ -570,9 +570,32 @@ pub fn run_wasm_patch(options: &Options) -> Result<(), String> {
             }
             let output = command.output().map_err(|error| error.to_string())?;
             if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                if stderr.contains("installed patch payloads overlap the SD module region") {
+                    match firmware_patch_wasm::apply_patches_with_loader(&stock, &selected, true) {
+                        Err(message)
+                            if message.contains("overlap the Patch loader module reserve") =>
+                        {
+                            // Both builders reject profiles that cannot fit
+                            // alongside the loader's reserved SD module area.
+                            continue;
+                        }
+                        Err(message) => {
+                            return Err(format!(
+                                "native and WASM reject {selected:?} for different reasons: {} / {message}",
+                                stderr.trim()
+                            ));
+                        }
+                        Ok(_) => {
+                            return Err(format!(
+                                "WASM accepted {selected:?}, which native rejects because the static payload overlaps the SD module region"
+                            ));
+                        }
+                    }
+                }
                 return Err(format!(
                     "native patch-loader build failed for {selected:?}: {}",
-                    String::from_utf8_lossy(&output.stderr)
+                    stderr
                 ));
             }
             let native =
@@ -613,7 +636,7 @@ pub fn run_wasm_patch(options: &Options) -> Result<(), String> {
     if model == l6fw::Model::L6 {
         for unsupported in ["knob-dialog", "din-mixer-control"] {
             match firmware_patch_wasm::apply_patches(&stock, &[unsupported]) {
-                Err(message) if message.contains("only the midi-sync patch is supported") => {}
+                Err(message) if message.contains("is not available for L6 firmware") => {}
                 _ => {
                     return Err(format!(
                         "WASM accepted unsupported L6 profile {unsupported}"
