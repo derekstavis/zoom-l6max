@@ -86,19 +86,13 @@ fn compile_hook_rows(
                     firmware_patch_compile::HookRegistration::Entry { site, handler }
                         if handler == &window.name =>
                     {
-                        Some((
-                            site.clone(),
-                            format!("static_next_{site}_{handler}_slot"),
-                        ))
+                        Some((site.clone(), format!("static_next_{site}_{handler}_slot")))
                     }
                     firmware_patch_compile::HookRegistration::CallPre { function, .. }
                     | firmware_patch_compile::HookRegistration::CallPost { function, .. }
                         if window.name == format!("call_dispatch:{function}") =>
                     {
-                        Some((
-                            function.clone(),
-                            format!("static_next_{function}_slot"),
-                        ))
+                        Some((function.clone(), format!("static_next_{function}_slot")))
                     }
                     _ => None,
                 });

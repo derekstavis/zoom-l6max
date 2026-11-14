@@ -636,7 +636,12 @@ pub fn run_wasm_patch(options: &Options) -> Result<(), String> {
     if model == l6fw::Model::L6 {
         for unsupported in ["knob-dialog", "din-mixer-control"] {
             match firmware_patch_wasm::apply_patches(&stock, &[unsupported]) {
-                Err(message) if message.contains("is not available for L6 firmware") => {}
+                Err(message) if message.contains("only the midi-sync patch is supported") => {}
+                Err(message) => {
+                    return Err(format!(
+                        "WASM rejected unsupported L6 profile {unsupported} for an unexpected reason: {message}"
+                    ));
+                }
                 _ => {
                     return Err(format!(
                         "WASM accepted unsupported L6 profile {unsupported}"
