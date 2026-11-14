@@ -3,48 +3,54 @@
   "hooks": [
     {
       "address": "0x80024678",
+      "continuation_handler": "dual_efx_effect_workspace_clear",
       "continuation_site": "dsp_effect_workspace_clear",
-      "continuation_slot_offset": 11556,
+      "continuation_slot_offset": 11748,
       "length": 4,
       "symbol": "dual_efx_effect_workspace_clear",
       "target": "0x80109890"
     },
     {
       "address": "0x80066180",
+      "continuation_handler": "dsp_stream_entry_probe",
       "continuation_site": "dsp_stream_callback",
-      "continuation_slot_offset": 11588,
+      "continuation_slot_offset": 11768,
       "length": 4,
       "symbol": "dsp_stream_entry_probe",
       "target": "0x801097b0"
     },
     {
       "address": "0x80053b28",
+      "continuation_handler": "dual_efx_parameter_edit",
       "continuation_site": "mixer_apply_channel_parameter",
-      "continuation_slot_offset": 11620,
+      "continuation_slot_offset": 11788,
       "length": 4,
       "symbol": "dual_efx_parameter_edit",
       "target": "0x8010991c"
     },
     {
       "address": "0x80054340",
+      "continuation_handler": "dual_efx_select_callback",
       "continuation_site": "mixer_apply_effect_type",
-      "continuation_slot_offset": 11652,
+      "continuation_slot_offset": 11808,
       "length": 4,
       "symbol": "dual_efx_select_callback",
       "target": "0x801099c8"
     },
     {
       "address": "0x8000bd78",
+      "continuation_handler": "dual_efx_set_effect_type",
       "continuation_site": "mixer_set_efx_type",
-      "continuation_slot_offset": 11684,
+      "continuation_slot_offset": 11828,
       "length": 4,
       "symbol": "dual_efx_set_effect_type",
       "target": "0x80109a00"
     },
     {
       "address": "0x8000fe08",
+      "continuation_handler": "dual_efx_initialize_static_state",
       "continuation_site": "sys_main_startup_initialize",
-      "continuation_slot_offset": 11716,
+      "continuation_slot_offset": 11848,
       "length": 4,
       "symbol": "dual_efx_initialize_static_state",
       "target": "0x801098e0"

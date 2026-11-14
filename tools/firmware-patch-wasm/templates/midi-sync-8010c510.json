@@ -1,45 +1,20 @@
 {
-<<<<<<<< HEAD:tools/firmware-patch-wasm/templates/midi-sync-8010c510.json
   "base": "0x8010c510",
-========
-<<<<<<<< HEAD:tools/firmware-patch-wasm/templates/midi-sync-8010c180.json
-  "base": "0x8010c180",
-========
-  "base": "0x8010a1f0",
->>>>>>>> b6b2643d (Expose Dual EFX for firmware and SD installation):tools/firmware-patch-wasm/templates/midi-sync-8010a1f0.json
->>>>>>>> afb6999f (Expose Dual EFX for firmware and SD installation):tools/firmware-patch-wasm/templates/midi-sync-8010c360.json
   "hooks": [
     {
       "address": "0x8003f7c8",
+      "continuation_handler": "midi_in_hook",
       "continuation_site": "midi_in",
       "continuation_slot_offset": 44,
       "length": 4,
       "symbol": "midi_in_hook",
-<<<<<<<< HEAD:tools/firmware-patch-wasm/templates/midi-sync-8010c510.json
       "target": "0x8010c544"
-========
-<<<<<<<< HEAD:tools/firmware-patch-wasm/templates/midi-sync-8010c180.json
-      "target": "0x8010c1a0"
-========
-      "target": "0x8010a224"
->>>>>>>> b6b2643d (Expose Dual EFX for firmware and SD installation):tools/firmware-patch-wasm/templates/midi-sync-8010a1f0.json
->>>>>>>> afb6999f (Expose Dual EFX for firmware and SD installation):tools/firmware-patch-wasm/templates/midi-sync-8010c360.json
     }
   ],
   "model": "L6max",
   "name": "midi-sync",
-<<<<<<<< HEAD:tools/firmware-patch-wasm/templates/midi-sync-8010c510.json
   "payload_file": "midi-sync-8010c510.bin",
   "payload_length": 1215,
-========
-<<<<<<<< HEAD:tools/firmware-patch-wasm/templates/midi-sync-8010c180.json
-  "payload_file": "midi-sync-8010c180.bin",
-  "payload_length": 1195,
-========
-  "payload_file": "midi-sync-8010a1f0.bin",
-  "payload_length": 1215,
->>>>>>>> b6b2643d (Expose Dual EFX for firmware and SD installation):tools/firmware-patch-wasm/templates/midi-sync-8010a1f0.json
->>>>>>>> afb6999f (Expose Dual EFX for firmware and SD installation):tools/firmware-patch-wasm/templates/midi-sync-8010c360.json
   "window_byte_total": 4,
   "windows": [
     {

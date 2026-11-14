@@ -3,6 +3,7 @@
   "hooks": [
     {
       "address": "0x80053b28",
+      "continuation_handler": null,
       "continuation_site": "mixer_apply_channel_parameter",
       "continuation_slot_offset": 160,
       "length": 4,
