@@ -4,6 +4,17 @@
 pub const DSP_EFFECT_WORKSPACE_BYTES: usize = 0x000b_b800;
 
 firmware_functions! {
+    /// Dispatches effect processing through the relocated mixer effect selector.
+    /// The last argument requests a refresh of the effect setup from the
+    /// selected type's stored parameters.
+    pub unsafe fn dsp_effect_processing_dispatch(
+        bus: u32,
+        effect_type: u32,
+        parameter_0: u32,
+        parameter_1: u32,
+        refresh: u32,
+    ) at 0x8000_3c58;
+
     /// Audio-path helper invoked before the active effect callback; it reads its stream state from globals.
     pub unsafe fn dsp_stream_callback() at 0x8006_6180;
 

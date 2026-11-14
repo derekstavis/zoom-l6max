@@ -20,8 +20,11 @@ firmware_functions! {
     pub unsafe fn mixer_set_channel_flag(slot: u32, value: u32) at 0x8000_bc50;
     /// Writes the selected effect type for a bus; observed selector calls use bus 0.
     pub unsafe fn mixer_set_efx_type(bus: u32, effect_type: u32) at 0x8000_bd78;
-    /// Selects the callback for an effect before the selected-type field is updated.
-    pub unsafe fn mixer_select_efx_callback(effect_type: u32, bus: u32) at 0x8005_4340;
+    /// Applies the requested effect type and its stored parameter values.
+    /// Returns zero when the type is already selected and no refresh is forced.
+    pub unsafe fn mixer_apply_effect_type(effect_type: u32, force_refresh: u32) -> u32, at 0x8005_4340;
+    /// Applies the currently stored mixer effect type and refreshes its controls.
+    pub unsafe fn mixer_apply_effect_type_from_mixer(force_refresh: u32) at 0x8008_8dd8;
     pub unsafe fn mixer_apply_channel_parameter(channel: u32, mode: u32, absolute: u32, delta: i32, value: u32) at 0x8005_3b28;
     pub unsafe fn mixer_channel_index(channel: u32) -> u32, at 0x8005_64b0;
 }

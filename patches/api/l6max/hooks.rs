@@ -32,6 +32,12 @@ define_function_hooks! {
         continuation: Linear,
         dynamic_dispatch: true,
     };
+    dsp_effect_processing_dispatch {
+        displaced_len: 8,
+        guard_sha256: "89573dba1a6d64bae13def4d8fb836dd6a62e2e808e1557583a43ab0e59d51b6",
+        continuation: Linear,
+        dynamic_dispatch: true,
+    };
     dsp_effect_workspace_clear {
         displaced_len: 4,
         guard_sha256: "76ec330a358f97b9b7c3a577a461f97ec7d7ef19b6bb25ea9d988c82a13d7b25",
@@ -44,9 +50,15 @@ define_function_hooks! {
         continuation: Linear,
         dynamic_dispatch: true,
     };
-    mixer_select_efx_callback {
+    mixer_apply_effect_type {
         displaced_len: 4,
         guard_sha256: "737d21ab96d81780dcfdb407fe8c753b445433b5edeb879afa1e28f29e847bbf",
+        continuation: Linear,
+        dynamic_dispatch: true,
+    };
+    mixer_apply_effect_type_from_mixer {
+        displaced_len: 4,
+        guard_sha256: "156ea7cc34a56ce90c531f3788a6f02cab7ca5ce10fd09d004e65408d74ff599",
         continuation: Linear,
         dynamic_dispatch: true,
     };
