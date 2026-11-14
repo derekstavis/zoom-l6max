@@ -1,3 +1,20 @@
 [package]
 name = "midi-control"
+version = "1.0.0"
+kind = "patch"
+order = 20
+title = "MIDI Control"
+summary = "Control recorder and blue-page buttons over MIDI."
+description = "Controls recorder transport and blue pages over MIDI, and reports recorder and page state back to the configured MIDI output."
+models = ["L6max"]
+firmware_models = ["L6max"]
+sd_card_models = ["L6max"]
+wasm_models = ["L6max"]
+website = false
+website_order = 40
+website_sd_models = []
+emulator_gui = false
+emulator_order = 40
+emulator_sd_models = []
+readme = "README.md"
 requires = []

@@ -148,7 +148,8 @@ export default function App() {
             `${import.meta.env.BASE_URL}loadable-patches/${model}/${patch.fileName}`,
           )
           if (!response.ok) throw new Error(`Couldn't load ${patch.title}.`)
-          return [`PATCHES/01-${patch.fileName}`, new Uint8Array(await response.arrayBuffer())] as const
+          const prefix = String(patch.order).padStart(2, '0')
+          return [`PATCHES/${prefix}-${patch.fileName}`, new Uint8Array(await response.arrayBuffer())] as const
         }),
       )
       const files: Record<string, Uint8Array> = Object.fromEntries(entries)

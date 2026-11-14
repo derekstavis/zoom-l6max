@@ -5,3 +5,4 @@ dist-ssr
 
 # Built from tools/firmware-patch-wasm by `npm run wasm:build`; not source.
 /src/wasm/generated/
+/src/generated/patch-catalog.json

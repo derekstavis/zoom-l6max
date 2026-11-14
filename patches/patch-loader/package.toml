@@ -1,0 +1,20 @@
+[package]
+name = "patch-loader"
+version = "1.0.0"
+kind = "loader"
+order = 0
+title = "Patch loader"
+summary = "Load selected patches safely from an SD card."
+description = "The Patch loader reads supported patch files from the SD card, validates them, and loads their code into RAM. Remove a patch file to stop loading that patch."
+models = ["L6", "L6max"]
+firmware_models = []
+sd_card_models = []
+wasm_models = []
+website = false
+website_order = 0
+website_sd_models = []
+emulator_gui = false
+emulator_order = 0
+emulator_sd_models = []
+readme = "README.md"
+requires = []

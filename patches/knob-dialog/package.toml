@@ -1,3 +1,21 @@
 [package]
 name = "knob-dialog"
+version = "1.0.0"
+kind = "patch"
+order = 10
+title = "Show knob values on display"
+summary = "Show channel encoder values on the display."
+description = "Shows a popup with the actual value — dB, Hz, percent, or pan position — when you turn a channel knob. The stock firmware changes the value but never displays it."
+models = ["L6max"]
+firmware_models = ["L6max"]
+sd_card_models = ["L6max"]
+wasm_models = ["L6max"]
+website = true
+website_order = 10
+website_sd_models = ["L6max"]
+emulator_gui = true
+emulator_order = 10
+emulator_sd_models = ["L6max"]
+readme = "README.md"
+demo_image = "knob-dialog.webp"
 requires = []

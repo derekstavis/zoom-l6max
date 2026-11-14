@@ -10,8 +10,9 @@
 include!(concat!(env!("OUT_DIR"), "/templates_generated.rs"));
 
 use firmware_patch_core::{
-    FirmwareModel, HookEdit, L6_MAIN_BASE, L6_SLOT_END, PATCHES, PatchEdits, apply_patch_with_map,
-    branch, first_payload_for, verify_firmware_for, write_image_length_and_version,
+    FirmwareModel, HookEdit, L6_MAIN_BASE, L6_SLOT_END, PatchEdits, WASM_PATCHES,
+    apply_patch_with_map, branch, first_payload_for, resolve_patch_dependencies,
+    supports_wasm_patch, verify_firmware_for, write_image_length_and_version,
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -36,7 +37,13 @@ struct Unit {
     windows: Vec<Window>,
     hooks: Vec<HookEdit>,
     hook_symbols: Vec<String>,
-    continuation_slots: Vec<Option<(String, usize)>>,
+    continuation_slots: Vec<Option<ContinuationSlot>>,
+}
+
+#[derive(Clone)]
+struct ContinuationSlot {
+    site: String,
+    offset: usize,
 }
 
 struct LoaderSite {
@@ -45,7 +52,6 @@ struct LoaderSite {
     guard_sha256: String,
     target_offset: u32,
     link: bool,
-    dynamic_dispatch: bool,
 }
 
 struct LoaderUnit {
@@ -121,7 +127,10 @@ fn parse_unit(payload: &[u8], metadata_json: &str) -> Result<Unit, String> {
             let site = hook["continuation_site"].as_str();
             let offset = hook["continuation_slot_offset"].as_u64();
             match (site, offset) {
-                (Some(site), Some(offset)) => Ok(Some((site.to_owned(), offset as usize))),
+                (Some(site), Some(offset)) => Ok(Some(ContinuationSlot {
+                    site: site.to_owned(),
+                    offset: offset as usize,
+                })),
                 (None, None) => Ok(None),
                 _ => Err("incomplete static continuation slot metadata".to_owned()),
             }
@@ -139,7 +148,7 @@ fn parse_unit(payload: &[u8], metadata_json: &str) -> Result<Unit, String> {
 }
 
 /// Finds the one embedded unit for `name` at exactly `base` — every
-/// non-empty subset of `PATCHES` resolves to an embedded unit, so
+/// non-empty subset of `WASM_PATCHES` resolves to an embedded unit, so
 /// this only fails if the embedded templates are stale or corrupt.
 fn find_unit(name: &str, model: FirmwareModel, base: u32) -> Result<Unit, String> {
     for (unit_name, payload, metadata) in EMBEDDED_UNITS {
@@ -203,9 +212,6 @@ fn parse_loader(payload: &[u8], metadata_json: &str) -> Result<LoaderUnit, Strin
                 link: s["link"]
                     .as_bool()
                     .ok_or("loader site missing branch kind")?,
-                dynamic_dispatch: s["dynamic_dispatch"]
-                    .as_bool()
-                    .ok_or("loader site missing dynamic-dispatch marker")?,
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
@@ -268,13 +274,13 @@ pub fn available_patches(package: &[u8]) -> Result<Vec<&'static str>, String> {
         .get("main_firmware.bin")
         .ok_or("package has no main_firmware.bin segment")?;
     verify_firmware_for(model, firmware)?;
-    Ok(match model {
-        FirmwareModel::L6 => vec!["midi-sync"],
-        FirmwareModel::L6max => PATCHES.to_vec(),
-    })
+    Ok(WASM_PATCHES
+        .into_iter()
+        .filter(|name| supports_wasm_patch(name, model))
+        .collect())
 }
 
-/// Applies `selected` (a non-empty subset of `firmware_patch_core::PATCHES`,
+/// Applies `selected` (a non-empty subset of `firmware_patch_core::WASM_PATCHES`,
 /// any order) to `package` — a full Zoom update package, byte for byte what
 /// `l6fw::unpack`/`repack` round-trip — and returns the patched package plus
 /// a small JSON report. `package` is the only untrusted input: every other
@@ -296,19 +302,38 @@ pub fn apply_patches_with_loader(
         l6fw::Model::L6max => FirmwareModel::L6max,
     };
     for name in selected {
-        if !PATCHES.contains(name) {
+        if !WASM_PATCHES.contains(name) {
             return Err(format!("unknown patch: {name}"));
         }
+        if !supports_wasm_patch(name, model) {
+            return Err(format!(
+                "patch {name} is not available for {} firmware in the browser patcher",
+                match model {
+                    FirmwareModel::L6 => "L6",
+                    FirmwareModel::L6max => "L6max",
+                }
+            ));
+        }
     }
-    let ordered: Vec<&str> = PATCHES
-        .into_iter()
-        .filter(|p| selected.contains(p))
-        .collect();
+    let requested = selected
+        .iter()
+        .map(|name| (*name).to_owned())
+        .collect::<Vec<_>>();
+    let dependencies = resolve_patch_dependencies(&requested)?;
+    for dependency in &dependencies {
+        if !WASM_PATCHES.contains(&dependency.as_str()) || !supports_wasm_patch(dependency, model) {
+            return Err(format!(
+                "patch dependency {dependency} is not available for {} firmware in the browser patcher",
+                match model {
+                    FirmwareModel::L6 => "L6",
+                    FirmwareModel::L6max => "L6max",
+                }
+            ));
+        }
+    }
+    let ordered: Vec<&str> = dependencies.iter().map(String::as_str).collect();
     if ordered.is_empty() && !install_patch_loader {
         return Err("select at least one patch".into());
-    }
-    if model == FirmwareModel::L6 && ordered.iter().any(|name| *name != "midi-sync") {
-        return Err("L6 firmware detected; only the midi-sync patch is supported".into());
     }
 
     let (mut manifest, mut segments) = l6fw::unpack_bytes(package)?;
@@ -390,9 +415,7 @@ pub fn apply_patches_with_loader(
             let target = loader_base
                 .checked_add(site.target_offset)
                 .ok_or("loader branch target overflow")?;
-            if site.dynamic_dispatch {
-                loader_dispatch_targets.insert(site.address, target | 1);
-            }
+            loader_dispatch_targets.insert(site.address, target | 1);
             firmware[offset..offset + 4].copy_from_slice(&branch(site.address, target, site.link));
             for chunk in firmware[offset + 4..offset + site.length].chunks_exact_mut(2) {
                 chunk.copy_from_slice(&0xbf00u16.to_le_bytes());
@@ -422,6 +445,7 @@ pub fn apply_patches_with_loader(
         let mut edits = Vec::new();
         for (index, hook) in unit.hooks.iter().enumerate() {
             let continuation = unit.continuation_slots[index].clone();
+            let continuation_site = continuation.as_ref().map(|slot| slot.site.clone());
             if let Some((start, length, prior_site)) = hook_ranges
                 .iter()
                 .find(|(start, length, _)| {
@@ -436,13 +460,13 @@ pub fn apply_patches_with_loader(
                         hook.address
                     ));
                 }
-                let Some((site, slot_offset)) = continuation.as_ref().cloned() else {
+                let Some(slot) = continuation.as_ref() else {
                     return Err(format!(
                         "non-chainable patches share hook {:#x}",
                         hook.address
                     ));
                 };
-                if prior_site.as_deref() != Some(&site) {
+                if prior_site.as_deref() != Some(&slot.site) {
                     return Err(format!(
                         "patches disagree on continuation site at {:#x}",
                         hook.address
@@ -452,7 +476,7 @@ pub fn apply_patches_with_loader(
                     .get(&hook.address)
                     .cloned()
                     .ok_or("shared hook has no prior continuation slot")?;
-                if tail_site != site {
+                if tail_site != slot.site {
                     return Err(format!(
                         "patches disagree on continuation site at {:#x}",
                         hook.address
@@ -463,36 +487,32 @@ pub fn apply_patches_with_loader(
                 continuation_tails.insert(
                     hook.address,
                     (
-                        (base - firmware_base) as usize + slot_offset,
+                        (base - firmware_base) as usize + slot.offset,
                         hook.length,
-                        site,
+                        slot.site.clone(),
                     ),
                 );
             } else {
-                hook_ranges.push((
-                    hook.address,
-                    hook.length,
-                    continuation.as_ref().map(|(site, _)| site.clone()),
-                ));
+                hook_ranges.push((hook.address, hook.length, continuation_site));
                 edits.push(HookEdit {
                     address: hook.address,
                     target: hook.target,
                     length: hook.length,
                 });
-                if let Some((site, slot_offset)) = continuation.as_ref() {
+                if let Some(slot) = continuation.as_ref() {
                     continuation_tails.insert(
                         hook.address,
                         (
-                            (base - firmware_base) as usize + *slot_offset,
+                            (base - firmware_base) as usize + slot.offset,
                             hook.length,
-                            site.clone(),
+                            slot.site.clone(),
                         ),
                     );
                 }
             }
-            if let Some((_, slot_offset)) = continuation.as_ref() {
+            if let Some(slot) = continuation.as_ref() {
                 if let Some(dispatch_target) = loader_dispatch_targets.get(&hook.address) {
-                    payload[*slot_offset..*slot_offset + 4]
+                    payload[slot.offset..slot.offset + 4]
                         .copy_from_slice(&dispatch_target.to_le_bytes());
                 }
             }

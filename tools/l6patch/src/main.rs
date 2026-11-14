@@ -6,12 +6,11 @@ use firmware_patch_compile::{
     decode_thumb_bl_target, function_hook_sites, hook_registrations, symbol,
 };
 use firmware_patch_core::{
-    FirmwareModel, HookEdit, L6_MAIN_BASE, L6_SLOT_END, PATCHES, PatchEdits, apply_patch_with_map,
-    branch, first_payload_for, verify_firmware_for, write_image_length_and_version,
+    FirmwareModel, HookEdit, L6_MAIN_BASE, L6_SLOT_END, PatchEdits, apply_patch_with_map, branch,
+    first_payload_for, verify_firmware_for, write_image_length_and_version,
 };
 use sha2::{Digest, Sha256};
 use std::{
-    collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
 };
@@ -94,63 +93,12 @@ fn parse_args() -> Result<Options, Box<dyn std::error::Error>> {
     })
 }
 
-#[derive(Default)]
-struct PatchManifest {
-    requires: Vec<String>,
-}
-
 /// Resolve dependencies at build time. SD builds link the closure into one
 /// module; firmware builds apply each member to the firmware image.
 fn resolve_patch_dependencies(
     requested: &[String],
 ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
-    let patch_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../patches");
-    let mut manifests = BTreeMap::<String, PatchManifest>::new();
-    for entry in fs::read_dir(&patch_root)? {
-        let entry = entry?;
-        if !entry.file_type()?.is_dir() {
-            continue;
-        }
-        let path = entry.path().join("package.toml");
-        if !path.exists() {
-            continue;
-        }
-        let value: toml::Value = toml::from_str(&fs::read_to_string(path)?)?;
-        let name = value["package"]["name"]
-            .as_str()
-            .ok_or("package.toml requires `[package].name` to be a string")?
-            .to_owned();
-        if !valid_patch_name(&name) {
-            return Err(format!("invalid patch name `{name}`").into());
-        }
-        if entry.file_name().to_string_lossy() != name {
-            return Err(format!(
-                "patch directory `{}` does not match manifest name `{name}`",
-                entry.file_name().to_string_lossy()
-            )
-            .into());
-        }
-        let manifest = PatchManifest {
-            requires: value["package"]["requires"]
-                .as_array()
-                .ok_or_else(|| {
-                    format!("patch `{name}` requires `[package].requires` to be an array")
-                })?
-                .iter()
-                .map(|dependency| {
-                    dependency
-                        .as_str()
-                        .map(str::to_owned)
-                        .ok_or_else(|| format!("patch `{name}` dependencies must be patch names"))
-                })
-                .collect::<Result<_, _>>()?,
-        };
-        if manifests.insert(name.clone(), manifest).is_some() {
-            return Err(format!("duplicate patch manifest name `{name}`").into());
-        }
-    }
-
-    Ok(resolve_dependency_order(requested, &manifests)?)
+    firmware_patch_core::resolve_patch_dependencies(requested).map_err(Into::into)
 }
 
 fn composed_bundle_name(
@@ -169,50 +117,6 @@ fn composed_bundle_name(
     Ok(members.join("-"))
 }
 
-fn valid_patch_name(name: &str) -> bool {
-    !name.is_empty()
-        && name.as_bytes()[0].is_ascii_lowercase()
-        && name
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-}
-
-fn resolve_dependency_order(
-    requested: &[String],
-    manifests: &BTreeMap<String, PatchManifest>,
-) -> Result<Vec<String>, String> {
-    fn visit(
-        name: &str,
-        manifests: &BTreeMap<String, PatchManifest>,
-        active: &mut BTreeSet<String>,
-        complete: &mut BTreeSet<String>,
-        ordered: &mut Vec<String>,
-    ) -> Result<(), String> {
-        if complete.contains(name) {
-            return Ok(());
-        }
-        if !active.insert(name.to_owned()) {
-            return Err(format!("patch dependency cycle at `{name}`"));
-        }
-        let manifest = manifests
-            .get(name)
-            .ok_or_else(|| format!("patch `{name}` has no patches/{name}/package.toml"))?;
-        for dependency in &manifest.requires {
-            visit(dependency, manifests, active, complete, ordered)?;
-        }
-        active.remove(name);
-        complete.insert(name.to_owned());
-        ordered.push(name.to_owned());
-        Ok(())
-    }
-    let mut active = BTreeSet::new();
-    let mut complete = BTreeSet::new();
-    let mut ordered = Vec::new();
-    for name in requested {
-        visit(name, &manifests, &mut active, &mut complete, &mut ordered)?;
-    }
-    Ok(ordered)
-}
 #[derive(Debug)]
 struct ResolvedHook {
     address: u32,
@@ -401,16 +305,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         l6fw::Model::L6 => vec!["midi-sync".to_owned()],
         l6fw::Model::L6max => vec!["knob-dialog".to_owned()],
     });
-    if !options.experimental_patch_loader
-        && !options.experimental_sd_bundle
-        && patches.iter().any(|name| !PATCHES.contains(&name.as_str()))
-    {
-        return Err(
-            "the selected patch is not supported for built-in firmware installation".into(),
-        );
-    }
-    if model == l6fw::Model::L6 && patches.iter().any(|name| name != "midi-sync") {
-        return Err("L6 firmware detected; only the midi-sync patch is supported".into());
+    let selected_supported = |name: &str| {
+        if options.experimental_sd_bundle {
+            firmware_patch_core::supports_sd_patch(name, patch_model)
+        } else {
+            firmware_patch_core::supports_firmware_patch(name, patch_model)
+        }
+    };
+    if let Some(name) = patches.iter().find(|name| !selected_supported(name)) {
+        let model_name = if model == l6fw::Model::L6 {
+            "L6"
+        } else {
+            "L6max"
+        };
+        let install_kind = if options.experimental_sd_bundle {
+            "SD card"
+        } else {
+            "firmware"
+        };
+        return Err(format!(
+            "patch `{name}` is not supported for {install_kind} installation on {model_name}"
+        )
+        .into());
     }
     // The original knob-only build keeps its published marker; anything else is newer.
     let version = options.version.unwrap_or_else(|| {
@@ -560,7 +476,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .into());
         }
         let file = sd_bundle::build_dynamic_v1(&module, memory_len, &handlers, &relocations)?;
-        let filename = format!("{bundle_name}.bin");
+        let filename = firmware_patch_core::composed_patch_file_name(&options.requested_patches)?;
         fs::write(patch_dir.join(&filename), &file)?;
         let report_patch = serde_json::json!({
             "name": bundle_name,
@@ -596,6 +512,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let mut claimed: Vec<(u32, usize)> = Vec::new();
     let mut loader_dispatch_targets = std::collections::BTreeMap::<u32, u32>::new();
+    let mut loader_hook_targets = std::collections::BTreeMap::<u32, u32>::new();
     fs::create_dir_all(&options.output)?;
     let output = options.output.canonicalize()?;
     let padding = fs::read(source.join("padding_before_secondary.bin"))?;
@@ -638,10 +555,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             &registrations,
         )?;
         for hook in &hooks {
-            if claimed.iter().any(|&(address, length)| {
+            loader_hook_targets.insert(hook.address, hook.target | 1);
+            let overlap = claimed.iter().find(|&&(address, length)| {
                 hook.address < address + length as u32
                     && address < hook.address + hook.length as u32
-            }) {
+            });
+            if let Some(&(address, length)) = overlap
+                && !(address == hook.address
+                    && length == hook.length
+                    && loader_hook_targets.contains_key(&hook.address))
+            {
                 return Err(format!("loader hook overlaps another patch: {}", hook.symbol).into());
             }
             claimed.push((hook.address, hook.length));
@@ -792,12 +715,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .is_some_and(|(owner_patch, owner_hook, _)| {
                         *owner_patch == patch_index && *owner_hook == hook_index
                     });
+            let continuation_target = loader_dispatch_targets
+                .get(&address)
+                .or_else(|| loader_hook_targets.get(&address))
+                .copied();
             if is_last_in_chain
                 && let (Some(site), Some(dispatch)) = (
                     compiled_patches[patch_index].hooks[hook_index]
                         .continuation_site
                         .clone(),
-                    loader_dispatch_targets.get(&address).copied(),
+                    continuation_target,
                 )
             {
                 let handler = compiled_patches[patch_index].hooks[hook_index]
@@ -835,14 +762,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if installed_hook_sites.contains(&hook.address) {
                 continue;
             }
-            let prior = claimed.iter().any(|&(address, length)| {
+            let prior = claimed.iter().find(|&&(address, length)| {
                 hook.address < address + length as u32
                     && address < hook.address + hook.length as u32
             });
-            if prior {
+            let loader_chain = prior.is_some_and(|&(address, length)| {
+                address == hook.address
+                    && length == hook.length
+                    && loader_hook_targets.contains_key(&hook.address)
+            });
+            if prior.is_some() && !loader_chain {
                 return Err(format!("hook overlaps another patch: {}", hook.symbol).into());
             }
-            claimed.push((hook.address, hook.length));
+            if prior.is_none() {
+                claimed.push((hook.address, hook.length));
+            }
             installed_hook_sites.insert(hook.address);
             edits_vec.push(HookEdit {
                 address: hook.address,
@@ -983,75 +917,11 @@ fn exported_symbol_offsets(symbols: &str) -> serde_json::Value {
 mod manifest_tests {
     use super::*;
 
-    fn manifest(requires: &[&str]) -> PatchManifest {
-        PatchManifest {
-            requires: requires.iter().map(|name| (*name).to_owned()).collect(),
-        }
-    }
-
     #[test]
-    fn resolves_dependencies_before_requested_patches_and_deduplicates() {
-        let manifests = BTreeMap::from([
-            ("dialog".to_owned(), manifest(&[])),
-            ("effect".to_owned(), manifest(&["dialog"])),
-            ("midi".to_owned(), manifest(&[])),
-        ]);
-        let requested = ["midi".to_owned(), "effect".to_owned(), "dialog".to_owned()];
-
+    fn package_catalog_supplies_versioned_composition_names() {
         assert_eq!(
-            resolve_dependency_order(&requested, &manifests).unwrap(),
-            ["midi", "dialog", "effect"]
-        );
-    }
-
-    #[test]
-    fn rejects_dependency_cycles_and_missing_modules() {
-        let cycle = BTreeMap::from([
-            ("one".to_owned(), manifest(&["two"])),
-            ("two".to_owned(), manifest(&["one"])),
-        ]);
-        assert!(
-            resolve_dependency_order(&["one".to_owned()], &cycle)
-                .unwrap_err()
-                .contains("cycle")
-        );
-
-        let missing = BTreeMap::from([("one".to_owned(), manifest(&["absent"]))]);
-        assert!(
-            resolve_dependency_order(&["one".to_owned()], &missing)
-                .unwrap_err()
-                .contains("no patches/absent/package.toml")
-        );
-    }
-
-    #[test]
-    fn patch_names_are_safe_rust_module_names_after_dash_normalization() {
-        assert!(valid_patch_name("midi-control"));
-        assert!(valid_patch_name("patch2"));
-        assert!(!valid_patch_name("2patch"));
-        assert!(!valid_patch_name("patch_name"));
-        assert!(!valid_patch_name("../patch"));
-    }
-
-    #[test]
-    fn composed_bundle_name_lists_requested_patches_then_unique_dependencies() {
-        let requested = ["effect-a".to_owned(), "effect-b".to_owned()];
-        let closure = [
-            "knob-dialog".to_owned(),
-            "effect-a".to_owned(),
-            "effect-b".to_owned(),
-        ];
-        assert_eq!(
-            composed_bundle_name(&requested, &closure).unwrap(),
-            "effect-a-effect-b-knob-dialog"
-        );
-        assert_eq!(
-            composed_bundle_name(
-                &["dual-efx".to_owned()],
-                &["knob-dialog".to_owned(), "dual-efx".to_owned(),]
-            )
-            .unwrap(),
-            "dual-efx-knob-dialog"
+            firmware_patch_core::composed_patch_file_name(&["midi-sync".to_owned()]).unwrap(),
+            "midi-sync-1.0.0.bin"
         );
     }
 

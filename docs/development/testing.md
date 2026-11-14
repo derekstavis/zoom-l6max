@@ -300,6 +300,46 @@ firmware. Use `knob-dialog`, `patched-update`,
 `firmware-update`, and `wasm-patch` as appropriate. `l6-patch-heap` and
 `l6max-patch-heap` check heap headroom with every patch for the model applied.
 
+Patch composition changes can leave the committed browser templates stale.
+Whenever a payload, hook registration, dependency, composition/compiler rule or
+loader template input changes, regenerate templates from supported unpacked
+stock firmware for both models:
+
+```sh
+cargo run --offline --locked -p firmware-patch-wasm-prebuild -- \
+  /path/to/unpacked-l6max /path/to/unpacked-l6
+```
+
+Review the generated changes under `tools/firmware-patch-wasm/templates/` and
+commit them with the source change. Do not edit the generated `.bin` or `.json`
+files by hand. Run the browser/native parity case for both models and the SD
+loading matrix:
+
+```sh
+cargo run --offline --locked -p l6test -- run --config config.toml \
+  --case wasm-patch --model all --backend headless
+cargo run --offline --locked -p l6test -- run --config config.toml \
+  --suite sd-matrix --model all --backend headless
+```
+
+Then run the full suite at the final stack tip. On macOS, build a local app
+bundle and pass it with `--app` so packaged GUI cases execute instead of being
+reported BLOCKED:
+
+```sh
+cargo run --offline --locked -p macos-package -- \
+  emulator/qemu/build-source/build/qemu-system-arm \
+  --debug --output /tmp/l6-app-package --version 0.1.0
+cargo run --offline --locked -p l6test -- run --config config.toml \
+  --suite full --model all --backend both \
+  --app "/tmp/l6-app-package/L6max Emulator.app"
+```
+
+Use firmware revisions accepted by the tests' hash guards. A guard mismatch is
+BLOCKED coverage, not a passing test. Read `report.json` and distinguish PASS,
+FAIL and BLOCKED totals; if a timing-sensitive failure passes on retry, retain
+both results and identify it as flaky.
+
 ## Power, storage, and USB
 
 Use the `lifecycle` or `devices` suite and the relevant individual cases.

@@ -465,20 +465,25 @@ impl Scenario {
                 return Err("sd_patches cannot combine installed_patches or update_patches".into());
             }
             if patches.iter().any(|name| {
-                ![
-                    "midi-control",
-                    "midi-sync",
-                    "knob-dialog",
-                    "din-mixer-control",
-                ]
-                .contains(&name.as_str())
+                firmware_patch_core::patch_package(name)
+                    .is_none_or(|package| package.kind != "patch")
             }) {
                 return Err("unknown SD patch name".into());
             }
-            if value.models.iter().any(|model| model == "l6")
-                && patches.iter().any(|name| name != "midi-sync")
-            {
-                return Err("only midi-sync supports L6".into());
+            for model in &value.models {
+                let firmware_model = match model.as_str() {
+                    "l6" => firmware_patch_core::FirmwareModel::L6,
+                    "l6max" => firmware_patch_core::FirmwareModel::L6max,
+                    _ => unreachable!("models are validated before patch support"),
+                };
+                if let Some(name) = patches
+                    .iter()
+                    .find(|name| !firmware_patch_core::supports_sd_patch(name, firmware_model))
+                {
+                    return Err(format!(
+                        "patch {name} does not support SD loading on {model}"
+                    ));
+                }
             }
         }
         if value.backends.is_empty() || value.backends.iter().any(|b| b != "headless" && b != "gui")

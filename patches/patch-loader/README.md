@@ -16,7 +16,7 @@ deliberately crafted file.
 The current per-file dynamic loader supports function-entry and function-call
 hooks declared at cataloged sites. `midi-sync` uses an entry hook on both
 models. `knob-dialog` uses a call-post hook on L6max and loads from
-`PATCHES/KNOB-DIALOG.BIN`. The call instruction at `0x80036c74` remains intact;
+`PATCHES/10-knob-dialog-1.0.0.bin`. The call instruction at `0x80036c74` remains intact;
 the resident dispatcher at `mixer_apply_channel_parameter` selects the wrapper
 by the original caller return address. The wrapper calls the next registered
 handler or stock continuation, then invokes the dialog handler only for that
@@ -50,7 +50,7 @@ cargo run --offline --locked -p l6patch -- STOCK_DIR BUNDLE_DIR \
   --experimental-patch-bundle --patch midi-sync
 ```
 
-The builder emits one compact file at `BUNDLE_DIR/PATCHES/MIDI-SYNC.BIN`. At mount,
+The builder emits one compact file at `BUNDLE_DIR/PATCHES/midi-sync-1.0.0.bin`. At mount,
 the loader enumerates `A:\PATCHES\*.BIN` in numeric filename-prefix order. For
 example, `2-EARLY.BIN` runs before `10-LATE.BIN`; unnumbered names follow numbered
 names, with a stable case-insensitive filename tie-break. The loader repeats a
