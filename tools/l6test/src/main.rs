@@ -470,6 +470,13 @@ fn prepare_sd_patch(root: &Path, fixture: &mut Fixture, dir: &Path) -> Result<()
             .arg(&source)
             .arg(output)
             .arg(option);
+        if option == "--experimental-patch-loader"
+            && patches.iter().any(|patch| patch == "dual-efx")
+        {
+            // The Dual EFX state does not fit the firmware's measured heap.
+            // Use the explicitly emulator-only reserved arena for this test.
+            cmd.arg("--experimental-qemu-module-arena");
+        }
         for patch in selected {
             cmd.arg("--patch").arg(patch);
         }
@@ -648,12 +655,46 @@ fn fixture_options(
                     path: "PATCHES/AAA.BIN".into(),
                     content: sd_image::spec::Content::Copy(corrupt),
                 });
+            } else if fixture.sd_bundle_mode.as_deref() == Some("composed-module") {
+                let report: serde_json::Value = serde_json::from_slice(
+                    &fs::read(bundle_dir.parent().unwrap().join("patch.json"))
+                        .map_err(|e| e.to_string())?,
+                )
+                .map_err(|e| e.to_string())?;
+                let module = report["patches"]
+                    .as_array()
+                    .and_then(|patches| patches.first())
+                    .ok_or("composed module report has no module")?;
+                let members = module["members"]
+                    .as_array()
+                    .ok_or("composed module report has no members")?;
+                if !members.iter().any(|member| member == "dual-efx")
+                    || !members.iter().any(|member| member == "knob-dialog")
+                {
+                    return Err("composed hook-chain fixture did not include both patches".into());
+                }
+                let file = module["file"]
+                    .as_str()
+                    .ok_or("composed module has no output path")?;
+                card.file.push(sd_image::spec::File {
+                    path: file.into(),
+                    content: sd_image::spec::Content::Copy(
+                        bundle_dir.join(
+                            Path::new(file)
+                                .file_name()
+                                .ok_or("composed module path has no filename")?,
+                        ),
+                    ),
+                });
             }
             for entry in files {
                 if !entry.file_type().map_err(|e| e.to_string())?.is_file() {
                     continue;
                 }
                 if fixture.sd_bundle_mode.as_deref() == Some("ordered-chain") {
+                    continue;
+                }
+                if fixture.sd_bundle_mode.as_deref() == Some("composed-module") {
                     continue;
                 }
                 let filename = entry.file_name().to_string_lossy().into_owned();

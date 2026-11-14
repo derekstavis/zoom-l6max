@@ -82,6 +82,86 @@
       "model": "L6max"
     },
     {
+      "base": "0x80108000",
+      "metadata_file": "patch-loader-L6max-016-80108000.json",
+      "model": "L6max"
+    },
+    {
+      "base": "0x80108000",
+      "metadata_file": "patch-loader-L6max-017-80108000.json",
+      "model": "L6max"
+    },
+    {
+      "base": "0x80108000",
+      "metadata_file": "patch-loader-L6max-018-80108000.json",
+      "model": "L6max"
+    },
+    {
+      "base": "0x80108000",
+      "metadata_file": "patch-loader-L6max-019-80108000.json",
+      "model": "L6max"
+    },
+    {
+      "base": "0x80108000",
+      "metadata_file": "patch-loader-L6max-020-80108000.json",
+      "model": "L6max"
+    },
+    {
+      "base": "0x80108000",
+      "metadata_file": "patch-loader-L6max-021-80108000.json",
+      "model": "L6max"
+    },
+    {
+      "base": "0x80108000",
+      "metadata_file": "patch-loader-L6max-022-80108000.json",
+      "model": "L6max"
+    },
+    {
+      "base": "0x80108000",
+      "metadata_file": "patch-loader-L6max-023-80108000.json",
+      "model": "L6max"
+    },
+    {
+      "base": "0x80108000",
+      "metadata_file": "patch-loader-L6max-024-80108000.json",
+      "model": "L6max"
+    },
+    {
+      "base": "0x80108000",
+      "metadata_file": "patch-loader-L6max-025-80108000.json",
+      "model": "L6max"
+    },
+    {
+      "base": "0x80108000",
+      "metadata_file": "patch-loader-L6max-026-80108000.json",
+      "model": "L6max"
+    },
+    {
+      "base": "0x80108000",
+      "metadata_file": "patch-loader-L6max-027-80108000.json",
+      "model": "L6max"
+    },
+    {
+      "base": "0x80108000",
+      "metadata_file": "patch-loader-L6max-028-80108000.json",
+      "model": "L6max"
+    },
+    {
+      "base": "0x80108000",
+      "metadata_file": "patch-loader-L6max-029-80108000.json",
+      "model": "L6max"
+    },
+    {
+      "base": "0x80108000",
+      "metadata_file": "patch-loader-L6max-030-80108000.json",
+      "model": "L6max"
+    },
+    {
+      "base": "0x80108000",
+      "metadata_file": "patch-loader-L6max-031-80108000.json",
+      "model": "L6max"
+    },
+    {
       "base": "0x800b6af0",
       "metadata_file": "patch-loader-L6-000-800b6af0.json",
       "model": "L6"
@@ -189,6 +269,198 @@
       "metadata_file": "din-mixer-control-8010e180.json",
       "model": "L6max",
       "name": "din-mixer-control"
+    },
+    {
+      "base": "0x80108000",
+      "metadata_file": "dual-efx-80108000.json",
+      "model": "L6max",
+      "name": "dual-efx"
+    },
+    {
+      "base": "0x80108060",
+      "metadata_file": "dual-efx-80108060.json",
+      "model": "L6max",
+      "name": "dual-efx"
+    },
+    {
+      "base": "0x801084c0",
+      "metadata_file": "dual-efx-801084c0.json",
+      "model": "L6max",
+      "name": "dual-efx"
+    },
+    {
+      "base": "0x80108520",
+      "metadata_file": "dual-efx-80108520.json",
+      "model": "L6max",
+      "name": "dual-efx"
+    },
+    {
+      "base": "0x80108a40",
+      "metadata_file": "dual-efx-80108a40.json",
+      "model": "L6max",
+      "name": "dual-efx"
+    },
+    {
+      "base": "0x80108aa0",
+      "metadata_file": "dual-efx-80108aa0.json",
+      "model": "L6max",
+      "name": "dual-efx"
+    },
+    {
+      "base": "0x80108f00",
+      "metadata_file": "dual-efx-80108f00.json",
+      "model": "L6max",
+      "name": "dual-efx"
+    },
+    {
+      "base": "0x80108f60",
+      "metadata_file": "dual-efx-80108f60.json",
+      "model": "L6max",
+      "name": "dual-efx"
+    },
+    {
+      "base": "0x801097b0",
+      "metadata_file": "dual-efx-801097b0.json",
+      "model": "L6max",
+      "name": "dual-efx"
+    },
+    {
+      "base": "0x80109810",
+      "metadata_file": "dual-efx-80109810.json",
+      "model": "L6max",
+      "name": "dual-efx"
+    },
+    {
+      "base": "0x80109c70",
+      "metadata_file": "dual-efx-80109c70.json",
+      "model": "L6max",
+      "name": "dual-efx"
+    },
+    {
+      "base": "0x80109cd0",
+      "metadata_file": "dual-efx-80109cd0.json",
+      "model": "L6max",
+      "name": "dual-efx"
+    },
+    {
+      "base": "0x8010a1f0",
+      "metadata_file": "dual-efx-8010a1f0.json",
+      "model": "L6max",
+      "name": "dual-efx"
+    },
+    {
+      "base": "0x8010a250",
+      "metadata_file": "dual-efx-8010a250.json",
+      "model": "L6max",
+      "name": "dual-efx"
+    },
+    {
+      "base": "0x8010a6b0",
+      "metadata_file": "dual-efx-8010a6b0.json",
+      "model": "L6max",
+      "name": "dual-efx"
+    },
+    {
+      "base": "0x8010a710",
+      "metadata_file": "dual-efx-8010a710.json",
+      "model": "L6max",
+      "name": "dual-efx"
+    },
+    {
+      "base": "0x8010bad0",
+      "metadata_file": "dual-efx-8010bad0.json",
+      "model": "L6max",
+      "name": "dual-efx"
+    },
+    {
+      "base": "0x8010bb30",
+      "metadata_file": "dual-efx-8010bb30.json",
+      "model": "L6max",
+      "name": "dual-efx"
+    },
+    {
+      "base": "0x8010bf90",
+      "metadata_file": "dual-efx-8010bf90.json",
+      "model": "L6max",
+      "name": "dual-efx"
+    },
+    {
+      "base": "0x8010bff0",
+      "metadata_file": "dual-efx-8010bff0.json",
+      "model": "L6max",
+      "name": "dual-efx"
+    },
+    {
+      "base": "0x8010c510",
+      "metadata_file": "dual-efx-8010c510.json",
+      "model": "L6max",
+      "name": "dual-efx"
+    },
+    {
+      "base": "0x8010c570",
+      "metadata_file": "dual-efx-8010c570.json",
+      "model": "L6max",
+      "name": "dual-efx"
+    },
+    {
+      "base": "0x8010c9d0",
+      "metadata_file": "dual-efx-8010c9d0.json",
+      "model": "L6max",
+      "name": "dual-efx"
+    },
+    {
+      "base": "0x8010ca30",
+      "metadata_file": "dual-efx-8010ca30.json",
+      "model": "L6max",
+      "name": "dual-efx"
+    },
+    {
+      "base": "0x8010d280",
+      "metadata_file": "dual-efx-8010d280.json",
+      "model": "L6max",
+      "name": "dual-efx"
+    },
+    {
+      "base": "0x8010d2e0",
+      "metadata_file": "dual-efx-8010d2e0.json",
+      "model": "L6max",
+      "name": "dual-efx"
+    },
+    {
+      "base": "0x8010d740",
+      "metadata_file": "dual-efx-8010d740.json",
+      "model": "L6max",
+      "name": "dual-efx"
+    },
+    {
+      "base": "0x8010d7a0",
+      "metadata_file": "dual-efx-8010d7a0.json",
+      "model": "L6max",
+      "name": "dual-efx"
+    },
+    {
+      "base": "0x8010dcc0",
+      "metadata_file": "dual-efx-8010dcc0.json",
+      "model": "L6max",
+      "name": "dual-efx"
+    },
+    {
+      "base": "0x8010dd20",
+      "metadata_file": "dual-efx-8010dd20.json",
+      "model": "L6max",
+      "name": "dual-efx"
+    },
+    {
+      "base": "0x8010e180",
+      "metadata_file": "dual-efx-8010e180.json",
+      "model": "L6max",
+      "name": "dual-efx"
+    },
+    {
+      "base": "0x8010e1e0",
+      "metadata_file": "dual-efx-8010e1e0.json",
+      "model": "L6max",
+      "name": "dual-efx"
     },
     {
       "base": "0x80108000",

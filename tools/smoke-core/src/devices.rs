@@ -68,6 +68,20 @@ pub enum Operation {
     ExpectSdPatch {
         loaded: bool,
         chain_count: Option<u8>,
+        callbacks_active: bool,
+        stock_passthrough: bool,
+    },
+    DualEfxParameterEdit {
+        encoder: usize,
+        steps: i32,
+    },
+    DualEfxState {
+        expected_effect_type: Option<u8>,
+        expected_edit_mode: Option<bool>,
+        minimum_parameter_edits: Option<u32>,
+        expected_parameter_id: Option<u8>,
+        expected_parameter_value: Option<f32>,
+        expected_dialog_active: Option<bool>,
     },
     ExpectHeap {
         minimum_free: u32,
@@ -3634,9 +3648,33 @@ impl State {
                 }
                 Ok(json!({"address":format!("{address:#010x}"),"bytes":actual}))
             }
+            Operation::DualEfxParameterEdit { encoder, steps } => {
+                Ok(dual_efx_parameter_edit(options, session, encoder, steps)
+                    .map_err(std::io::Error::other)?)
+            }
+            Operation::DualEfxState {
+                expected_effect_type,
+                expected_edit_mode,
+                minimum_parameter_edits,
+                expected_parameter_id,
+                expected_parameter_value,
+                expected_dialog_active,
+            } => Ok(dual_efx_state(
+                options,
+                session,
+                expected_effect_type,
+                expected_edit_mode,
+                minimum_parameter_edits,
+                expected_parameter_id,
+                expected_parameter_value,
+                expected_dialog_active,
+            )
+            .map_err(std::io::Error::other)?),
             Operation::ExpectSdPatch {
                 loaded,
                 chain_count,
+                callbacks_active,
+                stock_passthrough,
             } => {
                 let main = selected_main_image(options).map_err(std::io::Error::other)?;
                 let (edits, link_base, payload, _, _relocations, module_hooks, module_images) =
@@ -3691,8 +3729,10 @@ impl State {
                     u32::from_le_bytes(qmp.read_memory(0, registry + 160, 4)?.try_into().unwrap());
                 let loaded_len =
                     u32::from_le_bytes(qmp.read_memory(0, registry + 164, 4)?.try_into().unwrap());
-                if loaded != (loaded_base != 0) || (loaded && loaded_len as usize != payload.len())
-                {
+                let known_module_size = module_images
+                    .iter()
+                    .any(|(module_payload, _, _)| module_payload.len() == loaded_len as usize);
+                if loaded != (loaded_base != 0) || (loaded && !known_module_size) {
                     let stage = u32::from_le_bytes(
                         qmp.read_memory(0, registry + 4, 4)?.try_into().unwrap(),
                     );
@@ -3782,6 +3822,80 @@ impl State {
                         }
                     }
                 }
+                if stock_passthrough {
+                    if session.engine.model() != l6fw::Model::L6max {
+                        return Err(
+                            "stock effect passthrough check currently requires L6max".into()
+                        );
+                    }
+                    let selected_effect = u32::from(
+                        qmp.read_memory(0, 0x8046_00b2, 1)?
+                            .first()
+                            .copied()
+                            .ok_or("missing selected effect type")?,
+                    );
+                    if selected_effect == 1 || selected_effect == 2 || selected_effect > 4 {
+                        return Err(format!(
+                            "expected a stock effect type 0, 3, or 4, got {selected_effect}"
+                        )
+                        .into());
+                    }
+                    let callback_row = 0x2028_b8c0 + selected_effect * 28;
+                    let expected_callback = u32::from_le_bytes(
+                        qmp.read_memory(0, callback_row, 4)?.try_into().unwrap(),
+                    );
+                    let active_callback =
+                        u32::from_le_bytes(qmp.read_memory(0, 0x202a_6f20, 4)?.try_into().unwrap());
+                    let dual_hook = module_images
+                        .iter()
+                        .find_map(|(_, _, hooks)| {
+                            hooks.iter().find(|hook| hook.address == 0x8006_6180)
+                        })
+                        .ok_or("Dual EFX DSP entry hook is not registered")?;
+                    let dsp_chain = (0..patch_loader_core::dynamic::MAX_FUNCTION_CHAINS)
+                        .map(|index| registry + 0x100 + index as u32 * chain_row_size)
+                        .find(|row| {
+                            qmp.read_memory(0, *row, 4).ok().is_some_and(|bytes| {
+                                u32::from_le_bytes(bytes.try_into().unwrap()) == 0x8006_6180
+                            })
+                        })
+                        .ok_or("Dual EFX DSP hook chain is missing")?;
+                    let dsp_count = u32::from_le_bytes(
+                        qmp.read_memory(0, dsp_chain + 4, 4)?.try_into().unwrap(),
+                    ) as usize;
+                    let mut dual_base = None;
+                    for index in 0..dsp_count {
+                        let link = dsp_chain + 8 + index as u32 * 16;
+                        let entry =
+                            u32::from_le_bytes(qmp.read_memory(0, link, 4)?.try_into().unwrap());
+                        let module = u32::from_le_bytes(
+                            qmp.read_memory(0, link + 12, 4)?.try_into().unwrap(),
+                        );
+                        if entry == ((module + dual_hook.entry_offset) | 1) {
+                            dual_base = Some(module);
+                            break;
+                        }
+                    }
+                    let dual_base =
+                        dual_base.ok_or("Dual EFX module is absent from DSP hook chain")?;
+                    let root = sd_fixture_root(options).map_err(std::io::Error::other)?;
+                    let report: Value = serde_json::from_slice(&fs::read(
+                        root.join("sd-patches-build/patch.json"),
+                    )?)?;
+                    let gate_offset = composed_export_offset(&report, "DUAL_EFFECT_CALLBACK_GATE")
+                        .ok_or("Dual EFX callback-gate symbol is missing")?;
+                    let gate = u32::from_le_bytes(
+                        qmp.read_memory(0, dual_base + gate_offset, 4)?
+                            .try_into()
+                            .unwrap(),
+                    );
+                    if active_callback != expected_callback || gate != 1 << 31 {
+                        return Err(format!(
+                            "stock effect {selected_effect} did not retain its callback and workspace: active={active_callback:#010x}, expected={expected_callback:#010x}, Dual EFX gate={gate:#010x}"
+                        )
+                        .into());
+                    }
+                }
                 let chain_address = if let Some(address) = expected_function {
                     (0..patch_loader_core::dynamic::MAX_FUNCTION_CHAINS)
                         .map(|index| registry + 0x100 + index as u32 * chain_row_size)
@@ -3846,7 +3960,7 @@ impl State {
                     let module = u32::from_le_bytes(bytes[12..16].try_into().unwrap());
                     if entry & 1 == 0
                         || module == 0
-                        || prior_order.is_some_and(|prior| order <= prior)
+                        || prior_order.is_some_and(|prior| order < prior)
                     {
                         return Err(format!(
                             "invalid SD hook link {index}: entry={entry:#010x}, module={module:#010x}, order={order}"
@@ -3929,6 +4043,40 @@ impl State {
                     let patch_report: Value = serde_json::from_slice(&fs::read(
                         root.join("sd-patches-build/patch.json"),
                     )?)?;
+                    let patch_for_size = |size: usize| {
+                        patch_report["patches"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .find(|patch| patch["memory_length"].as_u64() == Some(size as u64))
+                    };
+                    let mutable_ranges_for_size = |size: usize| {
+                        let patch = patch_for_size(size);
+                        let mut ranges = patch
+                            .and_then(|patch| patch["writable_data"].as_object())
+                            .and_then(|data| {
+                                Some((
+                                    usize::try_from(data["offset"].as_u64()?).ok()?,
+                                    usize::try_from(data["length"].as_u64()?).ok()?,
+                                ))
+                            })
+                            .filter(|(_, length)| *length > 0)
+                            .into_iter()
+                            .collect::<Vec<_>>();
+                        if let Some(code_len) = patch
+                            .and_then(|patch| patch["payload_length"].as_u64())
+                            .and_then(|length| usize::try_from(length).ok())
+                            && code_len < size
+                        {
+                            // The loader zeroes this NOBITS tail before module
+                            // initialization. Once running, it is module-owned
+                            // writable state, so runtime byte comparison must
+                            // not mistake legitimate initialization for code
+                            // corruption.
+                            ranges.push((code_len, size - code_len));
+                        }
+                        ranges
+                    };
                     let pass_through_entry_offset = if ordered_chain {
                         Some(
                             patch_report["patches"][0]["pass_through_entry_offsets"][0]
@@ -4004,6 +4152,7 @@ impl State {
                                         "hook {index} does not match any module's hook metadata"
                                     )
                                 })?;
+                        let mutable_symbol_ranges = mutable_ranges_for_size(module_payload.len());
                         let expected_next =
                             chain_links.get(index + 1).map_or(fallback, |next| next.0);
                         let actual_next = u32::from_le_bytes(
@@ -4034,9 +4183,23 @@ impl State {
                         }
                         for (chunk_index, chunk) in expected.chunks(4096).enumerate() {
                             let address = *module + (chunk_index * 4096) as u32;
-                            if qmp.read_memory(0, address, chunk.len())? != chunk {
+                            let actual = qmp.read_memory(0, address, chunk.len())?;
+                            let mismatch = actual.iter().zip(chunk).enumerate().find(
+                                |(index, (actual, expected))| {
+                                    let module_offset = chunk_index * 4096 + index;
+                                    actual != expected
+                                        && !mutable_symbol_ranges.iter().any(|(start, length)| {
+                                            module_offset >= *start
+                                                && module_offset < *start + *length
+                                        })
+                                },
+                            );
+                            if let Some((offset, (actual_byte, expected_byte))) = mismatch {
                                 return Err(format!(
-                                    "allocated SD module {index} does not match its relocated bundle"
+                                    "allocated SD module {index} differs from its relocated bundle at {:#010x} (expected {:#04x}, got {:#04x})",
+                                    address + offset as u32,
+                                    expected_byte,
+                                    actual_byte,
                                 )
                                 .into());
                             }
@@ -4045,9 +4208,11 @@ impl State {
                             return Err(format!("hook {index} entry precedes its module").into());
                         }
                     }
-                    if let Some((latest_payload, latest_relocations, latest_hooks)) =
-                        module_images.last()
+                    if let Some((latest_payload, latest_relocations, latest_hooks)) = module_images
+                        .iter()
+                        .find(|(module_payload, _, _)| module_payload.len() == loaded_len as usize)
                     {
+                        let mutable_symbol_ranges = mutable_ranges_for_size(latest_payload.len());
                         let mut expected = latest_payload.clone();
                         patch_loader_core::bundle::relocate(
                             &mut expected,
@@ -4067,7 +4232,18 @@ impl State {
                         }
                         for (chunk_index, chunk) in expected.chunks(4096).enumerate() {
                             let address = loaded_base + (chunk_index * 4096) as u32;
-                            if qmp.read_memory(0, address, chunk.len())? != chunk {
+                            let actual = qmp.read_memory(0, address, chunk.len())?;
+                            let mismatch = actual.iter().zip(chunk).enumerate().any(
+                                |(index, (actual, expected))| {
+                                    let module_offset = chunk_index * 4096 + index;
+                                    actual != expected
+                                        && !mutable_symbol_ranges.iter().any(|(start, length)| {
+                                            module_offset >= *start
+                                                && module_offset < *start + *length
+                                        })
+                                },
+                            );
+                            if mismatch {
                                 return Err(
                                     "latest allocated SD module does not match its relocated bundle"
                                         .into(),
@@ -4076,8 +4252,268 @@ impl State {
                         }
                     }
                 }
+                let mut effect_observation = None;
+                if callbacks_active {
+                    if !loaded {
+                        return Err("Dual EFX callbacks requested but no module loaded".into());
+                    }
+                    let dual_dsp_hook = module_images
+                        .iter()
+                        .find_map(|(_, _, hooks)| {
+                            hooks.iter().find(|hook| hook.address == 0x8006_6180)
+                        })
+                        .ok_or("Dual EFX DSP entry hook is not registered")?;
+                    let dsp_chain = (0..patch_loader_core::dynamic::MAX_FUNCTION_CHAINS)
+                        .map(|index| registry + 0x100 + index as u32 * chain_row_size)
+                        .find(|row| {
+                            qmp.read_memory(0, *row, 4).ok().is_some_and(|bytes| {
+                                u32::from_le_bytes(bytes.try_into().unwrap()) == 0x8006_6180
+                            })
+                        })
+                        .ok_or("Dual EFX DSP hook chain is missing")?;
+                    let dsp_count = u32::from_le_bytes(
+                        qmp.read_memory(0, dsp_chain + 4, 4)?.try_into().unwrap(),
+                    ) as usize;
+                    let mut dual_base = None;
+                    for index in 0..dsp_count {
+                        let link = dsp_chain + 8 + index as u32 * 16;
+                        let entry =
+                            u32::from_le_bytes(qmp.read_memory(0, link, 4)?.try_into().unwrap());
+                        let module = u32::from_le_bytes(
+                            qmp.read_memory(0, link + 12, 4)?.try_into().unwrap(),
+                        );
+                        if entry == ((module + dual_dsp_hook.entry_offset) | 1) {
+                            dual_base = Some(module);
+                            break;
+                        }
+                    }
+                    let dual_base =
+                        dual_base.ok_or("Dual EFX module is absent from DSP hook chain")?;
+                    let root = sd_fixture_root(options).map_err(std::io::Error::other)?;
+                    let report: Value = serde_json::from_slice(&fs::read(
+                        root.join("sd-patches-build/patch.json"),
+                    )?)?;
+                    let symbols = report["patches"]
+                        .as_array()
+                        .and_then(|patches| patches.first())
+                        .and_then(|patch| patch["exports"].as_object())
+                        .ok_or("Dual EFX build report has no DSP stream symbols")?;
+                    let read_symbol = |name: &str| -> Result<u32, Box<dyn std::error::Error>> {
+                        u32::try_from(
+                            symbols[name]
+                                .as_u64()
+                                .ok_or("Dual EFX callback symbol is missing")?,
+                        )
+                        .map_err(Into::into)
+                    };
+                    let dispatch_hits_offset = read_symbol("DSP_STREAM_ENTRY_HITS")?;
+                    let clear_hits_offset = read_symbol("EFFECT_WORKSPACE_CLEAR_HITS")?;
+                    let type_set_hits_offset = read_symbol("DUAL_EFFECT_TYPE_SET_HITS")?;
+                    let type_set_seen_offset = read_symbol("DUAL_EFFECT_TYPE_SET_SEEN")?;
+                    let callback_offset = read_symbol("dual_effect_callback")?;
+                    let callback_hits_offset = read_symbol("DUAL_EFFECT_CALLBACK_HITS")?;
+                    let room_hits_offset = read_symbol("ROOM_CALLBACK_HITS")?;
+                    let room_admitted_offset = read_symbol("ROOM_CALLBACK_ADMITTED")?;
+                    let spring_hits_offset = read_symbol("SPRING_CALLBACK_HITS")?;
+                    let spring_admitted_offset = read_symbol("SPRING_CALLBACK_ADMITTED")?;
+                    let callback_original_offset = read_symbol("DUAL_EFFECT_CALLBACK_ORIGINAL")?;
+                    let callback_context_offset = read_symbol("DUAL_EFFECT_CALLBACK_CONTEXT")?;
+                    let callback_descriptor_offset =
+                        read_symbol("DUAL_EFFECT_CALLBACK_DESCRIPTOR")?;
+                    let callback_gate_offset = read_symbol("DUAL_EFFECT_CALLBACK_GATE")?;
+                    let selection_pending_offset = read_symbol("DUAL_EFFECT_SELECTION_PENDING")?;
+                    let output_nonzero_offset = read_symbol("DUAL_EFFECT_OUTPUT_NONZERO")?;
+                    let output_invalid_offset = read_symbol("DUAL_EFFECT_OUTPUT_INVALID")?;
+                    let room_output_nonzero_offset =
+                        read_symbol("DUAL_EFFECT_ROOM_OUTPUT_NONZERO")?;
+                    let spring_output_nonzero_offset =
+                        read_symbol("DUAL_EFFECT_SPRING_OUTPUT_NONZERO")?;
+                    let routed_callback_offset = read_symbol("DUAL_EFFECT_ROUTED_CALLBACK")?;
+                    let input_nonzero_offset = read_symbol("DUAL_EFFECT_INPUT_NONZERO")?;
+                    let send_nonzero_offset = read_symbol("DUAL_EFFECT_SEND_NONZERO")?;
+                    let edit_event_offset = read_symbol("DUAL_EFFECT_EDIT_EVENT")?;
+                    let edit_applied_offset = read_symbol("DUAL_EFFECT_EDIT_APPLIED")?;
+                    let edit_dropped_offset = read_symbol("DUAL_EFFECT_EDIT_DROPPED")?;
+                    let dispatch_hits = u32::from_le_bytes(
+                        qmp.read_memory(0, dual_base + dispatch_hits_offset, 4)?
+                            .try_into()
+                            .unwrap(),
+                    );
+                    let clear_hits = u32::from_le_bytes(
+                        qmp.read_memory(0, dual_base + clear_hits_offset, 4)?
+                            .try_into()
+                            .unwrap(),
+                    );
+                    let type_set_hits = u32::from_le_bytes(
+                        qmp.read_memory(0, dual_base + type_set_hits_offset, 4)?
+                            .try_into()
+                            .unwrap(),
+                    );
+                    let type_set_seen = u32::from_le_bytes(
+                        qmp.read_memory(0, dual_base + type_set_seen_offset, 4)?
+                            .try_into()
+                            .unwrap(),
+                    );
+                    let callback_hits = u32::from_le_bytes(
+                        qmp.read_memory(0, dual_base + callback_hits_offset, 4)?
+                            .try_into()
+                            .unwrap(),
+                    );
+                    let room_hits = u32::from_le_bytes(
+                        qmp.read_memory(0, dual_base + room_hits_offset, 4)?
+                            .try_into()
+                            .unwrap(),
+                    );
+                    let spring_hits = u32::from_le_bytes(
+                        qmp.read_memory(0, dual_base + spring_hits_offset, 4)?
+                            .try_into()
+                            .unwrap(),
+                    );
+                    let room_admitted = u32::from_le_bytes(
+                        qmp.read_memory(0, dual_base + room_admitted_offset, 4)?
+                            .try_into()
+                            .unwrap(),
+                    );
+                    let spring_admitted = u32::from_le_bytes(
+                        qmp.read_memory(0, dual_base + spring_admitted_offset, 4)?
+                            .try_into()
+                            .unwrap(),
+                    );
+                    let callback_original = u32::from_le_bytes(
+                        qmp.read_memory(0, dual_base + callback_original_offset, 4)?
+                            .try_into()
+                            .unwrap(),
+                    );
+                    let callback_context = u32::from_le_bytes(
+                        qmp.read_memory(0, dual_base + callback_context_offset, 4)?
+                            .try_into()
+                            .unwrap(),
+                    );
+                    let callback_descriptor = u32::from_le_bytes(
+                        qmp.read_memory(0, dual_base + callback_descriptor_offset, 4)?
+                            .try_into()
+                            .unwrap(),
+                    );
+                    let callback_gate = u32::from_le_bytes(
+                        qmp.read_memory(0, dual_base + callback_gate_offset, 4)?
+                            .try_into()
+                            .unwrap(),
+                    );
+                    let selection_pending = u32::from_le_bytes(
+                        qmp.read_memory(0, dual_base + selection_pending_offset, 4)?
+                            .try_into()
+                            .unwrap(),
+                    );
+                    let output_nonzero = u32::from_le_bytes(
+                        qmp.read_memory(0, dual_base + output_nonzero_offset, 4)?
+                            .try_into()
+                            .unwrap(),
+                    );
+                    let output_invalid = u32::from_le_bytes(
+                        qmp.read_memory(0, dual_base + output_invalid_offset, 4)?
+                            .try_into()
+                            .unwrap(),
+                    );
+                    let room_output_nonzero = u32::from_le_bytes(
+                        qmp.read_memory(0, dual_base + room_output_nonzero_offset, 4)?
+                            .try_into()
+                            .unwrap(),
+                    );
+                    let spring_output_nonzero = u32::from_le_bytes(
+                        qmp.read_memory(0, dual_base + spring_output_nonzero_offset, 4)?
+                            .try_into()
+                            .unwrap(),
+                    );
+                    let routed_callback = u32::from_le_bytes(
+                        qmp.read_memory(0, dual_base + routed_callback_offset, 4)?
+                            .try_into()
+                            .unwrap(),
+                    );
+                    let input_nonzero = u32::from_le_bytes(
+                        qmp.read_memory(0, dual_base + input_nonzero_offset, 4)?
+                            .try_into()
+                            .unwrap(),
+                    );
+                    let send_nonzero = u32::from_le_bytes(
+                        qmp.read_memory(0, dual_base + send_nonzero_offset, 4)?
+                            .try_into()
+                            .unwrap(),
+                    );
+                    let edit_event = u32::from_le_bytes(
+                        qmp.read_memory(0, dual_base + edit_event_offset, 4)?
+                            .try_into()
+                            .unwrap(),
+                    );
+                    let edit_applied = u32::from_le_bytes(
+                        qmp.read_memory(0, dual_base + edit_applied_offset, 4)?
+                            .try_into()
+                            .unwrap(),
+                    );
+                    let edit_dropped = u32::from_le_bytes(
+                        qmp.read_memory(0, dual_base + edit_dropped_offset, 4)?
+                            .try_into()
+                            .unwrap(),
+                    );
+                    let active_callback =
+                        u32::from_le_bytes(qmp.read_memory(0, 0x202a_6f20, 4)?.try_into().unwrap());
+                    let expected_callback = (dual_base + callback_offset) | 1;
+                    if dispatch_hits == 0
+                        || callback_hits == 0
+                        || room_hits == 0
+                        || spring_hits == 0
+                        || room_admitted == 0
+                        || spring_admitted == 0
+                        || type_set_hits == 0
+                        || type_set_seen & 0b100 == 0
+                        || input_nonzero == 0
+                        || send_nonzero == 0
+                        || output_nonzero == 0
+                        || room_output_nonzero == 0
+                        || spring_output_nonzero == 0
+                        || output_invalid != 0
+                        || callback_gate > 1
+                        || selection_pending != 0
+                        || edit_event != 0
+                        || edit_dropped != 0
+                        || routed_callback != callback_original
+                        || active_callback != expected_callback
+                        || ![0x2028_0ab9, 0x2028_2221].contains(&callback_original)
+                    {
+                        return Err(format!(
+                            "Dual EFX DSP validation failed: dsp_hits={dispatch_hits}, callback_hits={callback_hits} (Room {room_hits}/{room_admitted} admitted, Spring {spring_hits}/{spring_admitted} admitted), type_set_hits={type_set_hits}, type_set_seen={type_set_seen:#x}, input_nonzero={input_nonzero}, send_nonzero={send_nonzero}, output_nonzero={output_nonzero} (Room {room_output_nonzero}, Spring {spring_output_nonzero}), output_invalid={output_invalid}, edits={edit_applied}, pending={edit_event:#010x}, dropped={edit_dropped}, gate={callback_gate:#010x}, selection_pending={selection_pending}, active={active_callback:#010x}, expected={expected_callback:#010x}, original={callback_original:#010x}, routed={routed_callback:#010x}, context={callback_context:#010x}, descriptor={callback_descriptor:#010x}, clear_hits={clear_hits}"
+                        )
+                        .into());
+                    }
+                    effect_observation = Some(json!({
+                        "dsp_stream_entry_hits": dispatch_hits,
+                        "effect_workspace_clear_hits": clear_hits,
+                        "dual_effect_type_set_hits": type_set_hits,
+                        "dual_effect_type_set_seen": type_set_seen,
+                        "dual_effect_callback_hits": callback_hits,
+                        "room_callback_hits": room_hits,
+                        "room_callback_admitted": room_admitted,
+                        "spring_callback_hits": spring_hits,
+                        "spring_callback_admitted": spring_admitted,
+                        "dual_effect_callback_original": format!("{callback_original:#010x}"),
+                        "dual_effect_callback_context": format!("{callback_context:#010x}"),
+                        "dual_effect_callback_descriptor": format!("{callback_descriptor:#010x}"),
+                        "dual_effect_callback_gate": format!("{callback_gate:#010x}"),
+                        "dual_effect_selection_pending": selection_pending,
+                        "dual_effect_output_nonzero_frames": output_nonzero,
+                        "dual_effect_room_output_nonzero_frames": room_output_nonzero,
+                        "dual_effect_spring_output_nonzero_frames": spring_output_nonzero,
+                        "dual_effect_output_invalid_frames": output_invalid,
+                        "dual_effect_routed_callback": format!("{routed_callback:#010x}"),
+                        "dual_effect_input_nonzero_samples": input_nonzero,
+                        "dual_effect_send_nonzero_frames": send_nonzero,
+                        "dual_effect_parameter_edits_applied": edit_applied,
+                        "dual_effect_parameter_edit_pending": format!("{edit_event:#010x}"),
+                        "dual_effect_parameter_edits_dropped": edit_dropped,
+                        "active_callback": format!("{active_callback:#010x}"),
+                    }));
+                }
                 Ok(
-                    json!({"loaded":loaded,"guarded_hooks":edits.len(),"module_bytes":if loaded { payload.len() } else { 0 },"hook_chain_count":registered_count,"hook_chain_orders":chain_links.iter().map(|link|link.2).collect::<Vec<_>>()}),
+                    json!({"loaded":loaded,"guarded_hooks":edits.len(),"module_bytes":if loaded { payload.len() } else { 0 },"hook_chain_count":registered_count,"hook_chain_orders":chain_links.iter().map(|link|link.2).collect::<Vec<_>>(),"callbacks_active":callbacks_active,"effect_observation":effect_observation}),
                 )
             }
             Operation::ExpectHeap { minimum_free } => {
@@ -5145,6 +5581,319 @@ fn sd_fixture_root(options: &Options) -> Result<&std::path::Path, String> {
         .find(|dir| dir.join("sd-stock-firmware/main_firmware.bin").is_file())
         .ok_or_else(|| "missing generated SD fixture".into())
 }
+
+fn composed_module_report(report: &Value) -> Option<&Value> {
+    report["patches"].as_array()?.first()
+}
+
+fn composed_export_offset(report: &Value, name: &str) -> Option<u32> {
+    u32::try_from(composed_module_report(report)?["exports"][name].as_u64()?).ok()
+}
+
+fn dual_efx_parameter_edit(
+    options: &Options,
+    session: &Session,
+    encoder: usize,
+    steps: i32,
+) -> Result<Value, String> {
+    if session.engine.model() != l6fw::Model::L6max {
+        return Err("Dual EFX parameter edit requires L6max".into());
+    }
+    let socket = options
+        .gdb_socket
+        .as_ref()
+        .ok_or("Dual EFX parameter edit requires GDB")?;
+    let root = sd_fixture_root(options)?;
+    let report: Value = serde_json::from_slice(
+        &fs::read(root.join("sd-patches-build/patch.json")).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    let symbol_offset = composed_export_offset(&report, "DUAL_EFFECT_EDIT_APPLIED")
+        .ok_or("Dual EFX edit counter is missing from its module report")?;
+    let event_offset = composed_export_offset(&report, "DUAL_EFFECT_EDIT_EVENT")
+        .ok_or("Dual EFX edit event is missing from its module report")?;
+    let callback_hits_offset = composed_export_offset(&report, "DUAL_EFFECT_CALLBACK_HITS")
+        .ok_or("Dual EFX callback counter is missing from its module report")?;
+    let qmp = &session.engine.management[0];
+    const CURRENT_WINDOW: u32 = 0x8020_2610;
+    const EFX_TYPE: u32 = 0x8046_00b2;
+    const MIXER_APPLY_CHANNEL_PARAMETER: u32 = 0x8005_3b28;
+    let effect_type = qmp
+        .read_memory(0, EFX_TYPE, 1)
+        .map_err(|error| error.to_string())?
+        .first()
+        .copied()
+        .ok_or("missing selected effect type")?;
+    if effect_type != 1 && effect_type != 2 {
+        return Err(format!(
+            "Dual EFX parameter edit requires Room or Spring, selected type is {effect_type}"
+        ));
+    }
+    let registry = u32::from_le_bytes(
+        qmp.read_memory(0, patch_loader_core::registry::L6MAX_POINTER as u32, 4)
+            .map_err(|error| error.to_string())?
+            .try_into()
+            .unwrap(),
+    );
+    let module_base = u32::from_le_bytes(
+        qmp.read_memory(
+            0,
+            registry + patch_loader_core::registry::MODULE_PTR_OFFSET,
+            4,
+        )
+        .map_err(|error| error.to_string())?
+        .try_into()
+        .unwrap(),
+    );
+    if module_base == 0 {
+        return Err("Dual EFX module is not loaded".into());
+    }
+    let edit_counter = module_base
+        .checked_add(symbol_offset)
+        .ok_or("Dual EFX edit counter address overflow")?;
+    let before = u32::from_le_bytes(
+        qmp.read_memory(0, edit_counter, 4)
+            .map_err(|error| error.to_string())?
+            .try_into()
+            .unwrap(),
+    );
+    let previous_window = qmp
+        .read_memory(0, CURRENT_WINDOW, 4)
+        .map_err(|error| error.to_string())?;
+
+    let mut debugger = l6max_diagnostics::gdb::Gdb::connect(socket)
+        .map_err(|error| format!("connecting to emulator GDB: {error}"))?;
+    qmp.stop()
+        .map_err(|error| format!("stopping QEMU for Dual EFX parameter edit: {error}"))?;
+    let inject = (|| {
+        debugger
+            .write(CURRENT_WINDOW, &0x8020_03ecu32.to_le_bytes())
+            .map_err(|error| format!("selecting parameter-edit context: {error}"))?;
+        let stop = debugger
+            .call_thumb(
+                MIXER_APPLY_CHANNEL_PARAMETER,
+                &[(encoder - 1) as u32, 6, 0, steps as u32, 0],
+                Duration::from_secs(3),
+            )
+            .map_err(|error| format!("calling patched mixer parameter function: {error}"))?;
+        let event = u32::from_le_bytes(
+            debugger
+                .read(module_base + event_offset, 4)
+                .map_err(|error| format!("reading queued parameter event: {error}"))?
+                .try_into()
+                .unwrap(),
+        );
+        Ok::<_, String>((stop, event))
+    })();
+    let restore_window = debugger
+        .write(CURRENT_WINDOW, &previous_window)
+        .map_err(|error| format!("restoring current window: {error}"));
+    let resume = qmp
+        .resume()
+        .map_err(|error| format!("resuming QEMU after Dual EFX parameter edit: {error}"));
+    restore_window?;
+    resume?;
+    let (stop_reply, event_after_hook) = inject?;
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let applied = u32::from_le_bytes(
+            qmp.read_memory(0, edit_counter, 4)
+                .map_err(|error| error.to_string())?
+                .try_into()
+                .unwrap(),
+        );
+        if applied > before {
+            qmp.stop()
+                .map_err(|error| format!("stopping QEMU after Dual EFX parameter edit: {error}"))?;
+            debugger
+                .write(CURRENT_WINDOW, &previous_window)
+                .map_err(|error| format!("restoring current window: {error}"))?;
+            qmp.resume().map_err(|error| {
+                format!("resuming QEMU after restoring current window: {error}")
+            })?;
+            return Ok(json!({
+                "encoder": encoder,
+                "steps": steps,
+                "effect_type": effect_type,
+                "edit_counter_before": before,
+                "edit_counter_after": applied,
+                "input": "patched mixer_apply_channel_parameter call",
+            }));
+        }
+        if Instant::now() >= deadline {
+            let event = u32::from_le_bytes(
+                qmp.read_memory(0, module_base + event_offset, 4)
+                    .map_err(|error| error.to_string())?
+                    .try_into()
+                    .unwrap(),
+            );
+            let callback_hits = u32::from_le_bytes(
+                qmp.read_memory(0, module_base + callback_hits_offset, 4)
+                    .map_err(|error| error.to_string())?
+                    .try_into()
+                    .unwrap(),
+            );
+            let active_callback = u32::from_le_bytes(
+                qmp.read_memory(0, 0x202a_6f20, 4)
+                    .map_err(|error| error.to_string())?
+                    .try_into()
+                    .unwrap(),
+            );
+            let current_window = u32::from_le_bytes(
+                qmp.read_memory(0, CURRENT_WINDOW, 4)
+                    .map_err(|error| error.to_string())?
+                    .try_into()
+                    .unwrap(),
+            );
+            qmp.stop()
+                .map_err(|error| format!("stopping QEMU after Dual EFX edit timeout: {error}"))?;
+            debugger
+                .write(CURRENT_WINDOW, &previous_window)
+                .map_err(|error| format!("restoring current window after edit timeout: {error}"))?;
+            qmp.resume()
+                .map_err(|error| format!("resuming QEMU after edit timeout: {error}"))?;
+            return Err(format!(
+                "Dual EFX audio callback did not apply the parameter edit (counter {before}->{applied}, event={event:#010x}, event_after_hook={event_after_hook:#010x}, callbacks={callback_hits}, effect_type={effect_type}, active_callback={active_callback:#010x}, current_window={current_window:#010x}, module_base={module_base:#010x}, gdb_stop={stop_reply})"
+            ));
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn dual_efx_state(
+    options: &Options,
+    session: &Session,
+    expected_effect_type: Option<u8>,
+    expected_edit_mode: Option<bool>,
+    minimum_parameter_edits: Option<u32>,
+    expected_parameter_id: Option<u8>,
+    expected_parameter_value: Option<f32>,
+    expected_dialog_active: Option<bool>,
+) -> Result<Value, String> {
+    if session.engine.model() != l6fw::Model::L6max {
+        return Err("Dual EFX state checks require L6max".into());
+    }
+    let root = sd_fixture_root(options)?;
+    let report: Value = serde_json::from_slice(
+        &fs::read(root.join("sd-patches-build/patch.json")).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    let symbols = composed_module_report(&report)
+        .and_then(|patch| patch["exports"].as_object())
+        .ok_or("Dual EFX debug symbols are missing from its module report")?;
+    let offset = |name: &str| -> Result<u32, String> {
+        symbols[name]
+            .as_u64()
+            .and_then(|value| u32::try_from(value).ok())
+            .ok_or_else(|| format!("Dual EFX symbol {name} is missing"))
+    };
+    let qmp = &session.engine.management[0];
+    let registry = u32::from_le_bytes(
+        qmp.read_memory(0, patch_loader_core::registry::L6MAX_POINTER as u32, 4)
+            .map_err(|error| error.to_string())?
+            .try_into()
+            .unwrap(),
+    );
+    let module_base = u32::from_le_bytes(
+        qmp.read_memory(
+            0,
+            registry + patch_loader_core::registry::MODULE_PTR_OFFSET,
+            4,
+        )
+        .map_err(|error| error.to_string())?
+        .try_into()
+        .unwrap(),
+    );
+    if module_base == 0 {
+        return Err("Dual EFX module is not loaded".into());
+    }
+    let effect_type = qmp
+        .read_memory(0, 0x8046_00b2, 1)
+        .map_err(|error| error.to_string())?
+        .first()
+        .copied();
+    let edit_mode = u32::from_le_bytes(
+        qmp.read_memory(
+            0,
+            module_base + offset("DUAL_EFFECT_PARAMETER_EDIT_MODE")?,
+            4,
+        )
+        .map_err(|error| error.to_string())?
+        .try_into()
+        .unwrap(),
+    );
+    let applied = u32::from_le_bytes(
+        qmp.read_memory(0, module_base + offset("DUAL_EFFECT_EDIT_APPLIED")?, 4)
+            .map_err(|error| error.to_string())?
+            .try_into()
+            .unwrap(),
+    );
+    let dialog_active_offset = composed_export_offset(&report, "KNOB_DIALOG_EXTERNAL_TEXT_ACTIVE")
+        .ok_or("Knob Dialog active-state symbol is missing from the composed module report")?;
+    let dialog_active = qmp
+        .read_memory(0, module_base + dialog_active_offset, 1)
+        .map_err(|error| error.to_string())?
+        .first()
+        .copied()
+        .ok_or("Knob Dialog active-state byte is missing")?;
+    let parameter = if let Some(parameter_id) = expected_parameter_id {
+        if parameter_id >= 16 {
+            return Err(format!(
+                "Dual EFX parameter id {parameter_id} is out of range"
+            ));
+        }
+        let handoff_offset = offset("PARAMETER_HANDOFF")? + u32::from(parameter_id) * 4;
+        Some(f32::from_bits(u32::from_le_bytes(
+            qmp.read_memory(0, module_base + handoff_offset, 4)
+                .map_err(|error| error.to_string())?
+                .try_into()
+                .unwrap(),
+        )))
+    } else {
+        None
+    };
+    if expected_effect_type.is_some_and(|expected| effect_type != Some(expected)) {
+        return Err(format!(
+            "Dual EFX selected effect is {effect_type:?}, expected {expected_effect_type:?}"
+        ));
+    }
+    if expected_edit_mode.is_some_and(|expected| edit_mode != u32::from(expected)) {
+        return Err(format!(
+            "Dual EFX parameter edit mode is {edit_mode}, expected {expected_edit_mode:?}"
+        ));
+    }
+    if expected_dialog_active.is_some_and(|expected| dialog_active != u8::from(expected)) {
+        return Err(format!(
+            "Knob Dialog active state is {dialog_active}, expected {expected_dialog_active:?}"
+        ));
+    }
+    if minimum_parameter_edits.is_some_and(|minimum| applied < minimum) {
+        return Err(format!(
+            "Dual EFX applied {applied} parameter edits, expected at least {minimum_parameter_edits:?}"
+        ));
+    }
+    if expected_edit_mode == Some(true) && minimum_parameter_edits.is_some() && dialog_active != 1 {
+        return Err(format!(
+            "Dual EFX has applied {applied} parameter edits but Knob Dialog is not active ({dialog_active})"
+        ));
+    }
+    if expected_parameter_value.is_some() && parameter.is_none() {
+        return Err("Dual EFX parameter value requires expected_parameter_id".into());
+    }
+    if let (Some(expected), Some(actual)) = (expected_parameter_value, parameter) {
+        let tolerance = 0.01_f32.max(expected.abs() * 0.0001);
+        if !actual.is_finite() || (actual - expected).abs() > tolerance {
+            return Err(format!(
+                "Dual EFX parameter {expected_parameter_id:?} is {actual}, expected {expected}"
+            ));
+        }
+    }
+    Ok(
+        json!({"effect_type":effect_type,"edit_mode":edit_mode,"parameter_edits_applied":applied,"parameter_id":expected_parameter_id,"parameter_value":parameter,"knob_dialog_active":dialog_active}),
+    )
+}
+
 fn sd_fixture_edits(options: &Options, main: &[u8], model: l6fw::Model) -> Result<SdEdits, String> {
     use sha2::{Digest, Sha256};
     let root = sd_fixture_root(options)?;
@@ -6305,8 +7054,22 @@ fn run_knob_dialog(
             return Err(format!("custom window value mismatch: {value_text:?}").into());
         }
         let refreshed = capture(500, "window-scene-refreshed")?;
-        if active != refreshed {
-            return Err("recorder redraw overwrote the custom overlay layers".into());
+        let pixel = |frame: &[u8; 1024], x: usize, y: usize| {
+            frame[((63 - y) / 8) * 128 + x] & (1 << ((63 - y) % 8)) != 0
+        };
+        // The value has intentionally changed during the level demonstration.
+        // Compare the rest of the LCD, including the title and black backing,
+        // to make sure normal recorder redraws did not replace the overlay.
+        let stable_overlay = (0..64).all(|y| {
+            (0..128).all(|x| {
+                (30..97).contains(&x) && (33..64).contains(&y)
+                    || pixel(&active, x, y) == pixel(&refreshed, x, y)
+            })
+        });
+        if !stable_overlay {
+            return Err(
+                "recorder redraw changed the custom overlay outside its value widget".into(),
+            );
         }
 
         // Hold the notification semaphore while a second value is rendered.

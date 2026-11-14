@@ -3,7 +3,7 @@
   "model": "L6",
   "module_base": "0x800c0000",
   "name": "patch-loader",
-  "payload_file": "patch-loader-L6-800b6af0.bin",
+  "payload_file": "patch-loader-L6-001-800b6af0.bin",
   "payload_length": 12175,
   "reserve_end": "0x800c8000",
   "sites": [

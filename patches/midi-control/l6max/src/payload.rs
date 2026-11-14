@@ -12,6 +12,8 @@ use patch_api::function_entry_hook;
 mod firmware;
 #[cfg(not(sd_composed))]
 use firmware as firmware_bindings;
+#[cfg(sd_composed)]
+use crate::firmware_bindings;
 #[path = "../../../api/l6max/hooks.rs"]
 #[cfg(not(sd_composed))]
 mod hook_catalog;

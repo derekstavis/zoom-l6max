@@ -1,0 +1,215 @@
+{
+  "base": "0x80108000",
+  "model": "L6max",
+  "module_base": "0x80110000",
+  "name": "patch-loader",
+  "payload_file": "patch-loader-L6max-031-80108000.bin",
+  "payload_length": 15051,
+  "reserve_end": "0x80118000",
+  "sites": [
+    {
+      "address": "0x8000fe08",
+      "dynamic_dispatch": false,
+      "guard_sha256": "07f4993f36ec2892ba7daa618956f411293bf2fc693e4a3a2aebb9abd0c2ea04",
+      "length": 4,
+      "link": false,
+      "target_offset": 824
+    },
+    {
+      "address": "0x80076e30",
+      "dynamic_dispatch": false,
+      "guard_sha256": "cfa045938b57940b57930f97cd7cdf3e1a8c3b1ddb72c2609b95b97c1b1921ed",
+      "length": 4,
+      "link": false,
+      "target_offset": 860
+    },
+    {
+      "address": "0x8003f7c8",
+      "dynamic_dispatch": true,
+      "guard_sha256": "ba42a0ffa6ad2f1fed1a57c4268d425270224d416926807254d0b9b20f921efc",
+      "length": 4,
+      "link": false,
+      "target_offset": 16
+    },
+    {
+      "address": "0x80053b28",
+      "dynamic_dispatch": true,
+      "guard_sha256": "48117e0eeae09544e6701eda1b9d74942930a0abe6425b20b2152b34eb815c9f",
+      "length": 4,
+      "link": false,
+      "target_offset": 248
+    },
+    {
+      "address": "0x80066180",
+      "dynamic_dispatch": true,
+      "guard_sha256": "90d0f4dca8b9cfa14674e9ea1f57cd8990bc17f089a15557bb19199796fb4535",
+      "length": 4,
+      "link": false,
+      "target_offset": 296
+    },
+    {
+      "address": "0x80003c58",
+      "dynamic_dispatch": true,
+      "guard_sha256": "89573dba1a6d64bae13def4d8fb836dd6a62e2e808e1557583a43ab0e59d51b6",
+      "length": 8,
+      "link": false,
+      "target_offset": 344
+    },
+    {
+      "address": "0x80024678",
+      "dynamic_dispatch": true,
+      "guard_sha256": "76ec330a358f97b9b7c3a577a461f97ec7d7ef19b6bb25ea9d988c82a13d7b25",
+      "length": 4,
+      "link": false,
+      "target_offset": 392
+    },
+    {
+      "address": "0x8000bd78",
+      "dynamic_dispatch": true,
+      "guard_sha256": "7eae2449bb96f680058601cdadbe8dc619abd27106ed2ebb7f3bdbdd7986df0e",
+      "length": 4,
+      "link": false,
+      "target_offset": 440
+    },
+    {
+      "address": "0x80054340",
+      "dynamic_dispatch": true,
+      "guard_sha256": "737d21ab96d81780dcfdb407fe8c753b445433b5edeb879afa1e28f29e847bbf",
+      "length": 4,
+      "link": false,
+      "target_offset": 488
+    },
+    {
+      "address": "0x80088dd8",
+      "dynamic_dispatch": true,
+      "guard_sha256": "156ea7cc34a56ce90c531f3788a6f02cab7ca5ce10fd09d004e65408d74ff599",
+      "length": 4,
+      "link": false,
+      "target_offset": 536
+    },
+    {
+      "address": "0x80046d80",
+      "dynamic_dispatch": true,
+      "guard_sha256": "a8f15d4890025d07dcc510d06e44a592c054a41e28bb3ed1a68a79d1c915fde6",
+      "length": 6,
+      "link": false,
+      "target_offset": 584
+    },
+    {
+      "address": "0x80046e08",
+      "dynamic_dispatch": true,
+      "guard_sha256": "8171b1abec743fbec469239f56b25000f392712d4b58933e1cea2fff94726b2f",
+      "length": 4,
+      "link": false,
+      "target_offset": 632
+    },
+    {
+      "address": "0x80047268",
+      "dynamic_dispatch": true,
+      "guard_sha256": "f14800822781d0e786bb1629bd5b16bba41dfb32b77ff9e2a9e1c103689a737d",
+      "length": 6,
+      "link": false,
+      "target_offset": 680
+    },
+    {
+      "address": "0x80047338",
+      "dynamic_dispatch": true,
+      "guard_sha256": "8171b1abec743fbec469239f56b25000f392712d4b58933e1cea2fff94726b2f",
+      "length": 4,
+      "link": false,
+      "target_offset": 728
+    },
+    {
+      "address": "0x80036a40",
+      "dynamic_dispatch": true,
+      "guard_sha256": "f1231a43486723ba9f8f321e7c7721e9cf5fab829d4319788572fe84e4bb067c",
+      "length": 4,
+      "link": false,
+      "target_offset": 776
+    }
+  ],
+  "static_patches": [
+    "knob-dialog",
+    "midi-control",
+    "midi-sync",
+    "din-mixer-control",
+    "dual-efx"
+  ],
+  "windows": [
+    {
+      "firmware_address": "0x80003c58",
+      "length": 8,
+      "payload_offset": 64
+    },
+    {
+      "firmware_address": "0x80024678",
+      "length": 4,
+      "payload_offset": 80
+    },
+    {
+      "firmware_address": "0x80066180",
+      "length": 4,
+      "payload_offset": 92
+    },
+    {
+      "firmware_address": "0x80076e30",
+      "length": 4,
+      "payload_offset": 104
+    },
+    {
+      "firmware_address": "0x8003f7c8",
+      "length": 4,
+      "payload_offset": 116
+    },
+    {
+      "firmware_address": "0x80053b28",
+      "length": 4,
+      "payload_offset": 128
+    },
+    {
+      "firmware_address": "0x80054340",
+      "length": 4,
+      "payload_offset": 140
+    },
+    {
+      "firmware_address": "0x80088dd8",
+      "length": 4,
+      "payload_offset": 152
+    },
+    {
+      "firmware_address": "0x8000bd78",
+      "length": 4,
+      "payload_offset": 164
+    },
+    {
+      "firmware_address": "0x80036a40",
+      "length": 4,
+      "payload_offset": 176
+    },
+    {
+      "firmware_address": "0x80046d80",
+      "length": 6,
+      "payload_offset": 188
+    },
+    {
+      "firmware_address": "0x80046e08",
+      "length": 4,
+      "payload_offset": 204
+    },
+    {
+      "firmware_address": "0x80047268",
+      "length": 2,
+      "payload_offset": 216
+    },
+    {
+      "firmware_address": "0x80047338",
+      "length": 4,
+      "payload_offset": 236
+    },
+    {
+      "firmware_address": "0x8000fe08",
+      "length": 4,
+      "payload_offset": 840
+    }
+  ]
+}

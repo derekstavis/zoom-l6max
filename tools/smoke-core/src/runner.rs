@@ -506,10 +506,37 @@ impl Runner {
                 Action::ExpectSdPatch {
                     loaded,
                     chain_count,
+                    callbacks_active,
+                    stock_passthrough,
                 } => {
                     return Ok(Progress::Device(devices::Operation::ExpectSdPatch {
                         loaded,
                         chain_count,
+                        callbacks_active,
+                        stock_passthrough,
+                    }));
+                }
+                Action::DualEfxParameterEdit { encoder, steps } => {
+                    return Ok(Progress::Device(devices::Operation::DualEfxParameterEdit {
+                        encoder,
+                        steps,
+                    }));
+                }
+                Action::DualEfxState {
+                    expected_effect_type,
+                    expected_edit_mode,
+                    minimum_parameter_edits,
+                    expected_parameter_id,
+                    expected_parameter_value,
+                    expected_dialog_active,
+                } => {
+                    return Ok(Progress::Device(devices::Operation::DualEfxState {
+                        expected_effect_type,
+                        expected_edit_mode,
+                        minimum_parameter_edits,
+                        expected_parameter_id,
+                        expected_parameter_value,
+                        expected_dialog_active,
                     }));
                 }
                 Action::ExpectHeap { minimum_free } => {
