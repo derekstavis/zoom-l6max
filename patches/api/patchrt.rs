@@ -309,3 +309,19 @@ macro_rules! call_original {
         unsafe { continuation($($argument),*) }
     }};
 }
+
+/// Call the continuation owned by one generated call-hook wrapper. This is
+/// used by the attribute macro so multiple handlers for one firmware function
+/// can each continue to the following handler in a composed SD module.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! call_original_from_hook {
+    ($symbol:ident, $handler:ident $(, $argument:expr)* $(,)?) => {{
+        let address: usize = $crate::patch_api::__continuations::handler_address(
+            stringify!($symbol),
+            stringify!($handler),
+        );
+        let continuation: $symbol::Abi = unsafe { core::mem::transmute(address | 1usize) };
+        unsafe { continuation($($argument),*) }
+    }};
+}

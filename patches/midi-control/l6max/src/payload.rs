@@ -1,19 +1,28 @@
-#![no_std]
-#![no_main]
+#![cfg_attr(not(sd_composed), no_std)]
+#![cfg_attr(not(sd_composed), no_main)]
 //! Recorder transport control and state feedback over the configured MIDI port.
+#[cfg(not(sd_composed))]
 #[path = "../../../api/patchrt.rs"]
 #[macro_use]
 pub mod patch_api;
+#[cfg(sd_composed)]
+use crate::patch_api;
 use patch_api::function_entry_hook;
+#[cfg(not(sd_composed))]
 mod firmware;
+#[cfg(not(sd_composed))]
 use firmware as firmware_bindings;
 #[path = "../../../api/l6max/hooks.rs"]
+#[cfg(not(sd_composed))]
 mod hook_catalog;
 #[path = "../../../midi-sync/common/sync_request.rs"]
 mod sync_request;
 #[path = "../../../midi-sync/l6max/src/parameters.rs"]
 mod parameters;
+#[cfg(not(sd_composed))]
 use firmware::*;
+#[cfg(sd_composed)]
+use crate::firmware_bindings::*;
 use parameters::*;
 
 const CC_REC: u8 = 107;
@@ -145,9 +154,9 @@ macro_rules! report_after_stock {
     ($handler:ident, $site:ident) => {
         #[function_entry_hook($site)]
         pub unsafe fn $handler(context: *mut u32) -> u32 {
-            let result = unsafe { crate::call_original!($site, context) };
+            let result = hook_continue(context);
             unsafe { report_state() };
-            hook_done(result)
+            result
         }
     };
 }

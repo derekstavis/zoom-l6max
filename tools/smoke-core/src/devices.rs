@@ -570,9 +570,32 @@ pub fn run_wasm_patch(options: &Options) -> Result<(), String> {
             }
             let output = command.output().map_err(|error| error.to_string())?;
             if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                if stderr.contains("installed patch payloads overlap the SD module region") {
+                    match firmware_patch_wasm::apply_patches_with_loader(&stock, &selected, true) {
+                        Err(message)
+                            if message.contains("overlap the Patch loader module reserve") =>
+                        {
+                            // Both builders reject profiles that cannot fit
+                            // alongside the loader's reserved SD module area.
+                            continue;
+                        }
+                        Err(message) => {
+                            return Err(format!(
+                                "native and WASM reject {selected:?} for different reasons: {} / {message}",
+                                stderr.trim()
+                            ));
+                        }
+                        Ok(_) => {
+                            return Err(format!(
+                                "WASM accepted {selected:?}, which native rejects because the static payload overlaps the SD module region"
+                            ));
+                        }
+                    }
+                }
                 return Err(format!(
                     "native patch-loader build failed for {selected:?}: {}",
-                    String::from_utf8_lossy(&output.stderr)
+                    stderr
                 ));
             }
             let native =
@@ -614,6 +637,11 @@ pub fn run_wasm_patch(options: &Options) -> Result<(), String> {
         for unsupported in ["knob-dialog", "din-mixer-control"] {
             match firmware_patch_wasm::apply_patches(&stock, &[unsupported]) {
                 Err(message) if message.contains("only the midi-sync patch is supported") => {}
+                Err(message) => {
+                    return Err(format!(
+                        "WASM rejected unsupported L6 profile {unsupported} for an unexpected reason: {message}"
+                    ));
+                }
                 _ => {
                     return Err(format!(
                         "WASM accepted unsupported L6 profile {unsupported}"
@@ -3941,9 +3969,7 @@ impl State {
                         let first = chain_links.first().ok_or("empty expected hook chain")?;
                         let second = chain_links.get(1).ok_or("short expected hook chain")?;
                         if first.2 >= second.2 {
-                            return Err(
-                                "filename priority was not used to order shared hooks".into()
-                            );
+                            return Err("module hook order was not preserved in the chain".into());
                         }
                     }
                     for (index, (entry, next_slot, _order, module)) in
@@ -5217,7 +5243,7 @@ fn sd_fixture_edits(options: &Options, main: &[u8], model: l6fw::Model) -> Resul
         .map_err(|e| format!("invalid SD patch header: {e:?}"))?;
         let mut payload = vec![0; memory_len];
         let mut hooks = vec![patch_loader_core::dynamic::Hook::default(); hook_count];
-        let header = patch_loader_core::dynamic::read_body(
+        let _header = patch_loader_core::dynamic::read_body(
             &mut reader,
             pending,
             &mut payload,
@@ -5256,13 +5282,7 @@ fn sd_fixture_edits(options: &Options, main: &[u8], model: l6fw::Model) -> Resul
                 _ => return Err("invalid relocation kind".into()),
             });
         }
-        Ok((
-            edits,
-            payload,
-            (header.init_offset != 0).then_some(header.init_offset),
-            relocations,
-            module_hooks,
-        ))
+        Ok((edits, payload, None, relocations, module_hooks))
     }
     let mut all_edits = Vec::new();
     let mut all_hooks = Vec::new();

@@ -67,3 +67,4 @@ guest_ms = 3000
 
 [[step]]
 action = "usb-storage"
+guest_timeout_ms = 30000

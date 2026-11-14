@@ -1,0 +1,20 @@
+ENTRY(knob_changed)
+SECTIONS {
+  . = PAYLOAD_BASE;
+  .text : {
+    KEEP(*(.text.knob_changed))
+    KEEP(*(.text.*_hook))
+    *(.text*)
+    *(.rodata*)
+    *(.data*)
+  }
+  .patch_hooks : { KEEP(*(.patch_hooks)) }
+  .module_bss (NOLOAD) : {
+    . = ALIGN(4);
+    __module_bss_start = .;
+    *(.bss*)
+    *(COMMON)
+    __module_memory_end = .;
+  }
+  /DISCARD/ : { *(.ARM.exidx*) *(.ARM.extab*) *(.comment*) }
+}

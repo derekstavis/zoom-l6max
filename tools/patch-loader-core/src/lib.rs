@@ -749,7 +749,7 @@ pub mod dynamic {
         pub memory_len: usize,
         pub hook_count: usize,
         pub relocation_count: usize,
-        pub init_offset: u32,
+        pub reserved: u32,
         pub crc32: u32,
     }
 
@@ -820,7 +820,7 @@ pub mod dynamic {
         let memory_len = u32_at(&header, 12) as usize;
         let hook_count = u16_at(&header, 16) as usize;
         let relocation_count = u16_at(&header, 18) as usize;
-        let init_offset = u32_at(&header, 20);
+        let reserved = u32_at(&header, 20);
         let crc_offset = 24;
         let expected_crc = u32_at(&header, crc_offset);
         if code_len == 0
@@ -829,9 +829,11 @@ pub mod dynamic {
             || hook_count == 0
             || hook_count > max_hooks
             || relocation_count > max_relocations
-            || (init_offset != 0 && (init_offset & 1 != 0 || init_offset as usize >= code_len))
         {
             return Err(Error::TooLarge);
+        }
+        if reserved != 0 {
+            return Err(Error::Invalid);
         }
         Ok(Pending {
             header: Header {
@@ -839,7 +841,7 @@ pub mod dynamic {
                 memory_len,
                 hook_count,
                 relocation_count,
-                init_offset,
+                reserved,
                 crc32: expected_crc,
             },
             // Header checksum bytes are deliberately omitted from CRC input.
@@ -960,7 +962,7 @@ mod dynamic_stream_tests {
         bytes.extend_from_slice(&12u32.to_le_bytes()); // memory_len
         bytes.extend_from_slice(&1u16.to_le_bytes()); // hooks
         bytes.extend_from_slice(&1u16.to_le_bytes()); // relocations
-        bytes.extend_from_slice(&0u32.to_le_bytes()); // init_offset
+        bytes.extend_from_slice(&0u32.to_le_bytes()); // reserved
         bytes.extend_from_slice(&[0; 4]); // CRC
         bytes.extend_from_slice(&[4, 0, 0, 0, 0, 0xbf, 0x70, 0x47, 0, 0, 0, 0]);
         bytes.extend_from_slice(&0x8000_1000u32.to_le_bytes());
@@ -1041,7 +1043,7 @@ mod dynamic_stream_tests {
         bytes.extend_from_slice(&12u32.to_le_bytes()); // memory_len
         bytes.extend_from_slice(&1u16.to_le_bytes()); // hooks
         bytes.extend_from_slice(&1u16.to_le_bytes()); // relocations
-        bytes.extend_from_slice(&0u32.to_le_bytes()); // init_offset
+        bytes.extend_from_slice(&0u32.to_le_bytes()); // reserved
         bytes.extend_from_slice(&[0; 4]); // CRC
         bytes.extend_from_slice(&8u32.to_le_bytes()); // code points into state
         bytes.extend_from_slice(&0x8000_1000u32.to_le_bytes());

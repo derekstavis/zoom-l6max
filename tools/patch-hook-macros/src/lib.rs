@@ -201,7 +201,7 @@ fn call_hook(args: TokenStream, input: TokenStream, phase: &str) -> TokenStream 
             }
 
             let __l6_result = unsafe {
-                crate::call_original!(#function_name, #(#names),*)
+                crate::call_original_from_hook!(#function_name, #handler, #(#names),*)
             };
 
             if #phase == "post" && __l6_caller_return == __l6_callsite_return {
@@ -260,7 +260,10 @@ pub fn function_entry_hook(args: TokenStream, input: TokenStream) -> TokenStream
     let wrapped_body = if let Some(result) = result {
         quote! {{
             let hook_continue = |#(#names: #types),*| {
-                let address: usize = crate::patch_api::__continuations::address(stringify!(#site));
+                let address: usize = crate::patch_api::__continuations::handler_address(
+                    stringify!(#site),
+                    stringify!(#handler),
+                );
                 let continuation: unsafe extern "C" fn(#(#types),*) -> #result =
                     unsafe { core::mem::transmute(address | 1usize) };
                 crate::patch_api::EntryHookAction::Continue(
@@ -277,7 +280,10 @@ pub fn function_entry_hook(args: TokenStream, input: TokenStream) -> TokenStream
     } else {
         quote! {{
             let hook_continue = |#(#names: #types),*| {
-                let address: usize = crate::patch_api::__continuations::address(stringify!(#site));
+                let address: usize = crate::patch_api::__continuations::handler_address(
+                    stringify!(#site),
+                    stringify!(#handler),
+                );
                 let continuation: unsafe extern "C" fn(#(#types),*) =
                     unsafe { core::mem::transmute(address | 1usize) };
                 crate::patch_api::EntryHookAction::Continue(

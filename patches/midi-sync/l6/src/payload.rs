@@ -1,17 +1,28 @@
-#![no_std]
-#![no_main]
+#![cfg_attr(not(sd_composed), no_std)]
+#![cfg_attr(not(sd_composed), no_main)]
 //! Broadcast L6 mixer state through its own configured MIDI map when requested.
+#[cfg(not(sd_composed))]
 #[path = "../../../api/patchrt.rs"]
 #[macro_use]
 pub mod patch_api;
+#[cfg(sd_composed)]
+use crate::patch_api;
 use patch_api::function_entry_hook;
+#[cfg(not(sd_composed))]
 mod firmware;
+#[cfg(not(sd_composed))]
 use firmware as firmware_bindings;
+#[cfg(sd_composed)]
+use crate::firmware_bindings;
 #[path = "../../../api/l6/hooks.rs"]
+#[cfg(not(sd_composed))]
 mod hook_catalog;
 #[path = "../../common/sync_request.rs"]
 mod sync_request;
+#[cfg(not(sd_composed))]
 use firmware::*;
+#[cfg(sd_composed)]
+use crate::firmware_bindings::*;
 
 const CHANNELS: u32 = 6;
 const GROUPS: u32 = 9;

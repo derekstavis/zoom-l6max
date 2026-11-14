@@ -18,7 +18,8 @@ pub const MODES: usize = 11;
 /// Physical channels with a channel encoder.
 pub const CHANNELS: usize = 8;
 /// Request controller and predicate are shared with the L6 profile.
-pub use crate::sync_request::is_sync_request;
+#[allow(unused_imports)]
+pub use super::sync_request::is_sync_request;
 /// Highest mixer channel index the stock setters accept.
 pub const MAX_MIXER_CHANNEL: u32 = 11;
 

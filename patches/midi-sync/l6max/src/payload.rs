@@ -1,19 +1,28 @@
-#![no_std]
-#![no_main]
+#![cfg_attr(not(sd_composed), no_std)]
+#![cfg_attr(not(sd_composed), no_main)]
 //! Broadcasts the whole channel mixer state as Control Change messages when a
 //! controller asks for it. Live changes keep using the stock notifier.
+#[cfg(not(sd_composed))]
 #[path = "../../../api/patchrt.rs"]
 #[macro_use]
 pub mod patch_api;
+#[cfg(sd_composed)]
+use crate::patch_api;
 use patch_api::function_entry_hook;
+#[cfg(not(sd_composed))]
 mod firmware;
+#[cfg(not(sd_composed))]
 use firmware as firmware_bindings;
 #[path = "../../../api/l6max/hooks.rs"]
+#[cfg(not(sd_composed))]
 mod hook_catalog;
 #[path = "../../common/sync_request.rs"]
 mod sync_request;
 mod parameters;
+#[cfg(not(sd_composed))]
 use firmware::*;
+#[cfg(sd_composed)]
+use crate::firmware_bindings::*;
 use parameters::*;
 
 /// Current stored value (0-127) of `source` for mixer channel `audio`.

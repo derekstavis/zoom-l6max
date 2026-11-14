@@ -27,6 +27,7 @@ l6max-diagnostics = { path = "tools/diagnostics" }
 libc = "0.2.189"
 memmap2 = "0.9.10"
 serde_json = "1.0"
+toml = "0.8.23"
 sha2 = "0.10"
 qapi = { version = "0.15.0", features = ["qmp"] }
 fstool = { version = "0.5.2", default-features = false, features = ["std", "alloc", "fat", "exfat"] }
